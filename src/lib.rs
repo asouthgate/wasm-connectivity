@@ -1,0 +1,185 @@
+pub mod grid;
+pub mod graph;
+pub mod laplacian;
+pub mod components;
+pub mod solver;
+pub mod current;
+pub mod resistance;
+
+use wasm_bindgen::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct ConnectivityOutput {
+    pub resistances: Vec<Vec<f64>>,
+    pub current_map: Vec<f64>,
+    pub nrows: usize,
+    pub ncols: usize,
+    pub point_ids: Vec<i32>,
+}
+
+#[wasm_bindgen(start)]
+pub fn init_panic_hook() {
+    console_error_panic_hook::set_once();
+}
+
+#[wasm_bindgen]
+pub fn solve_connectivity(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    point_data: Vec<i32>,
+) -> String {
+    let output = compute(resistance_data, nrows, ncols, nodata, point_data);
+    serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+}
+
+fn compute(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    point_data: Vec<i32>,
+) -> ConnectivityOutput {
+    let conductance = grid::Grid::to_conductance(&resistance_data, nrows, ncols, nodata);
+
+    let (nodemap, num_nodes) = grid::build_nodemap(&conductance);
+
+    let focal_points = grid::extract_focal_points(&point_data, nrows, ncols, &nodemap);
+
+    let edges = graph::build_adjacency(&conductance, &nodemap);
+
+    let laplacian = laplacian::build_laplacian(&edges, num_nodes);
+
+    let components = components::find_connected_components(&laplacian, num_nodes);
+
+    let result = resistance::compute_pairwise(
+        &laplacian,
+        &components,
+        &focal_points,
+        &nodemap,
+        nrows,
+        ncols,
+    );
+
+    ConnectivityOutput {
+        resistances: result.resistances,
+        current_map: result.current_map,
+        nrows: result.nrows,
+        ncols: result.ncols,
+        point_ids: result.point_ids,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn make_uniform_resistance_grid(size: usize, resistance: f64) -> (Vec<f64>, Vec<i32>) {
+        let n = size * size;
+        let res_data = vec![resistance; n];
+        let mut point_data = vec![0i32; n];
+        point_data[0] = 1;
+        point_data[n - 1] = 2;
+        (res_data, point_data)
+    }
+
+    fn make_corridor_grid() -> (Vec<f64>, Vec<i32>) {
+        let size = 10;
+        let n = size * size;
+        let mut res_data = vec![10.0f64; n];
+        for row in 0..size {
+            for col in 0..size {
+                if col == 5 {
+                    res_data[row * size + col] = 1.0;
+                }
+            }
+        }
+
+        let mut point_data = vec![0i32; n];
+        point_data[0] = 1;
+        point_data[n - 1] = 2;
+
+        (res_data, point_data)
+    }
+
+    fn write_pgm(filename: &str, data: &[f64], nrows: usize, ncols: usize) {
+        let max_val = data.iter().cloned().fold(0.0f64, f64::max);
+        let scale = if max_val > 0.0 { 255.0 / max_val } else { 1.0 };
+
+        let mut file = std::fs::File::create(filename).unwrap();
+        writeln!(file, "P2").unwrap();
+        writeln!(file, "{} {}", ncols, nrows).unwrap();
+        writeln!(file, "255").unwrap();
+
+        for row in 0..nrows {
+            for col in 0..ncols {
+                let v = (data[row * ncols + col] * scale).round() as u32;
+                write!(file, "{} ", v.min(255)).unwrap();
+            }
+            writeln!(file).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_uniform_grid_resistance() {
+        let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
+        let output = compute(res_data, 5, 5, -9999.0, point_data);
+
+        assert_eq!(output.point_ids.len(), 2);
+        assert_eq!(output.resistances.len(), 2);
+        assert_eq!(output.resistances[0].len(), 2);
+
+        let r = output.resistances[0][1];
+        assert!(r > 0.0, "Resistance should be positive, got {}", r);
+        assert_eq!(output.resistances[1][0], r, "Resistance matrix must be symmetric");
+        assert_eq!(output.resistances[0][0], 0.0);
+        assert_eq!(output.resistances[1][1], 0.0);
+    }
+
+    #[test]
+    fn test_uniform_current_map_symmetry() {
+        let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
+        let output = compute(res_data, 5, 5, -9999.0, point_data);
+
+        assert_eq!(output.current_map.len(), 25);
+        let has_current = output.current_map.iter().any(|&v| v > 0.0);
+        assert!(has_current, "Current map should have non-zero values");
+    }
+
+    #[test]
+    fn test_corridor_grid() {
+        let (res_data, point_data) = make_corridor_grid();
+        let output = compute(res_data, 10, 10, -9999.0, point_data);
+
+        assert!(output.resistances[0][1] > 0.0);
+
+        let mid_row = 5;
+        let col_low_res = output.current_map[mid_row * 10 + 0];
+        let col_low_res2 = output.current_map[mid_row * 10 + 9];
+        let col_high_res = output.current_map[mid_row * 10 + 5];
+
+        assert!(
+            col_high_res > col_low_res,
+            "Current should be higher through low-resistance corridor: corridor={}, edge_left={}, edge_right={}",
+            col_high_res, col_low_res, col_low_res2
+        );
+    }
+
+    #[test]
+    fn test_output_pgm_images() {
+        let (res_data, point_data) = make_uniform_resistance_grid(10, 1.0);
+        let output = compute(res_data, 10, 10, -9999.0, point_data);
+
+        write_pgm("/tmp/uniform_current.pgm", &output.current_map, 10, 10);
+        println!("Wrote /tmp/uniform_current.pgm");
+
+        let (res_data2, point_data2) = make_corridor_grid();
+        let output2 = compute(res_data2, 10, 10, -9999.0, point_data2);
+
+        write_pgm("/tmp/corridor_current.pgm", &output2.current_map, 10, 10);
+        println!("Wrote /tmp/corridor_current.pgm");
+    }
+}
