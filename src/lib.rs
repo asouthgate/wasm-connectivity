@@ -5,6 +5,7 @@ pub mod components;
 pub mod solver;
 pub mod current;
 pub mod resistance;
+pub mod advanced;
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,19 @@ pub fn solve_connectivity(
     point_data: Vec<i32>,
 ) -> String {
     let output = compute(resistance_data, nrows, ncols, nodata, point_data);
+    serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+}
+
+#[wasm_bindgen]
+pub fn solve_advanced(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+) -> String {
+    let output = advanced::compute_advanced(&resistance_data, nrows, ncols, nodata, &source_data, &ground_data);
     serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
 }
 
@@ -166,6 +180,46 @@ mod tests {
             "Current should be higher through low-resistance corridor: corridor={}, edge_left={}, edge_right={}",
             col_high_res, col_low_res, col_low_res2
         );
+    }
+
+    #[test]
+    fn test_advanced_edge_to_edge() {
+        let size = 10;
+        let n = size * size;
+        let res_data = vec![1.0f64; n];
+        let mut source_data = vec![0.0f64; n];
+        let mut ground_data = vec![0.0f64; n];
+        for row in 0..size {
+            source_data[row * size] = 1.0;
+            ground_data[row * size + (size - 1)] = 1.0;
+        }
+        let output = advanced::compute_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
+        assert_eq!(output.voltages.len(), n);
+        assert_eq!(output.current_map.len(), n);
+        let has_current = output.current_map.iter().any(|&v| v > 0.0);
+        assert!(has_current, "Current map should have non-zero values");
+        let has_voltage = output.voltages.iter().any(|&v| v.abs() > 0.0);
+        assert!(has_voltage, "Voltage map should have non-zero values");
+    }
+
+    #[test]
+    fn test_advanced_center_source() {
+        let size = 10;
+        let n = size * size;
+        let res_data = vec![1.0f64; n];
+        let mut source_data = vec![0.0f64; n];
+        let mut ground_data = vec![0.0f64; n];
+        source_data[5 * size + 5] = 1.0;
+        for row in 0..size {
+            for col in 0..size {
+                if row == 0 || row == size - 1 || col == 0 || col == size - 1 {
+                    ground_data[row * size + col] = 1.0;
+                }
+            }
+        }
+        let output = advanced::compute_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
+        let center_voltage = output.voltages[5 * size + 5];
+        assert!(center_voltage > 0.0, "Center voltage should be positive for current source");
     }
 
     #[test]

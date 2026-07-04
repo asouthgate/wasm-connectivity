@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
-import { solve_connectivity, getWasmMemoryMB, reset } from '../lib/wasm';
+import { solve_connectivity, solve_advanced, getWasmMemoryMB, reset } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
-import { PRESETS } from '../lib/presets';
+import { PRESETS, ADVANCED_PRESETS } from '../lib/presets';
 import { Spinner } from '../components/Spinner';
 
 function getHeapMB() {
@@ -26,10 +26,10 @@ function stat(arr) {
   return { mean, median, min, max, stddev };
 }
 
-function downloadCSV(runs) {
-  const header = 'run,time_s,heap_before_mb,heap_after_mb,wasm_before_mb,wasm_after_mb\n';
+function downloadCSV(runs, mode) {
+  const header = `run,time_s,heap_before_mb,heap_after_mb,wasm_before_mb,wasm_after_mb,mode\n`;
   const rows = runs.map(r =>
-    `${r.run},${r.time.toFixed(3)},${r.heapBefore ?? ''},${r.heapAfter ?? ''},${r.wasmBefore ?? ''},${r.wasmAfter ?? ''}`
+    `${r.run},${r.time.toFixed(3)},${r.heapBefore ?? ''},${r.heapAfter ?? ''},${r.wasmBefore ?? ''},${r.wasmAfter ?? ''},${mode}`
   ).join('\n');
   const blob = new Blob([header + rows], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
@@ -39,10 +39,13 @@ function downloadCSV(runs) {
 }
 
 export default function Experiment() {
+  const [mode, setMode] = useState('pairwise');
   const [resData, setResData] = useState(null);
   const [resMeta, setResMeta] = useState(null);
   const [ptData, setPtData] = useState(null);
   const [ptMeta, setPtMeta] = useState(null);
+  const [srcData, setSrcData] = useState(null);
+  const [gndData, setGndData] = useState(null);
   const [selPreset, setSelPreset] = useState(null);
   const [reps, setReps] = useState(5);
   const [runs, setRuns] = useState([]);
@@ -50,30 +53,45 @@ export default function Experiment() {
   const [status, setStatus] = useState({ text: 'Pick a preset and set repetitions.', color: '#888' });
   const logRef = useRef(null);
 
+  const presets = mode === 'pairwise' ? PRESETS : ADVANCED_PRESETS;
+
+  const handleMode = useCallback((m) => {
+    setMode(m); setSelPreset(null); setRuns([]);
+    setResData(null); setPtData(null); setSrcData(null); setGndData(null);
+  }, []);
+
   const loadPreset = useCallback(async (p) => {
     setStatus({ text: `loading ${p.name}...`, color: '#888' });
     setSelPreset(p.id); setRuns([]);
-    const [rt, pt] = await Promise.all([fetch(p.res).then(r => r.text()), fetch(p.pts).then(r => r.text())]);
-    const rp = parseAsc(rt), pp = parseAsc(pt);
-    setResData(rp.data); setResMeta(rp.meta);
-    setPtData(pp.data); setPtMeta(pp.meta);
-    const nc = rp.data.reduce((c, v) => v !== rp.meta.nodata && v > 0 ? c + 1 : c, 0);
-    const np = pp.data.reduce((c, v) => v !== pp.meta.nodata && v > 0 ? c + 1 : c, 0);
-    setStatus({ text: `loaded ${p.name} — ${nc.toLocaleString()} cells, ${np} pts`, color: '#58a6ff' });
-  }, []);
+    if (mode === 'pairwise') {
+      const [rt, pt] = await Promise.all([fetch(p.res).then(r=>r.text()), fetch(p.pts).then(r=>r.text())]);
+      const rp = parseAsc(rt), pp = parseAsc(pt);
+      setResData(rp.data); setResMeta(rp.meta); setPtData(pp.data); setPtMeta(pp.meta);
+      setSrcData(null); setGndData(null);
+      const nc = rp.data.reduce((c,v)=>v!==rp.meta.nodata&&v>0?c+1:c,0);
+      const np = pp.data.reduce((c,v)=>v!==pp.meta.nodata&&v>0?c+1:c,0);
+      setStatus({ text: `loaded ${p.name} — ${nc.toLocaleString()} cells, ${np} pts`, color: '#58a6ff' });
+    } else {
+      const [rt, st, gt] = await Promise.all([fetch(p.res).then(r=>r.text()), fetch(p.src).then(r=>r.text()), fetch(p.gnd).then(r=>r.text())]);
+      const rp = parseAsc(rt), sp = parseAsc(st), gp = parseAsc(gt);
+      setResData(rp.data); setResMeta(rp.meta); setSrcData(sp.data); setGndData(gp.data);
+      setPtData(null); setPtMeta(null);
+      const nc = rp.data.reduce((c,v)=>v!==rp.meta.nodata&&v>0?c+1:c,0);
+      setStatus({ text: `loaded ${p.name} — ${nc.toLocaleString()} cells`, color: '#58a6ff' });
+    }
+  }, [mode]);
 
   const start = useCallback(async () => {
-    if (!resData || !ptData || running) return;
-    setRunning(true); setRuns([]); setStatus({ text: 'running...', color: '#f90' });
+    if (!resData || running) return;
+    if (mode === 'pairwise' && !ptData) return;
+    if (mode === 'advanced' && (!srcData || !gndData)) return;
 
+    setRunning(true); setRuns([]); setStatus({ text: 'running...', color: '#f90' });
     await new Promise(r => requestAnimationFrame(r));
 
     const nd = resMeta.nodata || -9999;
-    const ptI = new Int32Array(ptData.length);
-    for (let i = 0; i < ptData.length; i++) { const v = ptData[i]; ptI[i] = (v === nd || isNaN(v)) ? 0 : Math.round(v); }
-
-    const results = [];
     const nrows = resMeta.nrows, ncols = resMeta.ncols;
+    const results = [];
 
     for (let i = 1; i <= reps; i++) {
       await reset();
@@ -81,15 +99,21 @@ export default function Experiment() {
       const heapBefore = getHeapMB();
       const wasmBefore = getWasmMemoryMB();
       const t0 = performance.now();
-      JSON.parse(solve_connectivity(resData, nrows, ncols, nd, ptI));
+
+      if (mode === 'pairwise') {
+        const ptI = new Int32Array(ptData.length);
+        for (let j = 0; j < ptData.length; j++) { const v = ptData[j]; ptI[j] = (v === nd || isNaN(v)) ? 0 : Math.round(v); }
+        JSON.parse(solve_connectivity(resData, nrows, ncols, nd, ptI));
+      } else {
+        JSON.parse(solve_advanced(resData, nrows, ncols, nd, srcData, gndData));
+      }
+
       const elapsed = (performance.now() - t0) / 1000;
       const heapAfter = getHeapMB();
       const wasmAfter = getWasmMemoryMB();
 
-      const entry = { run: i, time: elapsed, heapBefore, heapAfter, wasmBefore, wasmAfter };
-      results.push(entry);
+      results.push({ run: i, time: elapsed, heapBefore, heapAfter, wasmBefore, wasmAfter });
       setRuns([...results]);
-
       await new Promise(r => setTimeout(r, 0));
     }
 
@@ -100,21 +124,27 @@ export default function Experiment() {
       color: '#3fb950'
     });
     setRunning(false);
-  }, [resData, ptData, resMeta, ptMeta, reps, running]);
+  }, [resData, ptData, srcData, gndData, resMeta, reps, running, mode]);
 
-  const hasData = !!(resData && ptData);
+  const hasData = !!(resData && (mode === 'pairwise' ? ptData : (srcData && gndData)));
   const times = runs.map(r => r.time);
   const nCols = 6;
+  const modeLabel = mode === 'pairwise' ? 'pairwise' : 'advanced';
 
   return (
     <div>
       <h1 style={{ marginBottom: 8 }}>Experiment</h1>
       <div className="row">
-        <span style={{ fontSize: '.75em', color: '#888' }}>repetitions:</span>
+        <span style={{ fontSize: '.75em', color: '#888' }}>mode:</span>
+        <span className={'preset' + (mode === 'pairwise' ? ' sel' : '')} onClick={() => handleMode('pairwise')}
+          style={{ cursor: 'pointer' }}>pairwise</span>
+        <span className={'preset' + (mode === 'advanced' ? ' sel' : '')} onClick={() => handleMode('advanced')}
+          style={{ cursor: 'pointer' }}>advanced</span>
+        <span style={{ fontSize: '.75em', color: '#888', marginLeft: 12 }}>repetitions:</span>
         <input type="number" value={reps} onChange={e => setReps(Math.max(1, Math.min(100, +e.target.value || 1)))}
           style={{ width: 50, background: '#222', border: '1px solid #444', color: '#ccc', padding: '3px 6px', font: '12px monospace' }} />
         <button className="btn run" onClick={start} disabled={!hasData || running}>Start</button>
-        {runs.length > 0 && <button className="btn" onClick={() => downloadCSV(runs)} disabled={running}>Download CSV</button>}
+        {runs.length > 0 && <button className="btn" onClick={() => downloadCSV(runs, modeLabel)} disabled={running}>Download CSV</button>}
       </div>
       <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center' }}>
         {running && <Spinner />}{status.text}
@@ -122,7 +152,7 @@ export default function Experiment() {
 
       <div className="layout">
         <div className="sidebar">
-          {PRESETS.map(grp => (
+          {presets.map(grp => (
             <div key={grp.group} className="preset-group">
               <h3>{grp.group}</h3>
               {grp.items.map(p => (
@@ -135,7 +165,7 @@ export default function Experiment() {
         <div className="main">
           {hasData && (
             <div style={{ fontSize: '.75em', color: '#888', marginBottom: 4 }}>
-              {resMeta.nrows}×{resMeta.ncols}, {reps} repetition{reps !== 1 ? 's' : ''}
+              {resMeta.nrows}×{resMeta.ncols}, {modeLabel}, {reps} repetition{reps !== 1 ? 's' : ''}
             </div>
           )}
           <div className="log" ref={logRef}>

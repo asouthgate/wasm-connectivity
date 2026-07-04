@@ -14,12 +14,13 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
     }
   }, [data, meta, type, logScale]);
 
+  const labels = { res:'Resistance', points:'Focal Points', cur:'Current', src:'Source', gnd:'Ground', volt:'Voltage' };
   const dim = meta ? `${meta.ncols}×${meta.nrows}` : '';
 
   return (
     <div style={{ border: '1px solid #333' }}>
       <div style={{ fontSize: '.65em', padding: '3px 6px', background: '#1a1a1a', borderBottom: '1px solid #333', color: '#888', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>{type === 'points' ? 'Focal Points' : type === 'res' ? 'Resistance' : 'Current'} {dim && <span style={{ color: '#555' }}>{dim}</span>}</span>
+        <span>{labels[type] || type} {dim && <span style={{ color: '#555' }}>{dim}</span>}</span>
         {onToggleScale && (
           <div style={{ display: 'flex', gap: '2px' }}>
             {['log', 'lin'].map(s => (

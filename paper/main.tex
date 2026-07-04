@@ -5,7 +5,7 @@
 \usepackage{graphicx}
 \usepackage{hyperref} 
 
-\title{A WebAssembly/Rust implementation of connectivity analysis for geospatial edge computing applications}
+\title{A WebAssembly/Rust implementation of connectivity analysis for ecological and geospatial edge computing applications}
 \author{Alex Southgate}
 \date{\today}
 
@@ -14,7 +14,7 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the CircuitScape software, which is typically run locally on a laptop or via a server. Conversely, for downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and increases system complexity.  Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust implementation of point-to-point and 'advanced mode' connectivity analysis which can run directly in the browser, which could be useful for geospatial modelling software, especially when subject to resource constraints.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the CircuitScape software, which is typically run locally on a laptop or via a server. Conversely, for downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and increases system complexity.  Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust implementation of point-to-point and 'advanced mode' connectivity analysis which can run directly in the browser. This approach may be useful for geospatial modelling software where the memory footprint/raster sizes are sufficiently small, especially when subject to resource constraints.
 \end{abstract}
 
 \section{Introduction}
@@ -75,11 +75,17 @@ Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. T
 
 \section{Results}
 
+\subsection{Examples}
+
+\subsection{Benchmarking: CPU, memory, and raster sizes}
+
 \section{Conclusion}
 
 We present a WebAssembly/Rust connectivity library for interactive geospatial edge-computing. This method can be integrated into geospatial web applications. Future work could be used to explore alternative solver methods and optimisations for the browser context. 
 
+\section{LLM disclaimer}
 
+This paper was written entirely by hand without LLM assistance. Code was developed with AI assistance. 
 
 \bibliographystyle{plain} 
 \bibliography{refs} 
