@@ -1,0 +1,87 @@
+\documentclass[11pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref} 
+
+\title{A WebAssembly/Rust implementation of connectivity analysis for geospatial edge computing applications}
+\author{Alex Southgate}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the CircuitScape software, which is typically run locally on a laptop or via a server. Conversely, for downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and increases system complexity.  Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust implementation of point-to-point and 'advanced mode' connectivity analysis which can run directly in the browser, which could be useful for geospatial modelling software, especially when subject to resource constraints.
+\end{abstract}
+
+\section{Introduction}
+
+Circuit theory has found useful application in ecological connectivity modelling \cite{mcrae2008using}, especially through the circuitscape \cite{mcrae2016circuitscape} package. 
+
+At the same time, compute is often constrained quantity due to global supply shortages and/or cost. In the simplest case, a user runs circuitscape on their laptop or a server, depending on compute requirements and model complexity, as is typical in scientific computing. In modern web applications, a front-end browser application is often paired with a backend server which performs more computationally expensive jobs. When scientific code is deployed into production web applications for practical use by customers (e.g. analysts) outside of academia, a backend is required. However, for many applications, maintaining this infrastructure is costly. Edge computing is a paradigm which basically means making use of compute close to the 'edge' of the cloud, which is either close to the user's computer, or the user's computer itself. The problem with performing complex calculations in the browser is that browser code (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction. To resolve this problem, WebAssembly was recently introduced, allowing fast C++ or Rust code to be run in a sandboxed browser environment. An academic might ask: why not just use my laptop? The answer to this is that often web applications integrate complex user controls (e.g. modelling controls directly on a map) that are time consuming to complete using scientific scripts, and requires expertise not always available to users outside of academia.
+
+This paper introduces a Rust library and WebAssembly bindings to allow connectivity analysis directly within web applications, such as GeoSpatial analysis software. We demonstrate reasonable
+ performance provided input images fit within browser sandbox memory limits, which has potential use for deployed scientific applications.
+
+\section{Methodology}
+
+\subsection{Model formulation}
+
+We assume as previously described that we can use circuit theory to model connectivity. First, Ohm's law is \eqref{eq:ohm}:
+
+\begin{equation}
+\label{eq:ohm}
+I = CV
+\end{equation}
+
+Secondly, for a given node (pixel), the conservation equation (Kirchoff's equation) \eqref{eq:conservation} just means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$:
+
+\begin{equation}
+\label{eq:conservation}
+I_i = \sum_{j \in N(i)} C_{ij}V_{ij} + S_i = 0
+\end{equation}
+
+Given these two equations, only voltage differences $V_{ij}$ are unknown. Voltage, as a potential can be assumed to be a scalar quantity for a single node up to some constant, which leads to a system of equations \eqref{eq:system}:
+
+\begin{equation}
+\sum_{j \in N(i)} C_{ij}(V_i - V_j) = -S_i
+\end{equation}
+
+\begin{equation}
+\Big(\sum_{j \in N(i)} C_{ij}\Big)V_i - \sum_{j \in N(i)} C_{ij}V_j = -S_i
+\end{equation}
+
+\begin{equation}
+\label{eq:system}
+\rightarrow LV =  D_CV - MV = D_S
+\end{equation}
+
+The diagonal elements of $L$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $L$ is sparse, since only neighboring nodes are connected in the simplest case.
+
+\subsection{Solver}
+
+Given an $N\times M$ image, the matrix $L$ takes $O(NM)$ space. In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised CHOLMOD libraries that are not available in a WASM context. We utilise the conjugate gradient method with jacobi preconditioning for simplicity. This method is iterative and memory efficient, at $O(MN)$ space and $O(kMN)$ time for $k$ iterations.
+
+\subsection{Benchmarking time and memory}
+
+A react application was used with time and memory profiling in order to capture realistic performance metrics in the browser context (as opposed to e.g. the rust library itself).
+
+\subsection{Code}
+
+Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. This code contains several simple examples. All results can be easily reproduced by running the React development server, clicking to the benchmark panel, running the benchmarks, and downloading the results.
+
+\section{Results}
+
+\section{Conclusion}
+
+We present a WebAssembly/Rust connectivity library for interactive geospatial edge-computing. This method can be integrated into geospatial web applications. Future work could be used to explore alternative solver methods and optimisations for the browser context. 
+
+
+
+\bibliographystyle{plain} 
+\bibliography{refs} 
+
+\end{document}

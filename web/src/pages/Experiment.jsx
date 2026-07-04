@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { solve_connectivity } from '../lib/wasm';
+import { solve_connectivity, getWasmMemoryMB, reset } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import { Spinner } from '../components/Spinner';
@@ -27,8 +27,10 @@ function stat(arr) {
 }
 
 function downloadCSV(runs) {
-  const header = 'run,time_s,heap_before_mb,heap_after_mb\n';
-  const rows = runs.map(r => `${r.run},${r.time.toFixed(3)},${r.heapBefore ?? ''},${r.heapAfter ?? ''}`).join('\n');
+  const header = 'run,time_s,heap_before_mb,heap_after_mb,wasm_before_mb,wasm_after_mb\n';
+  const rows = runs.map(r =>
+    `${r.run},${r.time.toFixed(3)},${r.heapBefore ?? ''},${r.heapAfter ?? ''},${r.wasmBefore ?? ''},${r.wasmAfter ?? ''}`
+  ).join('\n');
   const blob = new Blob([header + rows], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -64,6 +66,8 @@ export default function Experiment() {
     if (!resData || !ptData || running) return;
     setRunning(true); setRuns([]); setStatus({ text: 'running...', color: '#f90' });
 
+    await new Promise(r => requestAnimationFrame(r));
+
     const nd = resMeta.nodata || -9999;
     const ptI = new Int32Array(ptData.length);
     for (let i = 0; i < ptData.length; i++) { const v = ptData[i]; ptI[i] = (v === nd || isNaN(v)) ? 0 : Math.round(v); }
@@ -72,13 +76,17 @@ export default function Experiment() {
     const nrows = resMeta.nrows, ncols = resMeta.ncols;
 
     for (let i = 1; i <= reps; i++) {
+      await reset();
+
       const heapBefore = getHeapMB();
+      const wasmBefore = getWasmMemoryMB();
       const t0 = performance.now();
       JSON.parse(solve_connectivity(resData, nrows, ncols, nd, ptI));
       const elapsed = (performance.now() - t0) / 1000;
       const heapAfter = getHeapMB();
+      const wasmAfter = getWasmMemoryMB();
 
-      const entry = { run: i, time: elapsed, heapBefore, heapAfter };
+      const entry = { run: i, time: elapsed, heapBefore, heapAfter, wasmBefore, wasmAfter };
       results.push(entry);
       setRuns([...results]);
 
@@ -96,6 +104,7 @@ export default function Experiment() {
 
   const hasData = !!(resData && ptData);
   const times = runs.map(r => r.time);
+  const nCols = 6;
 
   return (
     <div>
@@ -135,8 +144,10 @@ export default function Experiment() {
                 <tr>
                   <th>run</th>
                   <th>time</th>
-                  <th>heap before</th>
-                  <th>heap after</th>
+                  <th>js heap before</th>
+                  <th>js heap after</th>
+                  <th>wasm before</th>
+                  <th>wasm after</th>
                 </tr>
               </thead>
               <tbody>
@@ -146,10 +157,12 @@ export default function Experiment() {
                     <td>{r.time.toFixed(3)}s</td>
                     <td>{r.heapBefore != null ? r.heapBefore.toFixed(1) + ' MB' : '—'}</td>
                     <td>{r.heapAfter != null ? r.heapAfter.toFixed(1) + ' MB' : '—'}</td>
+                    <td>{r.wasmBefore != null ? r.wasmBefore.toFixed(1) + ' MB' : '—'}</td>
+                    <td>{r.wasmAfter != null ? r.wasmAfter.toFixed(1) + ' MB' : '—'}</td>
                   </tr>
                 ))}
                 {running && runs.length < reps && (
-                  <tr><td colSpan="4" style={{ color: '#f90' }}><Spinner size={12} /> running run {runs.length + 1}/{reps}...</td></tr>
+                  <tr><td colSpan={nCols} style={{ color: '#f90' }}><Spinner size={12} /> running run {runs.length + 1}/{reps}...</td></tr>
                 )}
               </tbody>
             </table>

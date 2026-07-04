@@ -280,3 +280,5 @@ async function __wbg_init(module_or_path) {
 }
 
 export { initSync, __wbg_init as default };
+export function get_memory() { return wasm.memory; }
+export function __reset() { wasm = undefined; wasmInstance = undefined; }
