@@ -3,7 +3,7 @@ import { solve_connectivity } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import MapView from '../components/MapView';
-import LoadingModal from '../components/LoadingModal';
+import { Spinner } from '../components/Spinner';
 
 export default function Solver() {
   const [resData, setResData] = useState(null);
@@ -83,7 +83,9 @@ export default function Solver() {
         <input type="file" id="ptFile" accept=".asc,.txt" onChange={handlePtFile} style={{ display: 'none' }} />
         <span className="fname">{ptName}</span>
       </div>
-      <div className="status" style={{ color: status.color }}>{status.text}</div>
+      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center' }}>
+        {loading && <Spinner />}{status.text}
+      </div>
 
       <div className="layout">
         <div className="sidebar">
@@ -108,7 +110,6 @@ export default function Solver() {
           {result && <ResistanceTable result={result} />}
         </div>
       </div>
-      <LoadingModal show={loading} />
     </div>
   );
 }

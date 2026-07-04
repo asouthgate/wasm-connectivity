@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import { solve_connectivity } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
-import LoadingModal from '../components/LoadingModal';
+import { Spinner } from '../components/Spinner';
 
 function getHeapMB() {
   if (performance.memory?.usedJSHeapSize) {
@@ -107,7 +107,9 @@ export default function Experiment() {
         <button className="btn run" onClick={start} disabled={!hasData || running}>Start</button>
         {runs.length > 0 && <button className="btn" onClick={() => downloadCSV(runs)} disabled={running}>Download CSV</button>}
       </div>
-      <div className="status" style={{ color: status.color }}>{status.text}</div>
+      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center' }}>
+        {running && <Spinner />}{status.text}
+      </div>
 
       <div className="layout">
         <div className="sidebar">
@@ -146,8 +148,8 @@ export default function Experiment() {
                     <td>{r.heapAfter != null ? r.heapAfter.toFixed(1) + ' MB' : '—'}</td>
                   </tr>
                 ))}
-                {running && (
-                  <tr><td colSpan="4" style={{ color: '#f90' }}>...</td></tr>
+                {running && runs.length < reps && (
+                  <tr><td colSpan="4" style={{ color: '#f90' }}><Spinner size={12} /> running run {runs.length + 1}/{reps}...</td></tr>
                 )}
               </tbody>
             </table>
@@ -159,7 +161,6 @@ export default function Experiment() {
           )}
         </div>
       </div>
-      <LoadingModal show={running} />
     </div>
   );
 }
