@@ -56,10 +56,14 @@ Given these two equations, only voltage differences $V_{ij}$ are unknown. Voltag
 
 \begin{equation}
 \label{eq:system}
-\rightarrow LV =  D_CV - MV = D_S
+\rightarrow GV =  D_CV - MV = D_S
 \end{equation}
 
-The diagonal elements of $L$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $L$ is sparse, since only neighboring nodes are connected in the simplest case.
+In circuit theory, $G$ is known as the nodal conductance. The diagonal elements of $G$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $G$ is sparse, since only neighboring nodes are connected in the simplest case.
+
+\subsection{Modes}
+
+The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). If a raster image of source nodes is provided, then the resulting output is connectivity given inputs from the combined input sources, solved together, as in a conventional physical system like electrical circuits. Instead of the combined mode, where current will flow according to the global pressure gradient, some users may choose to intentionally superimpose $n \choose 2$ pairwise simulations from pairs of $n$ nodes, or $n \times m$ simulations between $n$ ssources and $m$ sinks. Each approach has different assumptions and interpretation. Each mode has the same underlying mathematical system and solver; in the case of a single pair, only two rows of the matrix $G$ are source/sink; in the case of a raster of currents, many rows are set to sources. Superposition of the different cases can be undertaken in a loop over the chosen sets of pairs.
 
 \subsection{Solver}
 

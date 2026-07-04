@@ -14,7 +14,7 @@ pub struct AdvancedOutput {
     pub ncols: usize,
 }
 
-pub fn compute_advanced(
+pub fn cal_advanced(
     resistance_data: &[f64],
     nrows: usize,
     ncols: usize,

@@ -53,6 +53,7 @@ export default function Solver() {
   const run = useCallback(async () => {
     if (!resData || !ptData) return;
     setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
+    await new Promise(r => requestAnimationFrame(r));
     const t0 = performance.now();
     try {
       const nd = resMeta.nodata || -9999;
@@ -73,17 +74,17 @@ export default function Solver() {
   return (
     <div>
       <div className="row">
-        <button className="btn run" onClick={run} disabled={!resData || !ptData}>Run</button>
+        <button className="btn run" onClick={run} disabled={!resData || !ptData || loading}>Run</button>
         <span className="timer">{timer}</span>
         <span style={{ fontSize: '.75em', color: '#555' }}>custom:</span>
-        <label className="btn" htmlFor="resFile">+ res</label>
-        <input type="file" id="resFile" accept=".asc,.txt" onChange={handleResFile} style={{ display: 'none' }} />
+        <label className="btn" htmlFor="resFile" style={loading ? { pointerEvents: 'none', opacity: 0.5 } : {}}>+ res</label>
+        <input type="file" id="resFile" accept=".asc,.txt" onChange={handleResFile} disabled={loading} style={{ display: 'none' }} />
         <span className="fname">{resName}</span>
-        <label className="btn" htmlFor="ptFile">+ pts</label>
-        <input type="file" id="ptFile" accept=".asc,.txt" onChange={handlePtFile} style={{ display: 'none' }} />
+        <label className="btn" htmlFor="ptFile" style={loading ? { pointerEvents: 'none', opacity: 0.5 } : {}}>+ pts</label>
+        <input type="file" id="ptFile" accept=".asc,.txt" onChange={handlePtFile} disabled={loading} style={{ display: 'none' }} />
         <span className="fname">{ptName}</span>
       </div>
-      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center' }}>
+      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center', position: 'relative', zIndex: 91 }}>
         {loading && <Spinner />}{status.text}
       </div>
 
@@ -94,7 +95,7 @@ export default function Solver() {
               <h3>{grp.group}</h3>
               {grp.items.map(p => (
                 <div key={p.id} className={'preset' + (selPreset === p.id ? ' sel' : '')}
-                  onClick={() => loadPreset(p)}>{p.name}</div>
+                  onClick={() => !loading && loadPreset(p)} style={loading ? { pointerEvents: 'none', opacity: 0.5 } : {}}>{p.name}</div>
               ))}
             </div>
           ))}
@@ -110,6 +111,7 @@ export default function Solver() {
           {result && <ResistanceTable result={result} />}
         </div>
       </div>
+      {loading && <div style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} />}
     </div>
   );
 }

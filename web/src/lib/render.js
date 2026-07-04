@@ -5,13 +5,23 @@ const POINT_COLORS = [
 
 export function heat(t) {
   t = Math.max(0, Math.min(1, t));
-  let r, g, b;
-  if (t < 0.125) { const s = t / 0.125; r = 0; g = 0; b = 128 + s * 127; }
-  else if (t < 0.375) { const s = (t - 0.125) / 0.25; r = 0; g = s * 255; b = 255; }
-  else if (t < 0.625) { const s = (t - 0.375) / 0.25; r = 0; g = 255; b = (1 - s) * 255; }
-  else if (t < 0.875) { const s = (t - 0.625) / 0.25; r = s * 255; g = (1 - s) * 255; b = 0; }
-  else { const s = (t - 0.875) / 0.125; r = 255; g = (1 - s) * 128; b = 0; }
-  return [r, g, b];
+  const stops = [
+    [0,    0,   0, 128],
+    [0.25, 0,   0, 255],
+    [0.5,  0, 255, 255],
+    [0.75, 255,255, 0],
+    [1.0,  255, 0,   0],
+  ];
+  let i = 0;
+  while (i < stops.length - 2 && t > stops[i + 1][0]) i++;
+  const [t0, r0, g0, b0] = stops[i];
+  const [t1, r1, g1, b1] = stops[i + 1];
+  const s = (t - t0) / (t1 - t0);
+  return [
+    Math.round(r0 + (r1 - r0) * s),
+    Math.round(g0 + (g1 - g0) * s),
+    Math.round(b0 + (b1 - b0) * s),
+  ];
 }
 
 export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide = 400) {

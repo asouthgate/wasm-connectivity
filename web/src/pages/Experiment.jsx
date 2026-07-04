@@ -136,17 +136,18 @@ export default function Experiment() {
       <h1 style={{ marginBottom: 8 }}>Experiment</h1>
       <div className="row">
         <span style={{ fontSize: '.75em', color: '#888' }}>mode:</span>
-        <span className={'preset' + (mode === 'pairwise' ? ' sel' : '')} onClick={() => handleMode('pairwise')}
-          style={{ cursor: 'pointer' }}>pairwise</span>
-        <span className={'preset' + (mode === 'advanced' ? ' sel' : '')} onClick={() => handleMode('advanced')}
-          style={{ cursor: 'pointer' }}>advanced</span>
+        <span className={'preset' + (mode === 'pairwise' ? ' sel' : '')} onClick={() => !running && handleMode('pairwise')}
+          style={{ cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.5 : 1 }}>pairwise</span>
+        <span className={'preset' + (mode === 'advanced' ? ' sel' : '')} onClick={() => !running && handleMode('advanced')}
+          style={{ cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.5 : 1 }}>advanced</span>
         <span style={{ fontSize: '.75em', color: '#888', marginLeft: 12 }}>repetitions:</span>
         <input type="number" value={reps} onChange={e => setReps(Math.max(1, Math.min(100, +e.target.value || 1)))}
+          disabled={running}
           style={{ width: 50, background: '#222', border: '1px solid #444', color: '#ccc', padding: '3px 6px', font: '12px monospace' }} />
         <button className="btn run" onClick={start} disabled={!hasData || running}>Start</button>
         {runs.length > 0 && <button className="btn" onClick={() => downloadCSV(runs, modeLabel)} disabled={running}>Download CSV</button>}
       </div>
-      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center' }}>
+      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center', position: 'relative', zIndex: 91 }}>
         {running && <Spinner />}{status.text}
       </div>
 
@@ -157,7 +158,7 @@ export default function Experiment() {
               <h3>{grp.group}</h3>
               {grp.items.map(p => (
                 <div key={p.id} className={'preset' + (selPreset === p.id ? ' sel' : '')}
-                  onClick={() => !running && loadPreset(p)}>{p.name}</div>
+                  onClick={() => !running && loadPreset(p)} style={running ? { pointerEvents: 'none', opacity: 0.5 } : {}}>{p.name}</div>
               ))}
             </div>
           ))}
@@ -204,6 +205,7 @@ export default function Experiment() {
           )}
         </div>
       </div>
+      {running && <div style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} />}
     </div>
   );
 }

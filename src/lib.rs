@@ -45,7 +45,7 @@ pub fn solve_advanced(
     source_data: Vec<f64>,
     ground_data: Vec<f64>,
 ) -> String {
-    let output = advanced::compute_advanced(&resistance_data, nrows, ncols, nodata, &source_data, &ground_data);
+    let output = advanced::cal_advanced(&resistance_data, nrows, ncols, nodata, &source_data, &ground_data);
     serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
 }
 
@@ -193,7 +193,7 @@ mod tests {
             source_data[row * size] = 1.0;
             ground_data[row * size + (size - 1)] = 1.0;
         }
-        let output = advanced::compute_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
+        let output = advanced::cal_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
         assert_eq!(output.voltages.len(), n);
         assert_eq!(output.current_map.len(), n);
         let has_current = output.current_map.iter().any(|&v| v > 0.0);
@@ -217,7 +217,7 @@ mod tests {
                 }
             }
         }
-        let output = advanced::compute_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
+        let output = advanced::cal_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
         let center_voltage = output.voltages[5 * size + 5];
         assert!(center_voltage > 0.0, "Center voltage should be positive for current source");
     }

@@ -20,6 +20,9 @@ export default function Advanced() {
   const [status, setStatus] = useState({ text: 'Pick a preset to begin.', color: '#888' });
   const [timer, setTimer] = useState('');
   const [selPreset, setSelPreset] = useState(null);
+  const [resName, setResName] = useState('—');
+  const [srcName, setSrcName] = useState('—');
+  const [gndName, setGndName] = useState('—');
 
   const loadPreset = useCallback(async (p) => {
     setStatus({ text: `loading ${p.name}...`, color: '#888' });
@@ -31,13 +34,22 @@ export default function Advanced() {
     setResData(rp.data); setResMeta(rp.meta);
     setSrcData(sp.data); setSrcMeta(sp.meta);
     setGndData(gp.data); setGndMeta(gp.meta);
+    setResName(p.res.split('/').pop()); setSrcName(p.src.split('/').pop()); setGndName(p.gnd.split('/').pop());
     const nc = rp.data.reduce((c,v)=>v!==rp.meta.nodata&&v>0?c+1:c,0);
     setStatus({ text: `loaded ${p.name} — ${nc.toLocaleString()} cells`, color: '#58a6ff' });
+  }, []);
+
+  const handleFile = useCallback((setter, setMeta, setName) => async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    setSelPreset(null); setName(f.name);
+    const t = await f.text(); const p = parseAsc(t);
+    setter(p.data); setMeta(p.meta);
   }, []);
 
   const run = useCallback(async () => {
     if (!resData||!srcData||!gndData) return;
     setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
+    await new Promise(r => requestAnimationFrame(r));
     const t0 = performance.now();
     try {
       const nd = resMeta.nodata||-9999;
@@ -58,10 +70,20 @@ export default function Advanced() {
   return (
     <div>
       <div className="row">
-        <button className="btn run" onClick={run} disabled={!hasData}>Run</button>
+        <button className="btn run" onClick={run} disabled={!hasData || loading}>Run</button>
         <span className="timer">{timer}</span>
+        <span style={{ fontSize: '.75em', color: '#555' }}>custom:</span>
+        <label className="btn" htmlFor="advResFile">+ res</label>
+        <input type="file" id="advResFile" accept=".asc,.txt" onChange={handleFile(setResData, setResMeta, setResName)} disabled={loading} style={{ display: 'none' }} />
+        <span className="fname">{resName}</span>
+        <label className="btn" htmlFor="advSrcFile">+ src</label>
+        <input type="file" id="advSrcFile" accept=".asc,.txt" onChange={handleFile(setSrcData, setSrcMeta, setSrcName)} disabled={loading} style={{ display: 'none' }} />
+        <span className="fname">{srcName}</span>
+        <label className="btn" htmlFor="advGndFile">+ gnd</label>
+        <input type="file" id="advGndFile" accept=".asc,.txt" onChange={handleFile(setGndData, setGndMeta, setGndName)} disabled={loading} style={{ display: 'none' }} />
+        <span className="fname">{gndName}</span>
       </div>
-      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center' }}>
+      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center', position: 'relative', zIndex: 91 }}>
         {loading && <Spinner />}{status.text}
       </div>
 
@@ -72,7 +94,7 @@ export default function Advanced() {
               <h3>{grp.group}</h3>
               {grp.items.map(p => (
                 <div key={p.id} className={'preset'+(selPreset===p.id?' sel':'')}
-                  onClick={() => loadPreset(p)}>{p.name}</div>
+                  onClick={() => !loading && loadPreset(p)} style={loading ? { pointerEvents: 'none', opacity: 0.5 } : {}}>{p.name}</div>
               ))}
             </div>
           ))}
@@ -93,6 +115,7 @@ export default function Advanced() {
           )}
         </div>
       </div>
+      {loading && <div style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} />}
     </div>
   );
 }
