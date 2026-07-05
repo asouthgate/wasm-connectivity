@@ -1,9 +1,12 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { solve_connectivity } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import MapView from '../components/MapView';
 import { Spinner } from '../components/Spinner';
+
+const PAIRWISE = PRESETS.filter(g => g.mode === 'pairwise');
 
 export default function Solver() {
   const [resData, setResData] = useState(null);
@@ -17,9 +20,6 @@ export default function Solver() {
   const [status, setStatus] = useState({ text: 'Pick a preset to begin.', color: '#888' });
   const [timer, setTimer] = useState('');
   const [selPreset, setSelPreset] = useState(null);
-  const [ptFileReader, setPtFileReader] = useState(null);
-  const resRef = useRef(null);
-  const ptsRef = useRef(null);
   const [resName, setResName] = useState('—');
   const [ptName, setPtName] = useState('—');
 
@@ -52,7 +52,9 @@ export default function Solver() {
 
   const run = useCallback(async () => {
     if (!resData || !ptData) return;
-    setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
+    flushSync(() => {
+      setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
+    });
     await new Promise(r => requestAnimationFrame(r));
     const t0 = performance.now();
     try {
@@ -90,7 +92,7 @@ export default function Solver() {
 
       <div className="layout">
         <div className="sidebar">
-          {PRESETS.map(grp => (
+          {PAIRWISE.map(grp => (
             <div key={grp.group} className="preset-group">
               <h3>{grp.group}</h3>
               {grp.items.map(p => (
