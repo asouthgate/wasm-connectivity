@@ -19,7 +19,7 @@ Circuit theory has been successfully applied to ecological connectivity modellin
 
 \section{Introduction}
 
-Circuit theory has found useful application in ecological connectivity modelling \cite{mcrae2008using}, especially through the circuitscape \cite{mcrae2016circuitscape} software. 
+The theory of linear circuits has found useful application in ecological connectivity modelling, population genetics, and conservation \cite{mcrae2008using, mcrae2006isolation, mcrae2007circuit}, especially through the circuitscape \cite{mcrae2016circuitscape} software. Circuit theory offers advantages beyond methods such as least-cost paths (see \cite{mcrae2007circuit}).
 
 At the same time, compute is often constrained quantity due to global supply shortages and/or cost. In the simplest case, a user runs circuitscape on their laptop or a server, depending on compute requirements and model complexity, as is typical in scientific computing. In modern web applications, a front-end browser application is often paired with a backend server which performs more computationally expensive jobs. When scientific code is deployed into production web applications for practical use by customers (e.g. analysts) outside of academia, a backend is required. However, for many applications, maintaining this infrastructure is costly. Edge computing is a paradigm which basically means making use of compute close to the 'edge' of the cloud, which is either close to the user's computer, or the user's computer itself. The problem with performing complex calculations in the browser is that browser code (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction. To resolve this problem, WebAssembly was recently introduced, allowing fast C++ or Rust code to be run in a sandboxed browser environment. An academic might ask: why not just use my laptop? The answer to this is that often web applications integrate complex user controls (e.g. modelling controls directly on a map) that are time consuming to complete using scientific scripts, and requires expertise not always available to users outside of academia.
 
@@ -56,10 +56,10 @@ Given these two equations, only voltage differences $V_{ij}$ are unknown. Voltag
 
 \begin{equation}
 \label{eq:system}
-\rightarrow GV =  D_CV - MV = D_S
+\rightarrow LV =  D_CV - MV = D_S
 \end{equation}
 
-In circuit theory, $G$ is known as the nodal conductance. The diagonal elements of $G$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $G$ is sparse, since only neighboring nodes are connected in the simplest case.
+Which is a discrete Poisson equation. The matrix $L$ is the Laplacian. The diagonal elements of $L$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $L$ is sparse, since only neighboring nodes are connected in the simplest case.
 
 \subsection{Modes}
 
