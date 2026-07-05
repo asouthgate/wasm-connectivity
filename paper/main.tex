@@ -22,10 +22,28 @@ Circuit theory has been successfully applied to ecological connectivity modellin
 
 The theory of linear circuits has found useful application in ecological connectivity modelling, population genetics, and conservation \cite{mcrae2008using, mcrae2006isolation, mcrae2007circuit}, especially through the circuitscape \cite{mcrae2016circuitscape} software. Circuit theory offers advantages beyond methods such as least-cost paths (see \cite{mcrae2007circuit}).
 
-At the same time, compute is often constrained quantity due to global supply shortages and/or cost. In the simplest case, a user runs circuitscape on their laptop or a server, depending on compute requirements and model complexity, as is typical in scientific computing. In modern web applications, a front-end browser application is often paired with a backend server which performs more computationally expensive jobs. When scientific code is deployed into production web applications for practical use by customers (e.g. analysts) outside of academia, a backend is required. However, for many applications, maintaining this infrastructure is costly. Edge computing is a paradigm which basically means making use of compute close to the 'edge' of the cloud, which is either close to the user's computer, or the user's computer itself. The problem with performing complex calculations in the browser is that browser code (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction. To resolve this problem, WebAssembly was recently introduced, allowing fast C++ or Rust code to be run in a sandboxed browser environment. An academic might ask: why not just use my laptop? The answer to this is that often web applications integrate complex user controls (e.g. modelling controls directly on a map) that are time consuming to complete using scientific scripts, and requires expertise not always available to users outside of academia.
+At the same time, compute is often constrained quantity due to global supply shortages and/or cost. 
+In the simplest case, a user runs circuitscape on their laptop or a server,
+depending on compute requirements and model complexity, as is typical in scientific computing. 
+In modern web applications, 
+a front-end browser application is often paired with a backend server which performs more computationally expensive jobs. 
+When scientific code is deployed into production web applications for practical use by customers (e.g. analysts) 
+outside of academia, a backend is required. However, for many applications, maintaining this infrastructure is costly. 
+Edge computing is a paradigm which basically means making use of compute close to the 'edge' of the cloud, 
+which is either close to the user's computer, or the user's computer itself. 
+The problem with performing complex calculations in the browser is that browser code 
+(i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction.
+To resolve this problem, WebAssembly was recently introduced,
+allowing fast C++ or Rust code to be run in a sandboxed browser environment.
+An academic might ask: why not just use my laptop?
+The answer to this is that often web applications integrate complex user controls
+(e.g. modelling controls directly on a map) that are time consuming to complete using scientific scripts,
+and requires expertise not always available to users outside of academia.
 
-This paper introduces a Rust library and WebAssembly bindings to allow connectivity analysis directly within web applications, such as GeoSpatial analysis software. We demonstrate reasonable
- performance provided input images fit within browser sandbox memory limits, which has potential use for deployed scientific applications.
+This paper introduces a Rust library and WebAssembly bindings to allow connectivity analysis directly within web applications,
+such as GeoSpatial analysis software. We demonstrate reasonable
+ performance provided input images fit within browser sandbox memory limits,
+ which has potential use for deployed scientific applications.
 
 \section{Methodology}
 
@@ -130,7 +148,9 @@ reducing the condition number.
 We utilise a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, 
 also known as a Jacobi preconditioner, 
 which can be useful in instances of highly variable parameters such as material density or irregular meshes \cite{wathen2015preconditioning}.
-We utilise this simple method to reduce WASM dependencies and binary footprint. For some ecological rasters, this method is not preferred,
+We utilise this simple method to reduce WASM dependencies and binary footprint. 
+For front-end web applications, it is crucial that data transfer is minimised
+For some ecological rasters, this method is not preferred,
 such as in Circuitscape, where the algebraic multigrid (AMG) preconditioner is offered \cite{hall2021circuitscape}.
 
 \subsection{Benchmarking time and memory}
@@ -147,7 +167,9 @@ Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. T
 
 \subsection{Benchmarking: CPU, memory, and raster sizes}
 
-\section{Conclusion}
+\section{Discussion}
+
+For front-end web applications, it is crucial that data transfer is minimised
 
 We present a WebAssembly/Rust connectivity library for interactive geospatial edge-computing. This method can be integrated into geospatial web applications. Future work could be used to explore alternative solver methods and optimisations for the browser context. 
 

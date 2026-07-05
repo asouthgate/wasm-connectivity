@@ -6,6 +6,8 @@ pub mod solver;
 pub mod current;
 pub mod resistance;
 pub mod raster;
+pub mod geospatial;
+pub mod resample;
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -59,6 +61,53 @@ pub fn solve_raster_sources(
         max_iter,
         tol,
     );
+    serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+}
+
+#[wasm_bindgen]
+pub fn solve_geospatial(
+    base_raster: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+) -> String {
+    let output = geospatial::solve_geospatial(
+        &base_raster,
+        nrows,
+        ncols,
+        nodata,
+        &geojson_str,
+        &layer_params_str,
+        xmin,
+        ymax,
+        cellsize,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+    );
+    serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+}
+
+#[wasm_bindgen]
+pub fn downsample_raster(
+    data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    target_rows: usize,
+    target_cols: usize,
+) -> String {
+    let output = resample::downsample_raster(&data, nrows, ncols, nodata, target_rows, target_cols);
     serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
 }
 

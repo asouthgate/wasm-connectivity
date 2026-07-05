@@ -1,4 +1,4 @@
-import initModule, { solve_point_sources as _solvePts, solve_raster_sources as _solveRaster, get_memory, __reset } from './wasm_connect.js';
+import initModule, { solve_point_sources as _solvePts, solve_raster_sources as _solveRaster, solve_geospatial as _solveGeo, downsample_raster as _downsample, get_memory, __reset } from './wasm_connect.js';
 import wasmUrl from './wasm_connect_bg.wasm?url';
 
 let ready = false;
@@ -24,6 +24,14 @@ export function solve_point_sources(resData, nrows, ncols, nodata, ptData, maxIt
 
 export function solve_raster_sources(resData, nrows, ncols, nodata, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
   return _solveRaster(resData, nrows, ncols, nodata, srcData, gndData, maxIter, tol);
+}
+
+export function solve_geospatial(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
+  return _solveGeo(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol);
+}
+
+export function downsample_raster(data, nrows, ncols, nodata, targetRows, targetCols) {
+  return _downsample(data, nrows, ncols, nodata, targetRows, targetCols);
 }
 
 export function getWasmMemoryMB() {

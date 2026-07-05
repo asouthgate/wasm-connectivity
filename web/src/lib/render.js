@@ -3,15 +3,24 @@ const POINT_COLORS = [
   [255, 200, 50], [255, 50, 255], [50, 255, 255],
 ];
 
-export function heat(t) {
+const RAINBOW_STOPS = [
+  [0,    0,   0, 128],
+  [0.25, 0,   0, 255],
+  [0.5,  0, 255, 255],
+  [0.75, 255,255, 0],
+  [1.0,  255, 0,   0],
+];
+
+const TWO_STOPS = [
+  [0,   13,   8, 135],
+  [0.25, 126, 3, 168],
+  [0.5, 204, 71, 120],
+  [0.75, 248,149, 64],
+  [1.0, 240,249, 33],
+];
+
+function colorFromStops(t, stops) {
   t = Math.max(0, Math.min(1, t));
-  const stops = [
-    [0,    0,   0, 128],
-    [0.25, 0,   0, 255],
-    [0.5,  0, 255, 255],
-    [0.75, 255,255, 0],
-    [1.0,  255, 0,   0],
-  ];
   let i = 0;
   while (i < stops.length - 2 && t > stops[i + 1][0]) i++;
   const [t0, r0, g0, b0] = stops[i];
@@ -24,7 +33,7 @@ export function heat(t) {
   ];
 }
 
-export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide = 400) {
+export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide = 400, twoTone = false) {
   const scale = Math.max(1, Math.floor(maxSide / Math.max(nrows, ncols)));
   const w = ncols * scale, h = nrows * scale;
   if (canvas.width !== w) canvas.width = w;
@@ -34,8 +43,11 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
   const img = ctx.createImageData(w, h);
 
   let minV = Infinity, maxV = -Infinity;
+  let minRaw = Infinity, maxRaw = -Infinity;
   for (const v of data) {
     if (v === nodata || isNaN(v)) continue;
+    if (v < minRaw) minRaw = v;
+    if (v > maxRaw) maxRaw = v;
     const t = logScale && v > 0 ? Math.log10(v) : v;
     if (t < minV) minV = t;
     if (t > maxV) maxV = t;
@@ -45,6 +57,7 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
   if (maxV <= minV) maxV = minV + 1;
 
   const min = minV, max = maxV;
+  const stops = twoTone ? TWO_STOPS : RAINBOW_STOPS;
   for (let r = 0; r < nrows; r++) {
     for (let c = 0; c < ncols; c++) {
       const v = data[r * ncols + c];
@@ -52,7 +65,7 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
       if (v !== nodata && !isNaN(v)) {
         const t = logScale && v > 0 ? Math.log10(v) : v;
         const s = (t - min) / (max - min);
-        [rr, gg, bb] = heat(s);
+        [rr, gg, bb] = colorFromStops(s, stops);
       }
       for (let dy = 0; dy < scale; dy++) {
         for (let dx = 0; dx < scale; dx++) {
@@ -63,6 +76,7 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
     }
   }
   ctx.putImageData(img, 0, 0);
+  return { min: isFinite(minRaw) ? minRaw : 0, max: isFinite(maxRaw) ? maxRaw : 1 };
 }
 
 export function renderPoints(canvas, data, nrows, ncols, nodata, maxSide = 400) {
