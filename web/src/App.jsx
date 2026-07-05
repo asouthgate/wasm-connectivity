@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-do
 import Solver from './pages/Solver';
 import Raster from './pages/Raster';
 import Geospatial from './pages/Geospatial';
-import Experiment from './pages/Experiment';
+import Benchmark from './pages/Benchmark';
 
 function Nav() {
   const loc = useLocation();
@@ -16,7 +16,7 @@ function Nav() {
       <Link to="/" style={linkStyle('/')}>pairwise</Link>
       <Link to="/raster" style={linkStyle('/raster')}>raster</Link>
       <Link to="/geospatial" style={linkStyle('/geospatial')}>geospatial</Link>
-      <Link to="/experiment" style={linkStyle('/experiment')}>experiment</Link>
+      <Link to="/benchmark" style={linkStyle('/benchmark')}>benchmark</Link>
     </div>
   );
 }
@@ -29,7 +29,7 @@ export default function App() {
         <Route path="/" element={<Solver />} />
         <Route path="/raster" element={<Raster />} />
         <Route path="/geospatial" element={<Geospatial />} />
-        <Route path="/experiment" element={<Experiment />} />
+        <Route path="/benchmark" element={<Benchmark />} />
       </Routes>
     </BrowserRouter>
   );

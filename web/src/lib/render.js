@@ -3,15 +3,15 @@ const POINT_COLORS = [
   [255, 200, 50], [255, 50, 255], [50, 255, 255],
 ];
 
-const RAINBOW_STOPS = [
-  [0,    0,   0, 128],
-  [0.25, 0,   0, 255],
-  [0.5,  0, 255, 255],
-  [0.75, 255,255, 0],
-  [1.0,  255, 0,   0],
+const VIRIDIS_STOPS = [
+  [0,    68,   1,  84],
+  [0.25, 59,  82, 139],
+  [0.5,  33, 144, 140],
+  [0.75, 94, 201,  98],
+  [1.0, 253, 231,  37],
 ];
 
-const TWO_STOPS = [
+const PLASMA_STOPS = [
   [0,   13,   8, 135],
   [0.25, 126, 3, 168],
   [0.5, 204, 71, 120],
@@ -33,7 +33,7 @@ function colorFromStops(t, stops) {
   ];
 }
 
-export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide = 400, twoTone = false) {
+export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide = 400, plasma = false) {
   const scale = Math.max(1, Math.floor(maxSide / Math.max(nrows, ncols)));
   const w = ncols * scale, h = nrows * scale;
   if (canvas.width !== w) canvas.width = w;
@@ -57,7 +57,7 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
   if (maxV <= minV) maxV = minV + 1;
 
   const min = minV, max = maxV;
-  const stops = twoTone ? TWO_STOPS : RAINBOW_STOPS;
+  const stops = plasma ? PLASMA_STOPS : VIRIDIS_STOPS;
   for (let r = 0; r < nrows; r++) {
     for (let c = 0; c < ncols; c++) {
       const v = data[r * ncols + c];

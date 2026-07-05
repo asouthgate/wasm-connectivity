@@ -23,7 +23,7 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
 
   const legendGrad = isCurVolt
     ? 'linear-gradient(to right,#0d0887,#7e03a8,#cc4778,#f89540,#f0f921)'
-    : 'linear-gradient(to right,#00f,#0ff,#0f0,#ff0,#f00)';
+    : 'linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725)';
 
   return (
     <div style={{ border: '1px solid #333', display: 'flex', flexDirection: 'column', maxWidth: '100%' }}>
@@ -42,10 +42,10 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
       </div>
       <canvas ref={canvasRef} style={{ display: 'block', imageRendering: 'pixelated', width: '100%', height: 'auto' }} />
       {type !== 'points' && (
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '.6em', padding: '2px 6px', color: '#666' }}>
-          <span style={{ minWidth: '3.5em', textAlign: 'right' }}>{fmt(range.min)}</span>
-          <div style={{ flex: 1, height: '8px', borderRadius: '2px', background: legendGrad }} />
-          <span style={{ minWidth: '3.5em' }}>{fmt(range.max)}</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '.65em', padding: '3px 6px', color: '#999', background: '#121212' }}>
+          <span style={{ minWidth: '4em', textAlign: 'right' }}>{fmt(range.min)}</span>
+          <div style={{ flex: 1, height: 14, borderRadius: 3, background: legendGrad, border: '1px solid #444' }} />
+          <span style={{ minWidth: '4em' }}>{fmt(range.max)}</span>
         </div>
       )}
     </div>

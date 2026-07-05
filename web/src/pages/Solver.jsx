@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
-import { flushSync } from 'react-dom';
-import { solve_point_sources } from '../lib/wasm';
+import { solve_point_sources_async } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import MapView from '../components/MapView';
@@ -36,16 +35,14 @@ export default function Solver() {
 
   const run = useCallback(async () => {
     if (!resData || !ptData) return;
-    flushSync(() => {
-      setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
-    });
-    await new Promise(r => requestAnimationFrame(r));
+    setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
     const t0 = performance.now();
     try {
       const nd = resMeta.nodata || -9999;
       const ptI = new Int32Array(ptData.length);
       for (let i = 0; i < ptData.length; i++) { const v = ptData[i]; ptI[i] = (v === nd || isNaN(v)) ? 0 : Math.round(v); }
-      const r = JSON.parse(solve_point_sources(resData, resMeta.nrows, resMeta.ncols, nd, ptI));
+      const json = await solve_point_sources_async(resData, resMeta.nrows, resMeta.ncols, nd, ptI);
+      const r = JSON.parse(json);
       setResult(r);
       const s = ((performance.now() - t0) / 1000).toFixed(1);
       setTimer(`${s}s`);

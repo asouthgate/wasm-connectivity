@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { flushSync } from 'react-dom';
-import { solve_geospatial } from '../lib/wasm';
+import { solve_geospatial_async } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { renderMap } from '../lib/render';
 import MapView from '../components/MapView';
@@ -67,13 +67,12 @@ export default function Geospatial() {
     setLoading(false);
   }, []);
 
+  useEffect(() => { loadData('500'); }, []);
+
   const run = useCallback(async () => {
     if (!baseData || !srcData || !geojsonStr) return;
-    flushSync(() => {
-      setComputing(true); setLoading(true);
-      setStatus({ text: 'rasterising features + solving...', color: '#f90' }); setTimer('');
-    });
-    await new Promise(r => setTimeout(r, 50));
+    setComputing(true); setLoading(true);
+    setStatus({ text: 'rasterising features + solving...', color: '#f90' }); setTimer('');
     const t0 = performance.now();
     try {
       const nd = baseMeta.nodata || -9999;
@@ -85,12 +84,13 @@ export default function Geospatial() {
       };
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
       const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
-      const r = JSON.parse(solve_geospatial(
+      const json = await solve_geospatial_async(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(params),
         baseMeta.xllcorner, ymax, baseMeta.cellsize,
         srcData, gd,
-      ));
+      );
+      const r = JSON.parse(json);
       setResult(r);
       const s = ((performance.now() - t0) / 1000).toFixed(1);
       setTimer(`${s}s`);
@@ -107,21 +107,12 @@ export default function Geospatial() {
 
   const layerMasks = result ? (result.layer_masks || []) : [];
 
-  const resSlider = (label, value, setter) => (
+  const numInput = (label, value, setter, min = 0.01, max = 1000, step = 0.01) => (
     <div style={{ marginBottom: 6 }}>
-      <div style={{ fontSize: '.7em', color: '#888', marginBottom: 1 }}>{label}: <span style={{ color: '#ccc' }}>{value}</span></div>
-      <input type="range" min={0.01} max={1000} step={0.01} value={value}
-        onChange={e => setter(+e.target.value)} disabled={loading}
-        style={{ width: '100%' }} />
-    </div>
-  );
-
-  const widthSlider = (label, value, setter) => (
-    <div style={{ marginBottom: 6 }}>
-      <div style={{ fontSize: '.7em', color: '#888', marginBottom: 1 }}>{label}: <span style={{ color: '#ccc' }}>{value}</span></div>
-      <input type="range" min={0} max={20} step={0.5} value={value}
-        onChange={e => setter(+e.target.value)} disabled={loading}
-        style={{ width: '100%' }} />
+      <div style={{ fontSize: '.7em', color: '#888', marginBottom: 1 }}>{label}</div>
+      <input type="number" min={min} max={max} step={step} value={value}
+        onChange={e => setter(+e.target.value || min)} disabled={loading}
+        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #444', color: '#ccc', padding: '2px 4px', font: '12px monospace', borderRadius: 2 }} />
     </div>
   );
 
@@ -152,13 +143,13 @@ export default function Geospatial() {
           {hasData && (
             <div className="preset-group">
               <h3>Resistance Params</h3>
-              {resSlider('Terrain ×', terrainRes, setTerrainRes)}
-              {resSlider('Road Res', roadRes, setRoadRes)}
-              {resSlider('River Res', riverRes, setRiverRes)}
-              {resSlider('Build Res', buildRes, setBuildRes)}
+              {numInput('Terrain ×', terrainRes, setTerrainRes)}
+              {numInput('Road Res', roadRes, setRoadRes)}
+              {numInput('River Res', riverRes, setRiverRes)}
+              {numInput('Build Res', buildRes, setBuildRes)}
               <h3 style={{ marginTop: 8 }}>Line Widths</h3>
-              {widthSlider('Road Width', roadWidth, setRoadWidth)}
-              {widthSlider('River Width', riverWidth, setRiverWidth)}
+              {numInput('Road Width', roadWidth, setRoadWidth, 0, 20, 0.5)}
+              {numInput('River Width', riverWidth, setRiverWidth, 0, 20, 0.5)}
             </div>
           )}
         </div>

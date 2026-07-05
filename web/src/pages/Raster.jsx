@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
-import { flushSync } from 'react-dom';
-import { solve_raster_sources } from '../lib/wasm';
+import { solve_raster_sources_async } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import MapView from '../components/MapView';
@@ -42,15 +41,13 @@ export default function Raster() {
 
   const run = useCallback(async () => {
     if (!resData || !srcData) return;
-    flushSync(() => {
-      setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
-    });
-    await new Promise(r => requestAnimationFrame(r));
+    setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
     const t0 = performance.now();
     try {
       const nd = resMeta.nodata || -9999;
       const gd = gndData || new Float64Array(resMeta.nrows * resMeta.ncols);
-      const r = JSON.parse(solve_raster_sources(resData, resMeta.nrows, resMeta.ncols, nd, srcData, gd));
+      const json = await solve_raster_sources_async(resData, resMeta.nrows, resMeta.ncols, nd, srcData, gd);
+      const r = JSON.parse(json);
       setResult(r);
       const s = ((performance.now() - t0) / 1000).toFixed(1);
       setTimer(`${s}s`);

@@ -111,6 +111,38 @@ pub fn downsample_raster(
     serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
 }
 
+#[wasm_bindgen]
+pub fn rasterize_geojson(
+    base_raster: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+) -> String {
+    let layer_params = geospatial::parse_layer_params(&layer_params_str);
+    let transform = geospatial::GeoTransform { xmin, ymax, cellsize };
+    let (resistance_data, m) = geospatial::rasterize_features(
+        &geojson_str, &layer_params, &base_raster, nrows, ncols, &transform, nodata,
+    );
+    let layer_masks: Vec<geospatial::LayerMask> = m.into_iter()
+        .filter(|(_, v)| v.iter().any(|&x| x > 0.0))
+        .map(|(name, data)| geospatial::LayerMask { name, data })
+        .collect();
+    #[derive(serde::Serialize)]
+    struct Out {
+        resistance_map: Vec<f64>,
+        layer_masks: Vec<geospatial::LayerMask>,
+        nrows: usize,
+        ncols: usize,
+    }
+    let output = Out { resistance_map: resistance_data, layer_masks, nrows, ncols };
+    serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+}
+
 fn compute_points(
     resistance_data: Vec<f64>,
     nrows: usize,
