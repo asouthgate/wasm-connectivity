@@ -6,7 +6,7 @@
 \usepackage{graphicx}
 \usepackage{hyperref} 
 
-\title{A WebAssembly/Rust implementation of connectivity analysis for ecological and geospatial edge computing applications}
+\title{A WebAssembly/Rust connectivity analysis toolset for ecological and geospatial edge computing}
 \author{Alex Southgate}
 \date{\today}
 
@@ -57,7 +57,7 @@ Given these two equations, only voltage differences $V_{ij}$ are unknown. Voltag
 
 \begin{equation}
 \label{eq:system}
-\rightarrow \Big(\mathbf{D_C}- \mathbf{M}\Big)\vec{V} = \mathbf{L}\vec{V} = \vec{S}
+\rightarrow \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s}
 \end{equation}
 
 Which is a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. The matrix $\mathbf{L}$ is the Laplacian. The diagonal elements of $\mathbf{L}$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $\mathbf{L}$ is sparse, since only neighboring nodes are connected in the simplest case.
@@ -73,52 +73,58 @@ Given an $N\times M$ image, the matrix $L$ takes $O(NM)$ space. In Circuitscape,
 A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for WASM, a brief explanation follows. Solving the system:
 
 \[
-LV = S
+\mathbf{L}\mathbf{v} = \mathbf{s}
 \]
 
 is equivalent to solving the energy function:
 
 \[
-f(v) = \frac{1}{2} v^T Lv - v^TS
+f(\mathbf{v}) = \frac{1}{2} \mathbf{v}^T \mathbf{L}\mathbf{v} - \mathbf{v}^T\mathbf{s}
 \]
 
 Since when taking the negative gradient and setting to zero, we get the residual error for our system:
 
 \[
--\nabla f(v) = S - Lv = r
+-\nabla f(\mathbf{v}) = \mathbf{s} - \mathbf{L}\mathbf{v} = \mathbf{r}
 \]
 
 Stepping in the direction $r$ at step $k$ gives us a new guess.
 
 \[
-v_{k+1} = v_{k} + \alpha r_k
+\mathbf{v}_{k+1} = \mathbf{v}_{k} + \mathbf{\alpha} \mathbf{r}_k
 \]
 
 Taking the gradient and choosing an optimal step size $\alpha$ gets to the bottom of the hill for that slice. The next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. To get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that:
 
 \[
-\alpha_{k} = \frac{p_{k}^T r_k}{p_k^T Lp_k}
+\mathbf{\alpha}_{k} = \frac{\mathbf{p}_{k}^T \mathbf{r}_k}{\mathbf{p}_k^T \mathbf{L}\mathbf{p}_k}
 \]
 
 However, stepping maximally in a sequence of orthogonal steps can be inefficient and lead to zig-zag steps. Instead, a kind of moving average or momentum can be applied to the steps. 
 
 \[
-p_{k+1} = r_{k+1} + \beta_{k+1}p_k
+\mathbf{p}_{k+1} = \mathbf{r}_{k+1} + \mathbf{\beta}_{k+1}\mathbf{p}_k
 \]
 
 In the case of CG, $\beta$ is:
 
 \[
-\beta_k = \frac{r^T_kTr_k}{r_{k-1}r_{k-1}}
+\beta_k = \frac{\mathbf{r}^T_k\mathbf{r}_k}{\mathbf{r}_{k-1}^T\mathbf{r}_{k-1}}
 \]
 
 We also implement a preconditioner. As described in \cite[Ch. 4.3.4]{leveque2007finite}), convergence rate depends on condition number. We solve a transformed system:
 
 \[
-M^{-1}LV = M^{-1}S
+\mathbf{M}^{-1}\mathbf{L}\mathbf{v} = \mathbf{M}^{-1}\mathbf{s}
 \] 
 
-Where $M^{-1}$ approximates $A$, reducing the condition number. We utilise a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, which can be useful in instances of highly variable parameters such as material density or irregular meshes \cite{wathen2015preconditioning}.
+Where $\mathbf{M}^{-1}$ approximates $\mathbf{L}$, 
+reducing the condition number. 
+We utilise a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, 
+also known as a Jacobi preconditioner, 
+which can be useful in instances of highly variable parameters such as material density or irregular meshes \cite{wathen2015preconditioning}.
+We utilise this simple method to reduce WASM dependencies and binary footprint. For some ecological rasters, this method is not preferred,
+such as in Circuitscape, where the algebraic multigrid (AMG) preconditioner is offered \cite{hall2021circuitscape}.
 
 \subsection{Benchmarking time and memory}
 
