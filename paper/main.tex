@@ -54,6 +54,13 @@ the \texttt{geojson} and \texttt{geo} crates, which are lightweight and have no 
 applications with vector data to use the WASM toolset directly, and interface cleanly with vector tile
 data such as MVT derived from mbtiles.
 
+\subsection{Example datasets}
+
+In order to demonstrate the functionality of our WASM toolset, a test region corresponding to a 1000 $m^2$ region centered at
+286600E, 79050N (EPSG:27700) was selected. The region includes buildings, roads, and a river. Vector data was obtained from
+the UK ordinance survey open data \cite{os_data}. 
+DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
+
 \subsection{Connectivity model}
 
 We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} is \eqref{eq:ohm}:
