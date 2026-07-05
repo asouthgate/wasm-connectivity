@@ -2,6 +2,7 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage{amsmath, amssymb}
+\DeclareMathOperator{\diag}{diag} 
 \usepackage{graphicx}
 \usepackage{hyperref} 
 
@@ -30,14 +31,14 @@ This paper introduces a Rust library and WebAssembly bindings to allow connectiv
 
 \subsection{Model formulation}
 
-We assume as previously described that we can use circuit theory to model connectivity. First, Ohm's law is \eqref{eq:ohm}:
+We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} is \eqref{eq:ohm}:
 
 \begin{equation}
 \label{eq:ohm}
 I = CV
 \end{equation}
 
-Secondly, for a given node (pixel), the conservation equation (Kirchoff's equation) \eqref{eq:conservation} just means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$:
+Secondly, for a given node (pixel), the conservation equation (Kirchoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) \eqref{eq:conservation} just means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$:
 
 \begin{equation}
 \label{eq:conservation}
@@ -56,10 +57,10 @@ Given these two equations, only voltage differences $V_{ij}$ are unknown. Voltag
 
 \begin{equation}
 \label{eq:system}
-\rightarrow LV =  D_CV - MV = D_S
+\rightarrow \Big(\mathbf{D_C}- \mathbf{M}\Big)\vec{V} = \mathbf{L}\vec{V} = \vec{S}
 \end{equation}
 
-Which is a discrete Poisson equation. The matrix $L$ is the Laplacian. The diagonal elements of $L$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $L$ is sparse, since only neighboring nodes are connected in the simplest case.
+Which is a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. The matrix $\mathbf{L}$ is the Laplacian. The diagonal elements of $\mathbf{L}$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $\mathbf{L}$ is sparse, since only neighboring nodes are connected in the simplest case.
 
 \subsection{Modes}
 
@@ -67,7 +68,57 @@ The simplest run mode is for a source and sink pair, equivalent to a conditional
 
 \subsection{Solver}
 
-Given an $N\times M$ image, the matrix $L$ takes $O(NM)$ space. In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised CHOLMOD libraries that are not available in a WASM context. We utilise the conjugate gradient method with jacobi preconditioning for simplicity. This method is iterative and memory efficient, at $O(MN)$ space and $O(kMN)$ time for $k$ iterations.
+Given an $N\times M$ image, the matrix $L$ takes $O(NM)$ space. In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised CHOLMOD libraries that are not available in a WASM context. We utilise the conjugate gradient method with jacobi preconditioning for simplicity. This method is iterative and memory efficient, at $O(MN)$ space and $O(kMN)$ time for $k$ iterations. We implement our CG solver in order to reduce dependencies for the WASM context. 
+
+A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for WASM, a brief explanation follows. Solving the system:
+
+\[
+LV = S
+\]
+
+is equivalent to solving the energy function:
+
+\[
+f(v) = \frac{1}{2} v^T Lv - v^TS
+\]
+
+Since when taking the negative gradient and setting to zero, we get the residual error for our system:
+
+\[
+-\nabla f(v) = S - Lv = r
+\]
+
+Stepping in the direction $r$ at step $k$ gives us a new guess.
+
+\[
+v_{k+1} = v_{k} + \alpha r_k
+\]
+
+Taking the gradient and choosing an optimal step size $\alpha$ gets to the bottom of the hill for that slice. The next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. To get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that:
+
+\[
+\alpha_{k} = \frac{p_{k}^T r_k}{p_k^T Lp_k}
+\]
+
+However, stepping maximally in a sequence of orthogonal steps can be inefficient and lead to zig-zag steps. Instead, a kind of moving average or momentum can be applied to the steps. 
+
+\[
+p_{k+1} = r_{k+1} + \beta_{k+1}p_k
+\]
+
+In the case of CG, $\beta$ is:
+
+\[
+\beta_k = \frac{r^T_kTr_k}{r_{k-1}r_{k-1}}
+\]
+
+We also implement a preconditioner. As described in \cite[Ch. 4.3.4]{leveque2007finite}), convergence rate depends on condition number. We solve a transformed system:
+
+\[
+M^{-1}LV = M^{-1}S
+\] 
+
+Where $M^{-1}$ approximates $A$, reducing the condition number. We utilise a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, which can be useful in instances of highly variable parameters such as material density or irregular meshes \cite{wathen2015preconditioning}.
 
 \subsection{Benchmarking time and memory}
 
