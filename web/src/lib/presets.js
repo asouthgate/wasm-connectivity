@@ -33,7 +33,7 @@ export const PRESETS = [
     ],
   },
   {
-    group: 'Advanced · 200×200', mode: 'advanced',
+    group: 'Raster · 200×200', mode: 'raster',
     items: [
       { id:'ae200', name:'edge to edge',
         res:'test_grids/uniform_200_res.asc', src:'test_grids/adv_edge_src_200.asc', gnd:'test_grids/adv_edge_gnd_200.asc' },
@@ -44,7 +44,7 @@ export const PRESETS = [
     ],
   },
   {
-    group: 'Advanced · 300×300', mode: 'advanced',
+    group: 'Raster · 300×300', mode: 'raster',
     items: [
       { id:'ae300', name:'edge to edge',
         res:'test_grids/uniform_300_res.asc', src:'test_grids/adv_edge_src_300.asc', gnd:'test_grids/adv_edge_gnd_300.asc' },
@@ -55,7 +55,7 @@ export const PRESETS = [
     ],
   },
   {
-    group: 'Advanced · 500×500', mode: 'advanced',
+    group: 'Raster · 500×500', mode: 'raster',
     items: [
       { id:'ae500', name:'edge to edge',
         res:'test_grids/uniform_500_res.asc', src:'test_grids/adv_edge_src_500.asc', gnd:'test_grids/adv_edge_gnd_500.asc' },

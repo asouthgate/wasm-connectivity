@@ -9,11 +9,40 @@ export function init_panic_hook() {
  * @param {number} nrows
  * @param {number} ncols
  * @param {number} nodata
- * @param {Float64Array} source_data
- * @param {Float64Array} ground_data
+ * @param {Int32Array} point_data
+ * @param {number} max_iter
+ * @param {number} tol
  * @returns {string}
  */
-export function solve_advanced(resistance_data, nrows, ncols, nodata, source_data, ground_data) {
+export function solve_point_sources(resistance_data, nrows, ncols, nodata, point_data, max_iter, tol) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArrayF64ToWasm0(resistance_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(point_data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.solve_point_sources(ptr0, len0, nrows, ncols, nodata, ptr1, len1, max_iter, tol);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * @param {Float64Array} resistance_data
+ * @param {number} nrows
+ * @param {number} ncols
+ * @param {number} nodata
+ * @param {Float64Array} source_data
+ * @param {Float64Array} ground_data
+ * @param {number} max_iter
+ * @param {number} tol
+ * @returns {string}
+ */
+export function solve_raster_sources(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol) {
     let deferred4_0;
     let deferred4_1;
     try {
@@ -23,37 +52,12 @@ export function solve_advanced(resistance_data, nrows, ncols, nodata, source_dat
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.solve_advanced(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2);
+        const ret = wasm.solve_raster_sources(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol);
         deferred4_0 = ret[0];
         deferred4_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
         wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * @param {Float64Array} resistance_data
- * @param {number} nrows
- * @param {number} ncols
- * @param {number} nodata
- * @param {Int32Array} point_data
- * @returns {string}
- */
-export function solve_connectivity(resistance_data, nrows, ncols, nodata, point_data) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passArrayF64ToWasm0(resistance_data, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArray32ToWasm0(point_data, wasm.__wbindgen_malloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.solve_connectivity(ptr0, len0, nrows, ncols, nodata, ptr1, len1);
-        deferred3_0 = ret[0];
-        deferred3_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
 }
 function __wbg_get_imports() {

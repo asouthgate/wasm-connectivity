@@ -103,7 +103,7 @@ input[type=file] { display: none; }
 </div>
 
 <script type="module">
-import init, { solve_connectivity } from '../pkg/wasm_connect.js';
+import init, { solve_point_sources } from '../pkg/wasm_connect.js';
 
 const PRESETS = [
   { group: '200×200', items: [
@@ -258,7 +258,7 @@ async function runSolver() {
     const nd = resMeta.nodata||-9999;
     const ptI = new Int32Array(ptData.length);
     for (let i=0; i<ptData.length; i++) { const v=ptData[i]; ptI[i]=(v===nd||isNaN(v))?0:Math.round(v); }
-    curResult = JSON.parse(solve_connectivity(resData, resMeta.nrows, resMeta.ncols, nd, ptI));
+    curResult = JSON.parse(solve_point_sources(resData, resMeta.nrows, resMeta.ncols, nd, ptI, 100_000, 1e-6));
     const s = ((performance.now()-t0)/1000).toFixed(1);
     document.getElementById('timer').textContent = `${s}s`;
     renderCurrent();
@@ -282,7 +282,7 @@ function renderCurrent() {
 
 function renderRes() {
   if (!curResult) return;
-  const ids=curResult.point_ids, m=curResult.resistances;
+  const ids=curResult.point_ids, m=curResult.resistance_matrix;
   let h='<table><tr><th></th>';
   ids.forEach(id=>h+=`<th>pt ${id}</th>`); h+='</tr>';
   m.forEach((row,i)=>{

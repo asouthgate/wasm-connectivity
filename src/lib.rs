@@ -5,14 +5,14 @@ pub mod components;
 pub mod solver;
 pub mod current;
 pub mod resistance;
-pub mod advanced;
+pub mod raster;
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct ConnectivityOutput {
-    pub resistances: Vec<Vec<f64>>,
+    pub resistance_matrix: Vec<Vec<f64>>,
     pub current_map: Vec<f64>,
     pub nrows: usize,
     pub ncols: usize,
@@ -25,36 +25,51 @@ pub fn init_panic_hook() {
 }
 
 #[wasm_bindgen]
-pub fn solve_connectivity(
+pub fn solve_point_sources(
     resistance_data: Vec<f64>,
     nrows: usize,
     ncols: usize,
     nodata: f64,
     point_data: Vec<i32>,
+    max_iter: usize,
+    tol: f64,
 ) -> String {
-    let output = compute(resistance_data, nrows, ncols, nodata, point_data);
+    let output = compute_points(resistance_data, nrows, ncols, nodata, point_data, max_iter, tol);
     serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
 }
 
 #[wasm_bindgen]
-pub fn solve_advanced(
+pub fn solve_raster_sources(
     resistance_data: Vec<f64>,
     nrows: usize,
     ncols: usize,
     nodata: f64,
     source_data: Vec<f64>,
     ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
 ) -> String {
-    let output = advanced::cal_advanced(&resistance_data, nrows, ncols, nodata, &source_data, &ground_data);
+    let output = raster::compute_raster(
+        &resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+    );
     serde_json::to_string(&output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
 }
 
-fn compute(
+fn compute_points(
     resistance_data: Vec<f64>,
     nrows: usize,
     ncols: usize,
     nodata: f64,
     point_data: Vec<i32>,
+    max_iter: usize,
+    tol: f64,
 ) -> ConnectivityOutput {
     let conductance = grid::Grid::to_conductance(&resistance_data, nrows, ncols, nodata);
 
@@ -62,7 +77,7 @@ fn compute(
 
     let focal_points = grid::extract_focal_points(&point_data, nrows, ncols, &nodemap);
 
-    let edges = graph::build_adjacency(&conductance, &nodemap);
+    let edges = graph::build_conductance_edges(&conductance, &nodemap);
 
     let laplacian = laplacian::build_laplacian(&edges, num_nodes);
 
@@ -75,10 +90,12 @@ fn compute(
         &nodemap,
         nrows,
         ncols,
+        max_iter,
+        tol,
     );
 
     ConnectivityOutput {
-        resistances: result.resistances,
+        resistance_matrix: result.resistance_matrix,
         current_map: result.current_map,
         nrows: result.nrows,
         ncols: result.ncols,
@@ -140,23 +157,26 @@ mod tests {
     #[test]
     fn test_uniform_grid_resistance() {
         let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
-        let output = compute(res_data, 5, 5, -9999.0, point_data);
+        let output = compute_points(res_data, 5, 5, -9999.0, point_data, 100_000, 1e-6);
 
         assert_eq!(output.point_ids.len(), 2);
-        assert_eq!(output.resistances.len(), 2);
-        assert_eq!(output.resistances[0].len(), 2);
+        assert_eq!(output.resistance_matrix.len(), 2);
+        assert_eq!(output.resistance_matrix[0].len(), 2);
 
-        let r = output.resistances[0][1];
+        let r = output.resistance_matrix[0][1];
         assert!(r > 0.0, "Resistance should be positive, got {}", r);
-        assert_eq!(output.resistances[1][0], r, "Resistance matrix must be symmetric");
-        assert_eq!(output.resistances[0][0], 0.0);
-        assert_eq!(output.resistances[1][1], 0.0);
+        assert_eq!(
+            output.resistance_matrix[1][0], r,
+            "Resistance matrix must be symmetric"
+        );
+        assert_eq!(output.resistance_matrix[0][0], 0.0);
+        assert_eq!(output.resistance_matrix[1][1], 0.0);
     }
 
     #[test]
     fn test_uniform_current_map_symmetry() {
         let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
-        let output = compute(res_data, 5, 5, -9999.0, point_data);
+        let output = compute_points(res_data, 5, 5, -9999.0, point_data, 100_000, 1e-6);
 
         assert_eq!(output.current_map.len(), 25);
         let has_current = output.current_map.iter().any(|&v| v > 0.0);
@@ -166,9 +186,9 @@ mod tests {
     #[test]
     fn test_corridor_grid() {
         let (res_data, point_data) = make_corridor_grid();
-        let output = compute(res_data, 10, 10, -9999.0, point_data);
+        let output = compute_points(res_data, 10, 10, -9999.0, point_data, 100_000, 1e-6);
 
-        assert!(output.resistances[0][1] > 0.0);
+        assert!(output.resistance_matrix[0][1] > 0.0);
 
         let mid_row = 5;
         let col_low_res = output.current_map[mid_row * 10 + 0];
@@ -178,12 +198,14 @@ mod tests {
         assert!(
             col_high_res > col_low_res,
             "Current should be higher through low-resistance corridor: corridor={}, edge_left={}, edge_right={}",
-            col_high_res, col_low_res, col_low_res2
+            col_high_res,
+            col_low_res,
+            col_low_res2
         );
     }
 
     #[test]
-    fn test_advanced_edge_to_edge() {
+    fn test_raster_edge_to_edge() {
         let size = 10;
         let n = size * size;
         let res_data = vec![1.0f64; n];
@@ -193,7 +215,10 @@ mod tests {
             source_data[row * size] = 1.0;
             ground_data[row * size + (size - 1)] = 1.0;
         }
-        let output = advanced::cal_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
+        let output = raster::compute_raster(
+            &res_data, size, size, -9999.0, &source_data, &ground_data,
+            100_000, 1e-6,
+        );
         assert_eq!(output.voltages.len(), n);
         assert_eq!(output.current_map.len(), n);
         let has_current = output.current_map.iter().any(|&v| v > 0.0);
@@ -203,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn test_advanced_center_source() {
+    fn test_raster_center_source() {
         let size = 10;
         let n = size * size;
         let res_data = vec![1.0f64; n];
@@ -217,21 +242,27 @@ mod tests {
                 }
             }
         }
-        let output = advanced::cal_advanced(&res_data, size, size, -9999.0, &source_data, &ground_data);
+        let output = raster::compute_raster(
+            &res_data, size, size, -9999.0, &source_data, &ground_data,
+            100_000, 1e-6,
+        );
         let center_voltage = output.voltages[5 * size + 5];
-        assert!(center_voltage > 0.0, "Center voltage should be positive for current source");
+        assert!(
+            center_voltage > 0.0,
+            "Center voltage should be positive for current source"
+        );
     }
 
     #[test]
     fn test_output_pgm_images() {
         let (res_data, point_data) = make_uniform_resistance_grid(10, 1.0);
-        let output = compute(res_data, 10, 10, -9999.0, point_data);
+        let output = compute_points(res_data, 10, 10, -9999.0, point_data, 100_000, 1e-6);
 
         write_pgm("/tmp/uniform_current.pgm", &output.current_map, 10, 10);
         println!("Wrote /tmp/uniform_current.pgm");
 
         let (res_data2, point_data2) = make_corridor_grid();
-        let output2 = compute(res_data2, 10, 10, -9999.0, point_data2);
+        let output2 = compute_points(res_data2, 10, 10, -9999.0, point_data2, 100_000, 1e-6);
 
         write_pgm("/tmp/corridor_current.pgm", &output2.current_map, 10, 10);
         println!("Wrote /tmp/corridor_current.pgm");

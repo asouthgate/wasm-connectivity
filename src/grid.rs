@@ -74,3 +74,38 @@ pub fn extract_focal_points(
     points.dedup_by_key(|(pid, _)| *pid);
     points
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_conductance() {
+        let cond = Grid::to_conductance(&[2.0, 4.0, 0.0, -9999.0], 2, 2, -9999.0);
+        assert_eq!(cond.get(0, 0), 0.5);
+        assert_eq!(cond.get(0, 1), 0.25);
+        assert_eq!(cond.get(1, 0), 0.0);
+        assert_eq!(cond.get(1, 1), 0.0);
+    }
+
+    #[test]
+    fn test_build_nodemap() {
+        let cond = Grid::to_conductance(&[1.0, 0.0, 1.0, 0.0], 2, 2, 0.0);
+        let (nodemap, num_nodes) = build_nodemap(&cond);
+        assert_eq!(num_nodes, 2);
+        assert_eq!(nodemap, vec![1, 0, 2, 0]);
+    }
+
+    #[test]
+    fn test_extract_focal_points() {
+        let cond = Grid::to_conductance(&vec![1.0; 9], 3, 3, -9999.0);
+        let (nodemap, _) = build_nodemap(&cond);
+        let mut point_data = vec![0i32; 9];
+        point_data[0] = 2;
+        point_data[4] = 1;
+        let points = extract_focal_points(&point_data, 3, 3, &nodemap);
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].0, 1);
+        assert_eq!(points[1].0, 2);
+    }
+}

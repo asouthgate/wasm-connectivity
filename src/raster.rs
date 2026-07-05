@@ -7,26 +7,28 @@ use crate::current;
 use serde::Serialize;
 
 #[derive(Serialize)]
-pub struct AdvancedOutput {
+pub struct RasterOutput {
     pub voltages: Vec<f64>,
     pub current_map: Vec<f64>,
     pub nrows: usize,
     pub ncols: usize,
 }
 
-pub fn cal_advanced(
+pub fn compute_raster(
     resistance_data: &[f64],
     nrows: usize,
     ncols: usize,
     nodata: f64,
     source_data: &[f64],
     ground_data: &[f64],
-) -> AdvancedOutput {
+    max_iter: usize,
+    tol: f64,
+) -> RasterOutput {
     let conductance = grid::Grid::to_conductance(resistance_data, nrows, ncols, nodata);
 
     let (nodemap, num_nodes) = grid::build_nodemap(&conductance);
 
-    let edges = graph::build_adjacency(&conductance, &nodemap);
+    let edges = graph::build_conductance_edges(&conductance, &nodemap);
     let laplacian = laplacian::build_laplacian(&edges, num_nodes);
 
     let components = components::find_connected_components(&laplacian, num_nodes);
@@ -51,36 +53,16 @@ pub fn cal_advanced(
     }
 
     let mut voltages_global = vec![0.0f64; num_nodes];
-    let max_iter = 100_000;
-    let tol = 1e-6;
 
     for comp in &components {
-        let comp_size = comp.len();
-        let comp_set: std::collections::HashSet<usize> = comp.iter().copied().collect();
-
         let total_current: f64 = comp.iter().map(|&gn| current_global[gn].abs()).sum();
         if total_current < 1e-15 {
             continue;
         }
 
-        let mut node_to_local = vec![0usize; num_nodes];
-        for (li, &gn) in comp.iter().enumerate() {
-            node_to_local[gn] = li;
-        }
-
-        let mut a_local_triplets = graph::EdgeTriplets::new();
-        for &gn in comp {
-            let li = node_to_local[gn];
-            for (neighbor, conductance) in laplacian::get_row_neighbors(&laplacian, gn) {
-                if comp_set.contains(&neighbor) && neighbor > gn {
-                    let lj = node_to_local[neighbor];
-                    a_local_triplets.push(li, lj, conductance);
-                    a_local_triplets.push(lj, li, conductance);
-                }
-            }
-        }
-
-        let a_local = laplacian::build_laplacian(&a_local_triplets, comp_size);
+        let (a_local, _node_to_local) =
+            components::build_subgraph_laplacian(&laplacian, comp, num_nodes);
+        let comp_size = comp.len();
 
         let mut current_local = vec![0.0f64; comp_size];
         for (li, &gn) in comp.iter().enumerate() {
@@ -106,7 +88,7 @@ pub fn cal_advanced(
     let current_map = current::reconstruct_grid_map(&node_currents, &nodemap, nrows, ncols);
     let voltage_map = current::reconstruct_grid_map(&voltages_global, &nodemap, nrows, ncols);
 
-    AdvancedOutput {
+    RasterOutput {
         voltages: voltage_map,
         current_map,
         nrows,

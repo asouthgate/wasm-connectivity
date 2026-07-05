@@ -1,4 +1,4 @@
-import initModule, { solve_connectivity as _solve, solve_advanced as _solveAdv, get_memory, __reset } from './wasm_connect.js';
+import initModule, { solve_point_sources as _solvePts, solve_raster_sources as _solveRaster, get_memory, __reset } from './wasm_connect.js';
 import wasmUrl from './wasm_connect_bg.wasm?url';
 
 let ready = false;
@@ -18,12 +18,12 @@ export async function reset() {
   wasmMemory = get_memory();
 }
 
-export function solve_connectivity(resData, nrows, ncols, nodata, ptData) {
-  return _solve(resData, nrows, ncols, nodata, ptData);
+export function solve_point_sources(resData, nrows, ncols, nodata, ptData, maxIter = 100_000, tol = 1e-6) {
+  return _solvePts(resData, nrows, ncols, nodata, ptData, maxIter, tol);
 }
 
-export function solve_advanced(resData, nrows, ncols, nodata, srcData, gndData) {
-  return _solveAdv(resData, nrows, ncols, nodata, srcData, gndData);
+export function solve_raster_sources(resData, nrows, ncols, nodata, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
+  return _solveRaster(resData, nrows, ncols, nodata, srcData, gndData, maxIter, tol);
 }
 
 export function getWasmMemoryMB() {

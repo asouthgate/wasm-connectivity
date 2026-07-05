@@ -29,7 +29,14 @@ This paper introduces a Rust library and WebAssembly bindings to allow connectiv
 
 \section{Methodology}
 
-\subsection{Model formulation}
+\subsection{Vector rasterisation}
+
+In order to keep the WASM toolset lightweight, we avoid heavy geospatial dependencies. For vector rasterisation, we use
+the \texttt{geojson} and \texttt{geo} crates, which are lightweight and have no external dependencies. Handling vector inputs allows
+applications with vector data to use the WASM toolset directly, and interface cleanly with vector tile
+data such as MVT derived from mbtiles.
+
+\subsection{Connectivity model}
 
 We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} is \eqref{eq:ohm}:
 

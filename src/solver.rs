@@ -1,11 +1,6 @@
 use sprs::CsMat;
 
-pub fn cg_solve(
-    a: &CsMat<f64>,
-    b: &[f64],
-    max_iter: usize,
-    tol: f64,
-) -> Vec<f64> {
+pub fn cg_solve(a: &CsMat<f64>, b: &[f64], max_iter: usize, tol: f64) -> Vec<f64> {
     let n = b.len();
     let mut x = vec![0.0f64; n];
     let mut r: Vec<f64> = b.to_vec();
@@ -97,4 +92,34 @@ fn apply_preconditioner(precond_diag_inv: &[f64], r: &[f64]) -> Vec<f64> {
         .zip(precond_diag_inv.iter())
         .map(|(&r_i, &m_inv)| r_i * m_inv)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::laplacian;
+    use crate::graph;
+
+    #[test]
+    fn test_cg_solve_simple_circuit() {
+        let mut edges = graph::EdgeTriplets::new();
+        edges.push(0, 1, 1.0);
+        edges.push(1, 0, 1.0);
+        let a = laplacian::build_laplacian(&edges, 2);
+        let b = vec![1.0, -1.0];
+        let x = cg_solve(&a, &b, 1000, 1e-10);
+        assert!((x[0] - 0.5).abs() < 1e-4, "got {}", x[0]);
+        assert!((x[1] + 0.5).abs() < 1e-4, "got {}", x[1]);
+    }
+
+    #[test]
+    fn test_cg_solve_zero_rhs() {
+        let mut edges = graph::EdgeTriplets::new();
+        edges.push(0, 1, 1.0);
+        edges.push(1, 0, 1.0);
+        let a = laplacian::build_laplacian(&edges, 2);
+        let x = cg_solve(&a, &[0.0, 0.0], 1000, 1e-10);
+        assert_eq!(x[0], 0.0);
+        assert_eq!(x[1], 0.0);
+    }
 }

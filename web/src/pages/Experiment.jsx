@@ -1,13 +1,8 @@
 import { useState, useCallback, useRef } from 'react';
-import { solve_connectivity, solve_advanced, getWasmMemoryMB, reset } from '../lib/wasm';
+import { solve_point_sources, solve_raster_sources, getWasmMemoryMB, reset } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import { Spinner } from '../components/Spinner';
-
-function getHeapMB() {
-  if (performance.memory?.usedJSHeapSize) return performance.memory.usedJSHeapSize / (1024 * 1024);
-  return null;
-}
 
 function stat(arr) {
   if (arr.length === 0) return {};
@@ -20,8 +15,8 @@ function stat(arr) {
 }
 
 function downloadCSV(runs) {
-  const h = 'run,time_s,heap_before_mb,heap_after_mb,wasm_before_mb,wasm_after_mb,mode\n';
-  const rows = runs.map(r => `${r.run},${r.time.toFixed(3)},${r.heapBefore??''},${r.heapAfter??''},${r.wasmBefore??''},${r.wasmAfter??''},${r.mode}`).join('\n');
+  const h = 'run,time_s,wasm_start_mb,wasm_end_mb,mode\n';
+  const rows = runs.map(r => `${r.run},${r.time.toFixed(3)},${r.wasmBefore??''},${r.wasmAfter??''},${r.mode}`).join('\n');
   const b = new Blob([h + rows], { type: 'text/csv' });
   const u = URL.createObjectURL(b);
   const a = document.createElement('a'); a.href = u; a.download = 'benchmark.csv'; a.click();
@@ -69,7 +64,7 @@ export default function Experiment() {
   const start = useCallback(async () => {
     if (!resData || running) return;
     if (curMode === 'pairwise' && !ptData) return;
-    if (curMode === 'advanced' && (!srcData || !gndData)) return;
+    if (curMode === 'raster' && (!srcData || !gndData)) return;
 
     setRunning(true); setRuns([]); setStatus({ text: 'running...', color: '#f90' });
     await new Promise(r => requestAnimationFrame(r));
@@ -80,20 +75,20 @@ export default function Experiment() {
 
     for (let i = 1; i <= reps; i++) {
       await reset();
-      const hb = getHeapMB(), wb = getWasmMemoryMB();
+      const wb = getWasmMemoryMB();
       const t0 = performance.now();
 
       if (curMode === 'pairwise') {
         const ptI = new Int32Array(ptData.length);
         for (let j = 0; j < ptData.length; j++) { const v = ptData[j]; ptI[j] = (v === nd || isNaN(v)) ? 0 : Math.round(v); }
-        JSON.parse(solve_connectivity(resData, nr, nc, nd, ptI));
+        JSON.parse(solve_point_sources(resData, nr, nc, nd, ptI));
       } else {
-        JSON.parse(solve_advanced(resData, nr, nc, nd, srcData, gndData));
+        JSON.parse(solve_raster_sources(resData, nr, nc, nd, srcData, gndData));
       }
 
       const t = (performance.now() - t0) / 1000;
-      const ha = getHeapMB(), wa = getWasmMemoryMB();
-      results.push({ run: i, time: t, heapBefore: hb, heapAfter: ha, wasmBefore: wb, wasmAfter: wa, mode: curMode });
+      const wa = getWasmMemoryMB();
+      results.push({ run: i, time: t, wasmBefore: wb, wasmAfter: wa, mode: curMode });
       setRuns([...results]);
       await new Promise(r => setTimeout(r, 0));
     }
@@ -106,7 +101,7 @@ export default function Experiment() {
 
   const hasData = !!(resData && (curMode === 'pairwise' ? ptData : (srcData && gndData)));
   const times = runs.map(r => r.time);
-  const nCols = 6;
+  const nCols = 4;
 
   return (
     <div>
@@ -143,13 +138,11 @@ export default function Experiment() {
           )}
           <div className="log">
             <table>
-              <thead><tr><th>run</th><th>time</th><th>js heap before</th><th>js heap after</th><th>wasm before</th><th>wasm after</th></tr></thead>
+              <thead><tr><th>run</th><th>time</th><th>wasm (start)</th><th>wasm (end)</th></tr></thead>
               <tbody>
                 {runs.map(r => (
                   <tr key={r.run}>
                     <td>{r.run}/{reps}</td><td>{r.time.toFixed(3)}s</td>
-                    <td>{r.heapBefore != null ? r.heapBefore.toFixed(1) + ' MB' : '—'}</td>
-                    <td>{r.heapAfter != null ? r.heapAfter.toFixed(1) + ' MB' : '—'}</td>
                     <td>{r.wasmBefore != null ? r.wasmBefore.toFixed(1) + ' MB' : '—'}</td>
                     <td>{r.wasmAfter != null ? r.wasmAfter.toFixed(1) + ' MB' : '—'}</td>
                   </tr>

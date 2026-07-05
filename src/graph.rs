@@ -30,7 +30,7 @@ impl EdgeTriplets {
     }
 }
 
-pub fn build_adjacency(conductance: &Grid, nodemap: &[i32]) -> EdgeTriplets {
+pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTriplets {
     let mut edges = EdgeTriplets::new();
     let nrows = conductance.nrows;
     let ncols = conductance.ncols;
@@ -69,4 +69,18 @@ pub fn build_adjacency(conductance: &Grid, nodemap: &[i32]) -> EdgeTriplets {
     }
 
     edges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid;
+
+    #[test]
+    fn test_conductance_edges_uniform() {
+        let cond = grid::Grid::to_conductance(&vec![1.0; 4], 2, 2, -9999.0);
+        let (nodemap, _) = grid::build_nodemap(&cond);
+        let edges = build_conductance_edges(&cond, &nodemap);
+        assert!(edges.len() > 0);
+    }
 }

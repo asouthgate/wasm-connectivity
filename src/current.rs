@@ -1,10 +1,7 @@
 use sprs::CsMat;
 use crate::laplacian::get_row_neighbors;
 
-pub fn compute_node_current_map(
-    laplacian: &CsMat<f64>,
-    voltages: &[f64],
-) -> Vec<f64> {
+pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec<f64> {
     let n = laplacian.rows();
     let mut node_currents = vec![0.0f64; n];
 
@@ -45,4 +42,17 @@ pub fn reconstruct_grid_map(
         }
     }
     grid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reconstruct_grid_map() {
+        let nodemap = vec![0, 1, 2, 0, 0, 3];
+        let node_values = vec![10.0, 20.0, 30.0];
+        let grid = reconstruct_grid_map(&node_values, &nodemap, 2, 3);
+        assert_eq!(grid, vec![0.0, 10.0, 20.0, 0.0, 0.0, 30.0]);
+    }
 }

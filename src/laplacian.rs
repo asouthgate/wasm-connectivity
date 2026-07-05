@@ -67,3 +67,24 @@ pub fn get_row_neighbors(lap: &CsMat<f64>, row: usize) -> Vec<(usize, f64)> {
 pub fn get_adjacency_view(lap: &CsMat<f64>) -> CsMatView<'_, f64> {
     lap.view()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::EdgeTriplets;
+
+    #[test]
+    fn test_build_laplacian_two_node() {
+        let mut edges = EdgeTriplets::new();
+        edges.push(0, 1, 5.0);
+        edges.push(1, 0, 5.0);
+        let lap = build_laplacian(&edges, 2);
+        assert_eq!(lap.rows(), 2);
+        assert_eq!(lap.cols(), 2);
+
+        let neighbors = get_row_neighbors(&lap, 0);
+        assert_eq!(neighbors.len(), 1);
+        assert_eq!(neighbors[0].0, 1);
+        assert!((neighbors[0].1 - 5.0).abs() < 1e-10);
+    }
+}

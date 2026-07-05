@@ -3,7 +3,7 @@ use crate::solver::cg_solve;
 use crate::current::{compute_node_current_map, reconstruct_grid_map};
 
 pub struct ComputedResult {
-    pub resistances: Vec<Vec<f64>>,
+    pub resistance_matrix: Vec<Vec<f64>>,
     pub current_map: Vec<f64>,
     pub nrows: usize,
     pub ncols: usize,
@@ -17,18 +17,18 @@ pub fn compute_pairwise(
     nodemap: &[i32],
     nrows: usize,
     ncols: usize,
+    max_iter: usize,
+    tol: f64,
 ) -> ComputedResult {
     let n = components.iter().map(|c| c.len()).sum::<usize>();
     let num_points = focal_points.len();
 
-    let mut resistances = vec![vec![-1.0f64; num_points]; num_points];
+    let mut resistance_matrix = vec![vec![-1.0f64; num_points]; num_points];
     for i in 0..num_points {
-        resistances[i][i] = 0.0;
+        resistance_matrix[i][i] = 0.0;
     }
 
     let mut cumulative_currents = vec![0.0f64; n];
-    let max_iter = 100_000;
-    let tol = 1e-6;
 
     for comp in components {
         let comp_size = comp.len();
@@ -45,24 +45,8 @@ pub fn compute_pairwise(
             continue;
         }
 
-        let mut node_to_local = vec![0usize; n];
-        for (li, &gn) in comp.iter().enumerate() {
-            node_to_local[gn] = li;
-        }
-
-        let mut a_local_triplets = crate::graph::EdgeTriplets::new();
-        for &gn in comp {
-            let li = node_to_local[gn];
-            for (neighbor, conductance) in crate::laplacian::get_row_neighbors(laplacian, gn) {
-                if comp_set.contains(&neighbor) && neighbor > gn {
-                    let lj = node_to_local[neighbor];
-                    a_local_triplets.push(li, lj, conductance);
-                    a_local_triplets.push(lj, li, conductance);
-                }
-            }
-        }
-
-        let a_local = crate::laplacian::build_laplacian(&a_local_triplets, comp_size);
+        let (a_local, node_to_local) =
+            crate::components::build_subgraph_laplacian(laplacian, comp, n);
 
         for ii in 0..comp_focal.len() {
             let (src_idx, src_node) = comp_focal[ii];
@@ -83,8 +67,8 @@ pub fn compute_pairwise(
                 let resistance = v_dst - v_src;
 
                 if resistance > 0.0 {
-                    resistances[src_idx][dst_idx] = resistance;
-                    resistances[dst_idx][src_idx] = resistance;
+                    resistance_matrix[src_idx][dst_idx] = resistance;
+                    resistance_matrix[dst_idx][src_idx] = resistance;
                 }
 
                 let mut voltages_global = vec![0.0f64; n];
@@ -104,10 +88,41 @@ pub fn compute_pairwise(
     let point_ids: Vec<i32> = focal_points.iter().map(|(id, _)| *id).collect();
 
     ComputedResult {
-        resistances,
+        resistance_matrix,
         current_map,
         nrows,
         ncols,
         point_ids,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid;
+    use crate::graph;
+    use crate::laplacian;
+    use crate::components;
+
+    #[test]
+    fn test_pairwise_two_points() {
+        let cond = grid::Grid::to_conductance(&vec![1.0; 25], 5, 5, -9999.0);
+        let (nodemap, num_nodes) = grid::build_nodemap(&cond);
+        let point_data = {
+            let mut p = vec![0i32; 25];
+            p[0] = 1;
+            p[24] = 2;
+            p
+        };
+        let points = grid::extract_focal_points(&point_data, 5, 5, &nodemap);
+        let edges = graph::build_conductance_edges(&cond, &nodemap);
+        let lap = laplacian::build_laplacian(&edges, num_nodes);
+        let comps = components::find_connected_components(&lap, num_nodes);
+        let result = compute_pairwise(&lap, &comps, &points, &nodemap, 5, 5, 100_000, 1e-6);
+
+        assert_eq!(result.point_ids.len(), 2);
+        assert_eq!(result.resistance_matrix.len(), 2);
+        assert!(result.resistance_matrix[0][1] > 0.0);
+        assert_eq!(result.resistance_matrix[0][0], 0.0);
     }
 }

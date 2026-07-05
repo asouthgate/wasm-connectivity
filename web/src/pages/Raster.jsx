@@ -1,21 +1,24 @@
 import { useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { solve_point_sources } from '../lib/wasm';
+import { solve_raster_sources } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import MapView from '../components/MapView';
 import { Spinner } from '../components/Spinner';
 
-const PAIRWISE = PRESETS.filter(g => g.mode === 'pairwise');
+const RASTER_PRESETS = PRESETS.filter(g => g.mode === 'raster');
 
-export default function Solver() {
+export default function Raster() {
   const [resData, setResData] = useState(null);
   const [resMeta, setResMeta] = useState(null);
-  const [ptData, setPtData] = useState(null);
-  const [ptMeta, setPtMeta] = useState(null);
+  const [srcData, setSrcData] = useState(null);
+  const [srcMeta, setSrcMeta] = useState(null);
+  const [gndData, setGndData] = useState(null);
+  const [gndMeta, setGndMeta] = useState(null);
   const [result, setResult] = useState(null);
   const [resScale, setResScale] = useState('log');
   const [curScale, setCurScale] = useState('log');
+  const [voltScale, setVoltScale] = useState('lin');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState({ text: 'Pick a preset to begin.', color: '#888' });
   const [timer, setTimer] = useState('');
@@ -23,19 +26,22 @@ export default function Solver() {
 
   const loadPreset = useCallback(async (p) => {
     setStatus({ text: `loading ${p.name}...`, color: '#888' });
-    setSelPreset(p.id);
-    setResult(null); setTimer('');
-    const [rt, pt] = await Promise.all([fetch(p.res).then(r => r.text()), fetch(p.pts).then(r => r.text())]);
-    const rp = parseAsc(rt), pp = parseAsc(pt);
+    setSelPreset(p.id); setResult(null); setTimer('');
+
+    const [rt, st, gt] = await Promise.all([
+      fetch(p.res).then(r => r.text()), fetch(p.src).then(r => r.text()), fetch(p.gnd).then(r => r.text())
+    ]);
+    const rp = parseAsc(rt), sp = parseAsc(st), gp = parseAsc(gt);
     setResData(rp.data); setResMeta(rp.meta);
-    setPtData(pp.data); setPtMeta(pp.meta);
+    setSrcData(sp.data); setSrcMeta(sp.meta);
+    setGndData(gp.data); setGndMeta(gp.meta);
+
     const nc = rp.data.reduce((c, v) => v !== rp.meta.nodata && v > 0 ? c + 1 : c, 0);
-    const np = pp.data.reduce((c, v) => v !== pp.meta.nodata && v > 0 ? c + 1 : c, 0);
-    setStatus({ text: `loaded ${p.name} — ${nc.toLocaleString()} cells, ${np} pts — ready`, color: '#58a6ff' });
+    setStatus({ text: `loaded ${p.name} — ${nc.toLocaleString()} cells`, color: '#58a6ff' });
   }, []);
 
   const run = useCallback(async () => {
-    if (!resData || !ptData) return;
+    if (!resData || !srcData) return;
     flushSync(() => {
       setLoading(true); setStatus({ text: 'solving...', color: '#f90' }); setTimer('');
     });
@@ -43,9 +49,8 @@ export default function Solver() {
     const t0 = performance.now();
     try {
       const nd = resMeta.nodata || -9999;
-      const ptI = new Int32Array(ptData.length);
-      for (let i = 0; i < ptData.length; i++) { const v = ptData[i]; ptI[i] = (v === nd || isNaN(v)) ? 0 : Math.round(v); }
-      const r = JSON.parse(solve_point_sources(resData, resMeta.nrows, resMeta.ncols, nd, ptI));
+      const gd = gndData || new Float64Array(resMeta.nrows * resMeta.ncols);
+      const r = JSON.parse(solve_raster_sources(resData, resMeta.nrows, resMeta.ncols, nd, srcData, gd));
       setResult(r);
       const s = ((performance.now() - t0) / 1000).toFixed(1);
       setTimer(`${s}s`);
@@ -55,12 +60,14 @@ export default function Solver() {
     } finally {
       setLoading(false);
     }
-  }, [resData, ptData, resMeta]);
+  }, [resData, srcData, gndData, resMeta]);
+
+  const hasData = !!(resData && srcData);
 
   return (
     <div>
       <div className="row">
-        <button className="btn run" onClick={run} disabled={!resData || !ptData || loading}>Run</button>
+        <button className="btn run" onClick={run} disabled={!hasData || loading}>Run</button>
         <span className="timer">{timer}</span>
       </div>
       <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center', position: 'relative', zIndex: 91 }}>
@@ -69,7 +76,7 @@ export default function Solver() {
 
       <div className="layout">
         <div className="sidebar">
-          {PAIRWISE.map(grp => (
+          {RASTER_PRESETS.map(grp => (
             <div key={grp.group} className="preset-group">
               <h3>{grp.group}</h3>
               {grp.items.map(p => (
@@ -80,34 +87,22 @@ export default function Solver() {
           ))}
         </div>
         <div className="main">
-          {(resMeta || ptMeta) && (
-            <div className="maps">
-              {resMeta && <MapView type="res" data={resData} meta={resMeta} logScale={resScale === 'log'} onToggleScale={setResScale} />}
-              {ptMeta && <MapView type="points" data={ptData} meta={ptMeta} />}
-              {result && <MapView type="cur" data={result.current_map} meta={{ nrows: result.nrows, ncols: result.ncols, nodata: 0 }} logScale={curScale === 'log'} onToggleScale={setCurScale} />}
+          {hasData && (
+            <div className="maps" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              <MapView type="res" data={resData} meta={resMeta} logScale={resScale === 'log'} onToggleScale={setResScale} />
+              <MapView type="src" data={srcData} meta={{ ...srcMeta || resMeta, nodata: resMeta.nodata }} logScale={false} />
+              {gndData && <MapView type="gnd" data={gndData} meta={{ ...gndMeta || resMeta, nodata: resMeta.nodata }} logScale={false} />}
             </div>
           )}
-          {result && <ResistanceTable result={result} />}
+          {result && (
+            <div className="maps" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginTop: 8 }}>
+              <MapView type="volt" data={result.voltages} meta={{ nrows: result.nrows, ncols: result.ncols, nodata: 0 }} logScale={voltScale === 'log'} onToggleScale={setVoltScale} />
+              <MapView type="cur" data={result.current_map} meta={{ nrows: result.nrows, ncols: result.ncols, nodata: 0 }} logScale={curScale === 'log'} onToggleScale={setCurScale} />
+            </div>
+          )}
         </div>
       </div>
       {loading && <div style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} />}
-    </div>
-  );
-}
-
-function ResistanceTable({ result }) {
-  const { point_ids: ids, resistance_matrix: mat } = result;
-  if (!ids || ids.length === 0) return <div style={{ color: '#888', fontSize: '.78em', marginTop: 10 }}>No focal points found in conductive cells.</div>;
-  return (
-    <div className="resistances">
-      <table>
-        <tbody>
-          <tr><th></th>{ids.map(id => <th key={id}>pt {id}</th>)}</tr>
-          {mat.map((row, i) => (
-            <tr key={i}><th>pt {ids[i]}</th>{row.map((v, j) => <td key={j}>{v >= 0 ? v.toFixed(4) : '—'}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
