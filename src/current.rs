@@ -1,5 +1,4 @@
 use sprs::CsMat;
-use crate::laplacian::get_row_neighbors;
 
 pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec<f64> {
     let n = laplacian.rows();
@@ -9,14 +8,20 @@ pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec
         let mut pos_sum = 0.0f64;
         let mut neg_sum = 0.0f64;
         let vn = voltages[node];
-        for (neighbor, conductance) in get_row_neighbors(laplacian, node) {
-            let dv = vn - voltages[neighbor];
-            let branch_current = conductance * dv;
+        if let Some(rv) = laplacian.outer_view(node) {
+            for (neighbor, &val) in rv.iter() {
+                if neighbor == node {
+                    continue;
+                }
+                let conductance = val.abs();
+                let dv = vn - voltages[neighbor];
+                let branch_current = conductance * dv;
 
-            if branch_current > 0.0 {
-                pos_sum += branch_current;
-            } else if branch_current < 0.0 {
-                neg_sum -= branch_current;
+                if branch_current > 0.0 {
+                    pos_sum += branch_current;
+                } else if branch_current < 0.0 {
+                    neg_sum -= branch_current;
+                }
             }
         }
 

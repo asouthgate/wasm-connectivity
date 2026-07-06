@@ -1,5 +1,5 @@
 use sprs::{CsMat, TriMat};
-use crate::laplacian::{get_row_neighbors, regularize_laplacian};
+use crate::laplacian::regularize_laplacian;
 
 
 /// Finds the connected components in a graph represented by its Laplacian matrix.
@@ -33,10 +33,12 @@ pub fn find_connected_components(
 
         while let Some(node) = stack.pop() {
             comp.push(node);
-            for (neighbor, _) in get_row_neighbors(laplacian, node) {
-                if !visited[neighbor] {
-                    visited[neighbor] = true;
-                    stack.push(neighbor);
+            if let Some(rv) = laplacian.outer_view(node) {
+                for (neighbor, _) in rv.iter() {
+                    if neighbor != node && !visited[neighbor] {
+                        visited[neighbor] = true;
+                        stack.push(neighbor);
+                    }
                 }
             }
         }
@@ -72,7 +74,10 @@ pub fn build_subgraph_laplacian(
 
     for &global_u in comp {
         let local_u = node_to_local[global_u];
-        let row_view = parent_laplacian.outer_view(global_u).unwrap();
+        let row_view = match parent_laplacian.outer_view(global_u) {
+            Some(rv) => rv,
+            None => continue,
+        };
         for (global_v, &parent_val) in row_view.indices().iter().zip(row_view.data()) {
             let local_v = node_to_local[*global_v];
             debug_assert_ne!(local_v, usize::MAX);
@@ -85,8 +90,8 @@ pub fn build_subgraph_laplacian(
     }
 
     // Add diagonal elements
-    for local_u in 0..comp_size {
-        local_tri.add_triplet(local_u, local_u, local_row_sums[local_u]);
+    for (local_u, row_sum) in local_row_sums.iter().enumerate() {
+        local_tri.add_triplet(local_u, local_u, *row_sum);
     }
 
     // Convert/compress to csr format
@@ -100,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_connected_components_single() {
-        let (_nodemap, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&vec![1.0; 9], 3, 3, crate::NODATA_SENTINEL);
+        let (_nodemap, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&[1.0; 9], 3, 3, crate::NODATA_SENTINEL);
         assert_eq!(comps.len(), 1);
         assert_eq!(comps[0].len(), 9);
     }

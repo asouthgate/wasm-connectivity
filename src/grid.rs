@@ -2,7 +2,6 @@ pub struct Grid {
     pub data: Vec<f64>,
     pub nrows: usize,
     pub ncols: usize,
-    pub nodata: f64,
 }
 
 impl Grid {
@@ -20,7 +19,7 @@ impl Grid {
                 }
             })
             .collect();
-        Grid { data, nrows, ncols, nodata: 0.0 }
+        Grid { data, nrows, ncols }
     }
 
     pub fn is_conductive(&self, row: usize, col: usize) -> bool {
@@ -91,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_extract_focal_points() {
-        let cond = Grid::to_conductance(&vec![1.0; 9], 3, 3, crate::NODATA_SENTINEL);
+        let cond = Grid::to_conductance(&[1.0; 9], 3, 3, crate::NODATA_SENTINEL);
         let (nodemap, _) = build_nodemap(&cond);
         let mut point_data = vec![0i32; 9];
         point_data[0] = 2;

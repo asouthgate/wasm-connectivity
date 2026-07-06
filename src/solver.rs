@@ -13,8 +13,8 @@ pub fn cg_solve(a: &CsMat<f64>, b: &[f64], max_iter: usize, tol: f64) -> Vec<f64
     let precond = jacobi_preconditioner(a);
 
     let mut z = apply_preconditioner(&precond, &r);
-    let mut p = z.clone();
-    let mut rs_old = dot(&r, &z);
+    let mut p = z;
+    let mut rs_old = dot(&r, &p);
 
     for _iter in 0..max_iter {
         let ap = mat_vec_mul(a, &p);
@@ -61,10 +61,10 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 fn mat_vec_mul(a: &CsMat<f64>, v: &[f64]) -> Vec<f64> {
     let n = a.rows();
     let mut result = vec![0.0f64; n];
-    for row in 0..n {
+    for (row, out) in result.iter_mut().enumerate().take(n) {
         if let Some(rv) = a.outer_view(row) {
             for (col, &val) in rv.iter() {
-                result[row] += val * v[col];
+                *out += val * v[col];
             }
         }
     }
@@ -74,11 +74,11 @@ fn mat_vec_mul(a: &CsMat<f64>, v: &[f64]) -> Vec<f64> {
 fn jacobi_preconditioner(a: &CsMat<f64>) -> Vec<f64> {
     let n = a.rows();
     let mut diag = vec![0.0f64; n];
-    for row in 0..n {
+    for (row, d) in diag.iter_mut().enumerate() {
         if let Some(rv) = a.outer_view(row) {
             for (col, &val) in rv.iter() {
                 if col == row {
-                    diag[row] = 1.0 / val.max(1e-15);
+                    *d = 1.0 / val.max(1e-15);
                     break;
                 }
             }

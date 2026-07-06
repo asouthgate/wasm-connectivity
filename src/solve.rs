@@ -25,22 +25,31 @@ pub fn compute_point_sources(
     let num_points = focal_points.len();
 
     let mut resistance_matrix = vec![vec![-1.0f64; num_points]; num_points];
-    for i in 0..num_points {
-        resistance_matrix[i][i] = 0.0;
+    for (i, row) in resistance_matrix.iter_mut().enumerate() {
+        row[i] = 0.0;
     }
 
     let mut cumulative_currents = vec![0.0f64; n];
 
+    let mut in_comp = vec![false; n];
+
     for comp in components {
         let comp_size = comp.len();
-        let comp_set: std::collections::HashSet<usize> = comp.iter().copied().collect();
+
+        for &node in comp {
+            in_comp[node] = true;
+        }
 
         let comp_focal: Vec<(usize, usize)> = focal_points
             .iter()
             .enumerate()
-            .filter(|(_, (_, node))| comp_set.contains(node))
+            .filter(|(_, (_, node))| in_comp[*node])
             .map(|(idx, (_, node))| (idx, *node))
             .collect();
+
+        for &node in comp {
+            in_comp[node] = false;
+        }
 
         if comp_focal.len() < 2 {
             continue;
@@ -52,8 +61,7 @@ pub fn compute_point_sources(
         for ii in 0..comp_focal.len() {
             let (src_idx, src_node) = comp_focal[ii];
 
-            for jj in (ii + 1)..comp_focal.len() {
-                let (dst_idx, dst_node) = comp_focal[jj];
+            for &(dst_idx, dst_node) in &comp_focal[(ii + 1)..] {
 
                 let mut node_current = vec![0.0f64; comp_size];
                 let li_src = node_to_local[src_node];
@@ -222,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_pairwise_two_points() {
-        let (nodemap, _num_nodes, _edges, lap, comps) = crate::build_circuit_model(&vec![1.0; 25], 5, 5, crate::NODATA_SENTINEL);
+        let (nodemap, _num_nodes, _edges, lap, comps) = crate::build_circuit_model(&[1.0; 25], 5, 5, crate::NODATA_SENTINEL);
         let point_data = {
             let mut p = vec![0i32; 25];
             p[0] = 1;

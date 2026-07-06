@@ -16,10 +16,7 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
 
     for k in 0..edges.len() {
         let i = edges.row_indices[k];
-        let j = edges.col_indices[k];
-        if i != j {
-            row_sums[i] += edges.values[k];
-        }
+        row_sums[i] += edges.values[k];
     }
 
     let nnz = edges.len() + num_nodes;
@@ -30,17 +27,15 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     for k in 0..edges.len() {
         let i = edges.row_indices[k];
         let j = edges.col_indices[k];
-        if i != j {
-            lap_rows.push(i);
-            lap_cols.push(j);
-            lap_vals.push(-edges.values[k]);
-        }
+        lap_rows.push(i);
+        lap_cols.push(j);
+        lap_vals.push(-edges.values[k]);
     }
 
-    for i in 0..num_nodes {
+    for (i, row_sum) in row_sums.iter_mut().enumerate() {
         lap_rows.push(i);
         lap_cols.push(i);
-        lap_vals.push(row_sums[i]);
+        lap_vals.push(*row_sum);
     }
 
     let tri = sprs::TriMat::from_triplets(
@@ -59,7 +54,7 @@ pub fn get_row_neighbors(lap: &CsMat<f64>, row: usize) -> Vec<(usize, f64)> {
     let mut neighbors = Vec::new();
     if let Some(rv) = lap.outer_view(row) {
         for (col, &val) in rv.iter() {
-            if col != row && val != 0.0 {
+            if col != row {
                 neighbors.push((col, val.abs()));
             }
         }

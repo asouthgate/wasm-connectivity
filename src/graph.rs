@@ -37,6 +37,16 @@ impl EdgeTriplets {
     pub fn len(&self) -> usize {
         self.row_indices.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.row_indices.is_empty()
+    }
+}
+
+impl Default for EdgeTriplets {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTriplets {
@@ -97,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_conductance_edges_uniform() {
-        let (_nodemap, _num_nodes, edges, _lap, _comps) = crate::build_circuit_model(&vec![1.0; 4], 2, 2, crate::NODATA_SENTINEL);
-        assert!(edges.len() > 0);
+        let (_nodemap, _num_nodes, edges, _lap, _comps) = crate::build_circuit_model(&[1.0; 4], 2, 2, crate::NODATA_SENTINEL);
+        assert!(!edges.is_empty());
     }
 }

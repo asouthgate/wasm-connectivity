@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(mask[idx_inside], 1.0);
 
         // And check outside is 0.0 and mask is 0.0
-        let idx_outside = 0 * ncols + 0;
+        let idx_outside = 0;
         assert_eq!(res_map[idx_outside], 0.0);
         assert_eq!(mask[idx_outside], 0.0);
     }
@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(mask[idx_buffered], 1.0);
 
         // Out of line/buffer, should remain 0.0 and mask 0.0
-        let idx_far = 1 * ncols + 1;
+        let idx_far = ncols + 1;
         assert_eq!(res_map[idx_far], 0.0);
         assert_eq!(mask[idx_far], 0.0);
     }

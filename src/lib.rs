@@ -52,7 +52,7 @@ pub fn solve_point_sources(
     max_iter: usize,
     tol: f64,
 ) -> String {
-    let output = compute_points(resistance_data, nrows, ncols, nodata, point_data, max_iter, tol);
+    let output = compute_points(&resistance_data, nrows, ncols, nodata, point_data, max_iter, tol);
     json_response(&output)
 }
 
@@ -156,7 +156,7 @@ pub fn rasterize_geojson(
 }
 
 fn compute_points(
-    resistance_data: Vec<f64>,
+    resistance_data: &[f64],
     nrows: usize,
     ncols: usize,
     nodata: f64,
@@ -164,7 +164,7 @@ fn compute_points(
     max_iter: usize,
     tol: f64,
 ) -> ConnectivityOutput {
-    let (nodemap, _num_nodes, _edges, laplacian, components) = build_circuit_model(&resistance_data, nrows, ncols, nodata);
+    let (nodemap, _num_nodes, _edges, laplacian, components) = build_circuit_model(resistance_data, nrows, ncols, nodata);
 
     let focal_points = grid::extract_focal_points(&point_data, nrows, ncols, &nodemap);
 
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn test_uniform_grid_resistance() {
         let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
-        let output = compute_points(res_data, 5, 5, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
+        let output = compute_points(&res_data, 5, 5, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
 
         assert_eq!(output.point_ids.len(), 2);
         assert_eq!(output.resistance_matrix.len(), 2);
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn test_uniform_current_map_symmetry() {
         let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
-        let output = compute_points(res_data, 5, 5, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
+        let output = compute_points(&res_data, 5, 5, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
 
         assert_eq!(output.current_map.len(), 25);
         let has_current = output.current_map.iter().any(|&v| v > 0.0);
@@ -271,12 +271,12 @@ mod tests {
     #[test]
     fn test_corridor_grid() {
         let (res_data, point_data) = make_corridor_grid();
-        let output = compute_points(res_data, 10, 10, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
+        let output = compute_points(&res_data, 10, 10, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
 
         assert!(output.resistance_matrix[0][1] > 0.0);
 
         let mid_row = 5;
-        let col_low_res = output.current_map[mid_row * 10 + 0];
+        let col_low_res = output.current_map[mid_row * 10];
         let col_low_res2 = output.current_map[mid_row * 10 + 9];
         let col_high_res = output.current_map[mid_row * 10 + 5];
 
@@ -341,13 +341,13 @@ mod tests {
     #[test]
     fn test_output_pgm_images() {
         let (res_data, point_data) = make_uniform_resistance_grid(10, 1.0);
-        let output = compute_points(res_data, 10, 10, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
+        let output = compute_points(&res_data, 10, 10, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
 
         write_pgm("/tmp/uniform_current.pgm", &output.current_map, 10, 10);
         println!("Wrote /tmp/uniform_current.pgm");
 
         let (res_data2, point_data2) = make_corridor_grid();
-        let output2 = compute_points(res_data2, 10, 10, NODATA_SENTINEL, point_data2, DEFAULT_MAX_ITER, DEFAULT_TOL);
+        let output2 = compute_points(&res_data2, 10, 10, NODATA_SENTINEL, point_data2, DEFAULT_MAX_ITER, DEFAULT_TOL);
 
         write_pgm("/tmp/corridor_current.pgm", &output2.current_map, 10, 10);
         println!("Wrote /tmp/corridor_current.pgm");
