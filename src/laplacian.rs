@@ -1,6 +1,8 @@
 use sprs::CsMat;
 use crate::graph::EdgeTriplets;
 
+// Regularizes the Laplacian matrix by adding a small value to the diagonal elements,
+// in order to ensure numerical stability and avoid singular matrices.
 pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
     let norm: f64 = lap.data().iter().map(|&v| v * v).sum::<f64>().sqrt();
     if !norm.is_finite() || norm <= 0.0 {
@@ -16,6 +18,15 @@ pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
     }
 }
 
+// Compute the effective conductances between nodes
+//
+// This is the matrix L = D - A
+//
+// # Arguments
+// * `edges` - A reference to the EdgeTriplets containing the edges and their conductance values.
+// * `num_nodes` - The total number of nodes in the graph.
+// # Returns
+// A sparse matrix representing the Laplacian of the graph.
 pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     let mut row_sums = vec![0.0f64; num_nodes];
 
@@ -52,6 +63,7 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     lap
 }
 
+// Retrieves the neighbors of a given node in the Laplacian matrix.
 pub fn get_row_neighbors(lap: &CsMat<f64>, row: usize) -> Vec<(usize, f64)> {
     let mut neighbors = Vec::new();
     if let Some(rv) = lap.outer_view(row) {
