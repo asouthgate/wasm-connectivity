@@ -22,8 +22,26 @@ pub fn compute_raster(
     tol: f64,
     remove_average: bool,
 ) -> RasterOutput {
-    let (nodemap, num_nodes, _edges, laplacian, components) = crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
+    let (nodemap, num_nodes, _edges, laplacian, components) = 
+        crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
+    let current_global = build_global_currents(
+        &nodemap, num_nodes, nrows, ncols, nodata, source_data, ground_data
+    );
+    let voltages_global = solve_component_voltages(
+        &components, &current_global, &laplacian, num_nodes, max_iter, tol, remove_average
+    );
+    build_raster_output(&voltages_global, &laplacian, &nodemap, nrows, ncols)
+}
 
+fn build_global_currents(
+    nodemap: &[i32],
+    num_nodes: usize,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+) -> Vec<f64> {
     let mut current_global = vec![0.0f64; num_nodes];
     for row in 0..nrows {
         for col in 0..ncols {
@@ -42,19 +60,29 @@ pub fn compute_raster(
             }
         }
     }
+    current_global
+}
 
+fn solve_component_voltages(
+    components: &[Vec<usize>],
+    current_global: &[f64],
+    laplacian: &sprs::CsMat<f64>,
+    num_nodes: usize,
+    max_iter: usize,
+    tol: f64,
+    remove_average: bool,
+) -> Vec<f64> {
     let mut voltages_global = vec![0.0f64; num_nodes];
-
     let mut current_local = Vec::with_capacity(num_nodes);
 
-    for comp in &components {
+    for comp in components {
         let total_current: f64 = comp.iter().map(|&gn| current_global[gn].abs()).sum();
         if total_current < 1e-15 {
             continue;
         }
 
         let (a_local, _node_to_local) =
-            components::build_subgraph_laplacian(&laplacian, comp, num_nodes);
+            components::build_subgraph_laplacian(laplacian, comp, num_nodes);
         let comp_size = comp.len();
 
         current_local.clear();
@@ -79,9 +107,19 @@ pub fn compute_raster(
         }
     }
 
-    let node_currents = current::compute_node_current_map(&laplacian, &voltages_global);
-    let current_map = current::reconstruct_grid_map(&node_currents, &nodemap, nrows * ncols);
-    let voltage_map = current::reconstruct_grid_map(&voltages_global, &nodemap, nrows * ncols);
+    voltages_global
+}
+
+fn build_raster_output(
+    voltages_global: &[f64],
+    laplacian: &sprs::CsMat<f64>,
+    nodemap: &[i32],
+    nrows: usize,
+    ncols: usize,
+) -> RasterOutput {
+    let node_currents = current::compute_node_current_map(laplacian, voltages_global);
+    let current_map = current::reconstruct_grid_map(&node_currents, nodemap, nrows * ncols);
+    let voltage_map = current::reconstruct_grid_map(voltages_global, nodemap, nrows * ncols);
 
     RasterOutput {
         voltages: voltage_map,
