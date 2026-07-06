@@ -1,19 +1,34 @@
-use sprs::CsMat;
-use crate::laplacian::get_row_neighbors;
+use sprs::{CsMat, TriMat};
+use crate::laplacian::{get_row_neighbors, regularize_laplacian};
 
+
+/// Finds the connected components in a graph represented by its Laplacian matrix.
+///
+/// This function performs a depth-first search to identify all connected components
+/// in the graph.
+///
+/// # Arguments
+///
+/// * `laplacian` - A reference to a `CsMat<f64>` representing the Laplacian matrix.
+/// * `num_nodes` - The total number of nodes in the graph.
+/// # Returns
+/// A vector of tuples of indexes, each representing a component of the graph.
 pub fn find_connected_components(
     laplacian: &CsMat<f64>,
     num_nodes: usize,
 ) -> Vec<Vec<usize>> {
     let mut visited = vec![false; num_nodes];
     let mut components: Vec<Vec<usize>> = Vec::new();
+    let mut stack = Vec::with_capacity(64);
 
     for start in 0..num_nodes {
         if visited[start] {
             continue;
         }
         let mut comp = Vec::new();
-        let mut stack = vec![start];
+        
+        stack.clear();
+        stack.push(start);
         visited[start] = true;
 
         while let Some(node) = stack.pop() {
@@ -25,58 +40,67 @@ pub fn find_connected_components(
                 }
             }
         }
-
-        if !comp.is_empty() {
-            components.push(comp);
-        }
+        components.push(comp);
     }
 
     components
 }
 
+/// Builds the Laplacian matrix for a subgraph defined by a set of nodes.
+///
+/// # Arguments
+///
+/// * `parent_laplacian` - A reference to the parent Laplacian matrix.
+/// * `comp` - A slice of node indices representing the subgraph component.
+/// * `num_nodes` - The total number of nodes in the parent graph.
+/// # Returns
+/// A tuple containing the Laplacian matrix of the subgraph
 pub fn build_subgraph_laplacian(
-    laplacian: &CsMat<f64>,
+    parent_laplacian: &CsMat<f64>,
     comp: &[usize],
     num_nodes: usize,
 ) -> (CsMat<f64>, Vec<usize>) {
     let comp_size = comp.len();
-    let comp_set: std::collections::HashSet<usize> = comp.iter().copied().collect();
-
-    let mut node_to_local = vec![0usize; num_nodes];
-    for (li, &gn) in comp.iter().enumerate() {
-        node_to_local[gn] = li;
+    // node_to_local becomes [MAX, MAX, 0, MAX, 1, MAX, 2] for comp = [2, 4, 6]
+    let mut node_to_local = vec![usize::MAX; num_nodes];
+    for (local_idx, &global_node) in comp.iter().enumerate() {
+        node_to_local[global_node] = local_idx;
     }
 
-    let mut a_local_triplets = crate::graph::EdgeTriplets::new();
-    for &gn in comp {
-        let li = node_to_local[gn];
-        for (neighbor, conductance) in get_row_neighbors(laplacian, gn) {
-            if comp_set.contains(&neighbor) && neighbor > gn {
-                let lj = node_to_local[neighbor];
-                a_local_triplets.push(li, lj, conductance);
-                a_local_triplets.push(lj, li, conductance);
+    let mut local_tri = TriMat::new((comp_size, comp_size));
+    let mut local_row_sums = vec![0.0f64; comp_size];
+
+    for &global_u in comp {
+        let local_u = node_to_local[global_u];
+        let row_view = parent_laplacian.outer_view(global_u).unwrap();
+        for (global_v, &parent_val) in row_view.indices().iter().zip(row_view.data()) {
+            let local_v = node_to_local[*global_v];
+            debug_assert_ne!(local_v, usize::MAX);
+            if global_u != *global_v {
+                // off-diagonal element, preserve its exact negative value from the parent matrix.
+                local_tri.add_triplet(local_u, local_v, parent_val);                
+                local_row_sums[local_u] += parent_val.abs();
             }
         }
     }
 
-    let a_local = crate::laplacian::build_laplacian(&a_local_triplets, comp_size);
-    (a_local, node_to_local)
+    // Add diagonal elements
+    for local_u in 0..comp_size {
+        local_tri.add_triplet(local_u, local_u, local_row_sums[local_u]);
+    }
+
+    // Convert/compress to csr format
+    let mut local_lap = local_tri.to_csr();
+    regularize_laplacian(&mut local_lap);
+    (local_lap, node_to_local)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::graph;
-    use crate::laplacian;
-    use crate::grid;
 
     #[test]
     fn test_connected_components_single() {
-        let cond = grid::Grid::to_conductance(&vec![1.0; 9], 3, 3, -9999.0);
-        let (nodemap, num_nodes) = grid::build_nodemap(&cond);
-        let edges = graph::build_conductance_edges(&cond, &nodemap);
-        let lap = laplacian::build_laplacian(&edges, num_nodes);
-        let comps = find_connected_components(&lap, num_nodes);
+        let (_nodemap, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&vec![1.0; 9], 3, 3, crate::NODATA_SENTINEL);
         assert_eq!(comps.len(), 1);
         assert_eq!(comps[0].len(), 9);
     }
@@ -88,11 +112,7 @@ mod tests {
             0.0, 0.0, 0.0,
             1.0, 0.0, 1.0,
         ];
-        let cond = grid::Grid::to_conductance(&res_data, 3, 3, 0.0);
-        let (nodemap, num_nodes) = grid::build_nodemap(&cond);
-        let edges = graph::build_conductance_edges(&cond, &nodemap);
-        let lap = laplacian::build_laplacian(&edges, num_nodes);
-        let comps = find_connected_components(&lap, num_nodes);
+        let (_nodemap, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&res_data, 3, 3, 0.0);
         assert_eq!(comps.len(), 4);
     }
 }

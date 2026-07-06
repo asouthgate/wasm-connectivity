@@ -1,5 +1,15 @@
-use sprs::{CsMat, CsMatView};
+use sprs::CsMat;
 use crate::graph::EdgeTriplets;
+
+pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
+    let norm: f64 = lap.data().iter().map(|&v| v * v).sum::<f64>().sqrt();
+    let epsilon = f64::EPSILON * norm;
+    if epsilon > 0.0 {
+        for v in lap.data_mut() {
+            *v += epsilon;
+        }
+    }
+}
 
 pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     let mut row_sums = vec![0.0f64; num_nodes];
@@ -41,14 +51,7 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     );
     let mut lap = tri.to_csr();
 
-    let norm: f64 = lap.data().iter().map(|&v| v * v).sum::<f64>().sqrt();
-    let epsilon = f64::EPSILON * norm;
-    if epsilon > 0.0 {
-        for v in lap.data_mut() {
-            *v += epsilon;
-        }
-    }
-
+    regularize_laplacian(&mut lap);
     lap
 }
 
@@ -62,10 +65,6 @@ pub fn get_row_neighbors(lap: &CsMat<f64>, row: usize) -> Vec<(usize, f64)> {
         }
     }
     neighbors
-}
-
-pub fn get_adjacency_view(lap: &CsMat<f64>) -> CsMatView<'_, f64> {
-    lap.view()
 }
 
 #[cfg(test)]
