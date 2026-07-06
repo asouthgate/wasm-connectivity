@@ -1,14 +1,7 @@
 use sprs::CsMat;
 use crate::solver::cg_solve;
 use crate::current::{compute_node_current_map, reconstruct_grid_map};
-
-pub struct ComputedResult {
-    pub resistance_matrix: Vec<Vec<f64>>,
-    pub current_map: Vec<f64>,
-    pub nrows: usize,
-    pub ncols: usize,
-    pub point_ids: Vec<i32>,
-}
+use crate::ConnectivityOutput as ComputedResult;
 
 pub fn compute_pairwise(
     laplacian: &CsMat<f64>,
@@ -84,7 +77,7 @@ pub fn compute_pairwise(
         }
     }
 
-    let current_map = reconstruct_grid_map(&cumulative_currents, nodemap, nrows, ncols);
+    let current_map = reconstruct_grid_map(&cumulative_currents, nodemap, nrows * ncols);
     let point_ids: Vec<i32> = focal_points.iter().map(|(id, _)| *id).collect();
 
     ComputedResult {
@@ -100,14 +93,10 @@ pub fn compute_pairwise(
 mod tests {
     use super::*;
     use crate::grid;
-    use crate::graph;
-    use crate::laplacian;
-    use crate::components;
 
     #[test]
     fn test_pairwise_two_points() {
-        let cond = grid::Grid::to_conductance(&vec![1.0; 25], 5, 5, -9999.0);
-        let (nodemap, num_nodes) = grid::build_nodemap(&cond);
+        let (nodemap, _num_nodes, _edges, lap, comps) = crate::build_circuit_model(&vec![1.0; 25], 5, 5, crate::NODATA_SENTINEL);
         let point_data = {
             let mut p = vec![0i32; 25];
             p[0] = 1;
@@ -115,10 +104,7 @@ mod tests {
             p
         };
         let points = grid::extract_focal_points(&point_data, 5, 5, &nodemap);
-        let edges = graph::build_conductance_edges(&cond, &nodemap);
-        let lap = laplacian::build_laplacian(&edges, num_nodes);
-        let comps = components::find_connected_components(&lap, num_nodes);
-        let result = compute_pairwise(&lap, &comps, &points, &nodemap, 5, 5, 100_000, 1e-6);
+        let result = compute_pairwise(&lap, &comps, &points, &nodemap, 5, 5, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL);
 
         assert_eq!(result.point_ids.len(), 2);
         assert_eq!(result.resistance_matrix.len(), 2);
