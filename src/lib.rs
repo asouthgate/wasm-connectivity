@@ -4,8 +4,7 @@ pub mod laplacian;
 pub mod components;
 pub mod solver;
 pub mod current;
-pub mod resistance;
-pub mod raster;
+pub mod solve;
 pub mod geospatial;
 pub mod resample;
 
@@ -68,7 +67,7 @@ pub fn solve_raster_sources(
     max_iter: usize,
     tol: f64,
 ) -> String {
-    let output = raster::compute_raster(
+    let output = solve::compute_raster_sources(
         &resistance_data,
         nrows,
         ncols,
@@ -169,7 +168,7 @@ fn compute_points(
 
     let focal_points = grid::extract_focal_points(&point_data, nrows, ncols, &nodemap);
 
-    let result = resistance::compute_pairwise(
+    let result = solve::compute_point_sources(
         &laplacian,
         &components,
         &focal_points,
@@ -301,7 +300,7 @@ mod tests {
             source_data[row * size] = 1.0;
             ground_data[row * size + (size - 1)] = 1.0;
         }
-        let output = raster::compute_raster(
+        let output = solve::compute_raster_sources(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
             DEFAULT_MAX_ITER, DEFAULT_TOL, true
         );
@@ -328,7 +327,7 @@ mod tests {
                 }
             }
         }
-        let output = raster::compute_raster(
+        let output = solve::compute_raster_sources(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
             DEFAULT_MAX_ITER, DEFAULT_TOL, true
         );

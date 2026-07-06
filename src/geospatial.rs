@@ -313,7 +313,7 @@ pub fn run_geospatial_pipeline(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
     );
 
-    let raster_output = crate::raster::compute_raster(
+    let raster_output = crate::solve::compute_raster_sources(
         &resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, true
     );
 
