@@ -1,6 +1,3 @@
-use crate::grid;
-use crate::graph;
-use crate::laplacian;
 use crate::components;
 use crate::solver;
 use crate::current;
@@ -23,15 +20,9 @@ pub fn compute_raster(
     ground_data: &[f64],
     max_iter: usize,
     tol: f64,
+    remove_average: bool,
 ) -> RasterOutput {
-    let conductance = grid::Grid::to_conductance(resistance_data, nrows, ncols, nodata);
-
-    let (nodemap, num_nodes) = grid::build_nodemap(&conductance);
-
-    let edges = graph::build_conductance_edges(&conductance, &nodemap);
-    let laplacian = laplacian::build_laplacian(&edges, num_nodes);
-
-    let components = components::find_connected_components(&laplacian, num_nodes);
+    let (nodemap, num_nodes, _edges, laplacian, components) = crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
 
     let mut current_global = vec![0.0f64; num_nodes];
     for row in 0..nrows {
@@ -54,6 +45,8 @@ pub fn compute_raster(
 
     let mut voltages_global = vec![0.0f64; num_nodes];
 
+    let mut current_local = Vec::with_capacity(num_nodes);
+
     for comp in &components {
         let total_current: f64 = comp.iter().map(|&gn| current_global[gn].abs()).sum();
         if total_current < 1e-15 {
@@ -64,16 +57,18 @@ pub fn compute_raster(
             components::build_subgraph_laplacian(&laplacian, comp, num_nodes);
         let comp_size = comp.len();
 
-        let mut current_local = vec![0.0f64; comp_size];
-        for (li, &gn) in comp.iter().enumerate() {
-            current_local[li] = current_global[gn];
+        current_local.clear();
+        for &gn in comp {
+            current_local.push(current_global[gn]);
         }
 
-        let sum: f64 = current_local.iter().sum();
-        if sum.abs() > 1e-15 {
-            let mean = sum / comp_size as f64;
-            for v in &mut current_local {
-                *v -= mean;
+        if remove_average {
+            let sum: f64 = current_local.iter().sum();
+            if sum.abs() > 1e-15 {
+                let mean = sum / comp_size as f64;
+                for v in &mut current_local {
+                    *v -= mean;
+                }
             }
         }
 
@@ -85,8 +80,8 @@ pub fn compute_raster(
     }
 
     let node_currents = current::compute_node_current_map(&laplacian, &voltages_global);
-    let current_map = current::reconstruct_grid_map(&node_currents, &nodemap, nrows, ncols);
-    let voltage_map = current::reconstruct_grid_map(&voltages_global, &nodemap, nrows, ncols);
+    let current_map = current::reconstruct_grid_map(&node_currents, &nodemap, nrows * ncols);
+    let voltage_map = current::reconstruct_grid_map(&voltages_global, &nodemap, nrows * ncols);
 
     RasterOutput {
         voltages: voltage_map,
