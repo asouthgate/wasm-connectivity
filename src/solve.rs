@@ -24,31 +24,34 @@ pub fn compute_point_sources(
     let n = components.iter().map(|c| c.len()).sum::<usize>();
     let num_points = focal_points.len();
 
-    let mut resistance_matrix = vec![vec![-1.0f64; num_points]; num_points];
+    let mut resistance_matrix = vec![vec![f64::NAN; num_points]; num_points];
     for (i, row) in resistance_matrix.iter_mut().enumerate() {
         row[i] = 0.0;
     }
 
     let mut cumulative_currents = vec![0.0f64; n];
 
-    let mut in_comp = vec![false; n];
+    let mut node_to_comp_id: Vec<usize> = vec![usize::MAX; n];
+    for (comp_id, comp) in components.iter().enumerate() {
+        for &node in comp {
+            node_to_comp_id[node] = comp_id;
+        }
+    }
 
-    for comp in components {
+    let mut voltages_global = vec![0.0f64; n];
+    let mut node_current = Vec::new();
+    let mut pair_currents = Vec::new();
+
+    let mut comp_focal: Vec<(usize, usize)> = Vec::new();
+
+    for (comp_id, comp) in components.iter().enumerate() {
         let comp_size = comp.len();
 
-        for &node in comp {
-            in_comp[node] = true;
-        }
-
-        let comp_focal: Vec<(usize, usize)> = focal_points
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, node))| in_comp[*node])
-            .map(|(idx, (_, node))| (idx, *node))
-            .collect();
-
-        for &node in comp {
-            in_comp[node] = false;
+        comp_focal.clear();
+        for (idx, (_id, node)) in focal_points.iter().enumerate() {
+            if node_to_comp_id[*node] == comp_id {
+                comp_focal.push((idx, *node));
+            }
         }
 
         if comp_focal.len() < 2 {
@@ -56,16 +59,17 @@ pub fn compute_point_sources(
         }
 
         let (a_local, node_to_local) =
-            components::build_subgraph_laplacian(laplacian, comp, n);
+            components::build_subgraph_laplacian(laplacian, comp);
 
         for ii in 0..comp_focal.len() {
             let (src_idx, src_node) = comp_focal[ii];
 
             for &(dst_idx, dst_node) in &comp_focal[(ii + 1)..] {
 
-                let mut node_current = vec![0.0f64; comp_size];
-                let li_src = node_to_local[src_node];
-                let li_dst = node_to_local[dst_node];
+                node_current.clear();
+                node_current.resize(comp_size, 0.0);
+                let li_src = node_to_local[&src_node];
+                let li_dst = node_to_local[&dst_node];
                 node_current[li_src] = -1.0;
                 node_current[li_dst] = 1.0;
 
@@ -75,19 +79,21 @@ pub fn compute_point_sources(
                 let v_dst = voltages_local[li_dst];
                 let resistance = v_dst - v_src;
 
-                if resistance > 0.0 {
+                if resistance.is_finite() && resistance > 0.0 {
                     resistance_matrix[src_idx][dst_idx] = resistance;
                     resistance_matrix[dst_idx][src_idx] = resistance;
                 }
 
-                let mut voltages_global = vec![0.0f64; n];
+                for slot in voltages_global.iter_mut().take(n) {
+                    *slot = 0.0;
+                }
                 for (li, &gn) in comp.iter().enumerate() {
                     voltages_global[gn] = voltages_local[li] - v_src;
                 }
 
-                let pair_currents = current::compute_node_current_map(laplacian, &voltages_global);
-                for i_global in 0..n {
-                    cumulative_currents[i_global] += pair_currents[i_global];
+                current::compute_node_current_map_into(laplacian, &voltages_global, &mut pair_currents);
+                for (cum, &pc) in cumulative_currents.iter_mut().zip(pair_currents.iter()).take(n) {
+                    *cum += pc;
                 }
             }
         }
@@ -145,10 +151,10 @@ fn build_global_currents(
                 let node_idx = (node - 1) as usize;
                 let sv = source_data[idx];
                 let gv = ground_data[idx];
-                if sv > 0.0 && (sv - nodata).abs() > 1e-10 {
+                if sv.is_finite() && sv > 0.0 && (sv - nodata).abs() > 1e-10 {
                     current_global[node_idx] += sv;
                 }
-                if gv > 0.0 && (gv - nodata).abs() > 1e-10 {
+                if gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10 {
                     current_global[node_idx] -= gv;
                 }
             }
@@ -171,12 +177,12 @@ fn solve_component_voltages(
 
     for comp in components {
         let total_current: f64 = comp.iter().map(|&gn| current_global[gn].abs()).sum();
-        if total_current < 1e-15 {
+        if !total_current.is_finite() || total_current < 1e-15 {
             continue;
         }
 
         let (a_local, _node_to_local) =
-            components::build_subgraph_laplacian(laplacian, comp, num_nodes);
+            components::build_subgraph_laplacian(laplacian, comp);
         let comp_size = comp.len();
 
         current_local.clear();

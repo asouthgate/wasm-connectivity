@@ -20,7 +20,14 @@ pub struct GeoTransform {
 }
 
 impl GeoTransform {
+    fn is_valid(&self) -> bool {
+        self.cellsize.is_finite() && self.cellsize > 0.0
+    }
+
     fn geo_to_pixel(&self, x: f64, y: f64) -> (isize, isize) {
+        if !self.is_valid() {
+            return (0, 0);
+        }
         let col = ((x - self.xmin) / self.cellsize) as isize;
         let row = ((self.ymax - y) / self.cellsize) as isize;
         (col, row)
@@ -35,17 +42,12 @@ impl GeoTransform {
 
     fn clip_bounds(&self, col_min: isize, row_min: isize, col_max: isize, row_max: isize, nrows: usize, ncols: usize) -> (usize, usize, usize, usize) {
         let col_start = col_min.max(0) as usize;
-        let col_end = (col_max + 1).min(ncols as isize).max(0) as usize;
+        let col_end = (col_max.saturating_add(1)).min(ncols as isize).max(0) as usize;
         let row_start = row_min.max(0) as usize;
-        let row_end = (row_max + 1).min(nrows as isize).max(0) as usize;
+        let row_end = (row_max.saturating_add(1)).min(nrows as isize).max(0) as usize;
         (col_start, col_end, row_start, row_end)
     }
 }
-
-pub fn parse_layer_params(json: &str) -> HashMap<String, LayerParams> {
-    serde_json::from_str(json).unwrap_or_default()
-}
-
 
 fn point_to_line_distance(pt: &Point<f64>, ls: &LineString<f64>) -> f64 {
     let mut min_dist = f64::MAX;
@@ -109,7 +111,7 @@ fn rasterize_lines(
     mask: &mut [f64],
     nrows: usize,
     ncols: usize,
-    lines: &[LineString<f64>],
+    lines: &[&LineString<f64>],
     value: f64,
     width: f64,
     transform: &GeoTransform,
@@ -172,6 +174,7 @@ pub fn rasterize_features(
     nrows: usize,
     ncols: usize,
     transform: &GeoTransform,
+    warnings: &mut Vec<String>,
 ) -> (Vec<f64>, HashMap<String, Vec<f64>>) {
     let mut res_map = base_raster.to_vec();
     let n = nrows * ncols;
@@ -179,12 +182,18 @@ pub fn rasterize_features(
 
     let geojson: GeoJson = match geojson_str.parse() {
         Ok(g) => g,
-        Err(_) => return (res_map, layer_masks),
+        Err(e) => {
+            warnings.push(format!("geojson parse failed: {}", e));
+            return (res_map, layer_masks);
+        }
     };
 
     let features = match geojson {
         GeoJson::FeatureCollection(fc) => fc.features,
-        _ => return (res_map, layer_masks),
+        _ => {
+            warnings.push("expected FeatureCollection at top level".to_string());
+            return (res_map, layer_masks);
+        }
     };
 
     for feature in &features {
@@ -194,11 +203,11 @@ pub fn rasterize_features(
         };
 
         let layer_name = match props.get("layer").and_then(|v| v.as_str()) {
-            Some(n) => n.to_string(),
+            Some(n) => n,
             None => continue,
         };
 
-        let params = match layer_params.get(&layer_name) {
+        let params = match layer_params.get(layer_name) {
             Some(p) => p,
             None => continue,
         };
@@ -208,12 +217,12 @@ pub fn rasterize_features(
             None => continue,
         };
 
-        let geo_geom = match Geometry::<f64>::try_from(geojson_geom.clone()) {
+        let geo_geom = match Geometry::<f64>::try_from(geojson_geom) {
             Ok(g) => g,
             Err(_) => continue,
         };
 
-        let mask = layer_masks.entry(layer_name.clone()).or_insert_with(|| vec![0.0f64; n]);
+        let mask = layer_masks.entry(layer_name.to_string()).or_insert_with(|| vec![0.0f64; n]);
 
         match geo_geom {
             Geometry::Polygon(poly) => {
@@ -225,11 +234,11 @@ pub fn rasterize_features(
                 }
             }
             Geometry::LineString(ls) => {
-                let lines = [ls];
+                let lines = [&ls];
                 rasterize_lines(&mut res_map, mask, nrows, ncols, &lines, params.resistance, params.width, transform);
             }
             Geometry::MultiLineString(mls) => {
-                let lines: Vec<LineString<f64>> = mls.into_iter().collect();
+                let lines: Vec<&LineString<f64>> = mls.0.iter().collect();
                 rasterize_lines(&mut res_map, mask, nrows, ncols, &lines, params.resistance, params.width, transform);
             }
             _ => {}
@@ -253,6 +262,7 @@ pub struct GeospatialOutput {
     pub layer_masks: Vec<LayerMask>,
     pub nrows: usize,
     pub ncols: usize,
+    pub warnings: Vec<String>,
 }
 
 pub fn prepare_geospatial_layers(
@@ -264,17 +274,29 @@ pub fn prepare_geospatial_layers(
     xmin: f64,
     ymax: f64,
     cellsize: f64,
-) -> (Vec<f64>, Vec<LayerMask>) {
-    let layer_params = parse_layer_params(layer_params_str);
+) -> (Vec<f64>, Vec<LayerMask>, Vec<String>) {
+    let layer_params: HashMap<String, LayerParams> = match serde_json::from_str(layer_params_str) {
+        Ok(p) => p,
+        Err(e) => {
+            let mut warnings = vec![format!("layer params parse failed: {}", e)];
+            let transform = GeoTransform { xmin, ymax, cellsize };
+            let (resistance_data, _m) = rasterize_features(
+                geojson_str, &HashMap::new(), base_raster, nrows, ncols, &transform, &mut warnings,
+            );
+            return (resistance_data, Vec::new(), warnings);
+        }
+    };
+
     let transform = GeoTransform { xmin, ymax, cellsize };
+    let mut warnings = Vec::new();
     let (resistance_data, m) = rasterize_features(
-        geojson_str, &layer_params, base_raster, nrows, ncols, &transform,
+        geojson_str, &layer_params, base_raster, nrows, ncols, &transform, &mut warnings,
     );
     let layer_masks: Vec<LayerMask> = m.into_iter()
         .filter(|(_, v)| v.iter().any(|&x| x > 0.0))
         .map(|(name, data)| LayerMask { name, data })
         .collect();
-    (resistance_data, layer_masks)
+    (resistance_data, layer_masks, warnings)
 }
 
 /// Run the geospatial solver, returning the resistance map, current map, voltage map, and layer masks.
@@ -309,7 +331,7 @@ pub fn run_geospatial_pipeline(
     max_iter: usize,
     tol: f64,
 ) -> GeospatialOutput {
-    let (resistance_data, layer_masks) = prepare_geospatial_layers(
+    let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
     );
 
@@ -324,6 +346,7 @@ pub fn run_geospatial_pipeline(
         layer_masks,
         nrows: raster_output.nrows,
         ncols: raster_output.ncols,
+        warnings,
     }
 }
 
@@ -388,7 +411,7 @@ mod tests {
         let mut layer_params = HashMap::new();
         layer_params.insert("zone_a".to_string(), LayerParams { resistance: 50.0, width: 0.0 });
 
-        let (res_map, masks) = rasterize_features(geojson_str, &layer_params, &base, nrows, ncols, &transform);
+        let (res_map, masks) = rasterize_features(geojson_str, &layer_params, &base, nrows, ncols, &transform, &mut Vec::new());
 
         assert!(masks.contains_key("zone_a"));
         let mask = &masks["zone_a"];
@@ -428,7 +451,7 @@ mod tests {
         let mut layer_params = HashMap::new();
         layer_params.insert("road".to_string(), LayerParams { resistance: 25.0, width: 1.5 });
 
-        let (res_map, masks) = rasterize_features(geojson_str, &layer_params, &base, nrows, ncols, &transform);
+        let (res_map, masks) = rasterize_features(geojson_str, &layer_params, &base, nrows, ncols, &transform, &mut Vec::new());
 
         assert!(masks.contains_key("road"));
         let mask = &masks["road"];
@@ -484,7 +507,7 @@ mod tests {
         let mut layer_params = HashMap::new();
         layer_params.insert("low_resistance_zone".to_string(), LayerParams { resistance: 10.0, width: 0.0 });
 
-        let (res_map, masks) = rasterize_features(geojson_str, &layer_params, &base, nrows, ncols, &transform);
+        let (res_map, masks) = rasterize_features(geojson_str, &layer_params, &base, nrows, ncols, &transform, &mut Vec::new());
 
         // Should keep the 100.0 value.
         assert_eq!(res_map[0], 100.0);

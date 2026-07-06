@@ -25,8 +25,16 @@ pub fn downsample_raster(
         };
     }
 
-    let row_ratio = nrows as f64 / target_rows as f64;
-    let col_ratio = ncols as f64 / target_cols as f64;
+    let row_ratio = if target_rows >= nrows {
+        1.0
+    } else {
+        nrows as f64 / target_rows as f64
+    };
+    let col_ratio = if target_cols >= ncols {
+        1.0
+    } else {
+        ncols as f64 / target_cols as f64
+    };
 
     let mut out = vec![nodata; target_rows * target_cols];
 

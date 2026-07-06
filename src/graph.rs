@@ -1,7 +1,12 @@
 use crate::grid::Grid;
 
 fn conductance_avg(a: f64, b: f64) -> f64 {
-    (a + b) / 2.0
+    let denom = a + b;
+    if denom > 0.0 {
+        2.0 * a * b / denom
+    } else {
+        0.0
+    }
 }
 
 pub struct EdgeTriplets {
@@ -53,7 +58,7 @@ pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTripl
     let nrows = conductance.nrows;
     let ncols = conductance.ncols;
 
-    let estimated_capacity = nrows * ncols * 4;
+    let estimated_capacity = nrows.saturating_mul(ncols).saturating_mul(4);
     let mut edges = EdgeTriplets::with_capacity(estimated_capacity);
 
     for row in 0..nrows {

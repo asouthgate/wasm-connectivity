@@ -1,4 +1,5 @@
 use sprs::{CsMat, TriMat};
+use std::collections::HashMap;
 use crate::laplacian::regularize_laplacian;
 
 
@@ -60,32 +61,36 @@ pub fn find_connected_components(
 pub fn build_subgraph_laplacian(
     parent_laplacian: &CsMat<f64>,
     comp: &[usize],
-    num_nodes: usize,
-) -> (CsMat<f64>, Vec<usize>) {
+) -> (CsMat<f64>, HashMap<usize, usize>) {
     let comp_size = comp.len();
-    // node_to_local becomes [MAX, MAX, 0, MAX, 1, MAX, 2] for comp = [2, 4, 6]
-    let mut node_to_local = vec![usize::MAX; num_nodes];
+    let mut node_to_local: HashMap<usize, usize> = HashMap::with_capacity(comp_size);
     for (local_idx, &global_node) in comp.iter().enumerate() {
-        node_to_local[global_node] = local_idx;
+        node_to_local.insert(global_node, local_idx);
     }
 
     let mut local_tri = TriMat::new((comp_size, comp_size));
     let mut local_row_sums = vec![0.0f64; comp_size];
 
     for &global_u in comp {
-        let local_u = node_to_local[global_u];
+        let local_u = match node_to_local.get(&global_u) {
+            Some(&v) => v,
+            None => continue,
+        };
         let row_view = match parent_laplacian.outer_view(global_u) {
             Some(rv) => rv,
             None => continue,
         };
         for (global_v, &parent_val) in row_view.indices().iter().zip(row_view.data()) {
-            let local_v = node_to_local[*global_v];
-            debug_assert_ne!(local_v, usize::MAX);
-            if global_u != *global_v {
-                // off-diagonal element, preserve its exact negative value from the parent matrix.
-                local_tri.add_triplet(local_u, local_v, parent_val);                
-                local_row_sums[local_u] += parent_val.abs();
+            if global_u == *global_v {
+                continue;
             }
+            let local_v = match node_to_local.get(global_v) {
+                Some(&v) => v,
+                None => continue,
+            };
+            // off-diagonal element, preserve its exact negative value from the parent matrix.
+            local_tri.add_triplet(local_u, local_v, parent_val);
+            local_row_sums[local_u] += parent_val.abs();
         }
     }
 

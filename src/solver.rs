@@ -12,12 +12,14 @@ pub fn cg_solve(a: &CsMat<f64>, b: &[f64], max_iter: usize, tol: f64) -> Vec<f64
 
     let precond = jacobi_preconditioner(a);
 
-    let mut z = apply_preconditioner(&precond, &r);
-    let mut p = z;
+    let mut z = Vec::with_capacity(n);
+    apply_preconditioner_into(&precond, &r, &mut z);
+    let mut p = z.clone();
     let mut rs_old = dot(&r, &p);
+    let mut ap = Vec::with_capacity(n);
 
     for _iter in 0..max_iter {
-        let ap = mat_vec_mul(a, &p);
+        mat_vec_mul_into(a, &p, &mut ap);
 
         let p_ap = dot(&p, &ap);
         if p_ap.abs() < 1e-30 {
@@ -36,7 +38,7 @@ pub fn cg_solve(a: &CsMat<f64>, b: &[f64], max_iter: usize, tol: f64) -> Vec<f64
             break;
         }
 
-        z = apply_preconditioner(&precond, &r);
+        apply_preconditioner_into(&precond, &r, &mut z);
         let rs_new = dot(&r, &z);
 
         if rs_old.abs() < 1e-30 {
@@ -58,19 +60,6 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
-fn mat_vec_mul(a: &CsMat<f64>, v: &[f64]) -> Vec<f64> {
-    let n = a.rows();
-    let mut result = vec![0.0f64; n];
-    for (row, out) in result.iter_mut().enumerate().take(n) {
-        if let Some(rv) = a.outer_view(row) {
-            for (col, &val) in rv.iter() {
-                *out += val * v[col];
-            }
-        }
-    }
-    result
-}
-
 fn jacobi_preconditioner(a: &CsMat<f64>) -> Vec<f64> {
     let n = a.rows();
     let mut diag = vec![0.0f64; n];
@@ -78,7 +67,8 @@ fn jacobi_preconditioner(a: &CsMat<f64>) -> Vec<f64> {
         if let Some(rv) = a.outer_view(row) {
             for (col, &val) in rv.iter() {
                 if col == row {
-                    *d = 1.0 / val.max(1e-15);
+                    let abs_val = val.abs();
+                    *d = if abs_val > 1e-15 { 1.0 / abs_val } else { 0.0 };
                     break;
                 }
             }
@@ -87,11 +77,27 @@ fn jacobi_preconditioner(a: &CsMat<f64>) -> Vec<f64> {
     diag
 }
 
-fn apply_preconditioner(precond_diag_inv: &[f64], r: &[f64]) -> Vec<f64> {
-    r.iter()
-        .zip(precond_diag_inv.iter())
-        .map(|(&r_i, &m_inv)| r_i * m_inv)
-        .collect()
+fn apply_preconditioner_into(precond_diag_inv: &[f64], r: &[f64], out: &mut Vec<f64>) {
+    out.clear();
+    out.reserve(r.len());
+    for (&r_i, &m_inv) in r.iter().zip(precond_diag_inv.iter()) {
+        out.push(r_i * m_inv);
+    }
+}
+
+fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
+    let n = a.rows();
+    out.clear();
+    out.resize(n, 0.0);
+    for (row, out_slot) in out.iter_mut().enumerate() {
+        if let Some(rv) = a.outer_view(row) {
+            let mut acc = 0.0f64;
+            for (col, &val) in rv.iter() {
+                acc += val * v[col];
+            }
+            *out_slot = acc;
+        }
+    }
 }
 
 #[cfg(test)]

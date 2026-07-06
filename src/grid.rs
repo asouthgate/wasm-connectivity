@@ -12,7 +12,7 @@ impl Grid {
     pub fn to_conductance(resistance_data: &[f64], nrows: usize, ncols: usize, nodata: f64) -> Self {
         let data: Vec<f64> = resistance_data.iter()
             .map(|&r| {
-                if r == nodata || r <= 0.0 {
+                if !r.is_finite() || r == nodata || r <= 0.0 {
                     0.0
                 } else {
                     1.0 / r
@@ -49,14 +49,12 @@ pub fn extract_focal_points(
     nodemap: &[i32],
 ) -> Vec<(i32, usize)> {
     let expected_len = nrows * ncols;
-    assert!(point_data.len() >= expected_len && nodemap.len() >= expected_len, "Input slices are too small");
+    assert!(point_data.len() >= expected_len, "point_data slice is too small ({} < {})", point_data.len(), expected_len);
+    assert!(nodemap.len() >= expected_len, "nodemap slice is too small ({} < {})", nodemap.len(), expected_len);
 
     let mut points: Vec<(i32, usize)> = Vec::new();
 
-    let point_iter = point_data.iter().take(expected_len);
-    let node_iter = nodemap.iter().take(expected_len);
-
-    for (&pid, &node) in point_iter.zip(node_iter) {
+    for (&pid, &node) in point_data[..expected_len].iter().zip(&nodemap[..expected_len]) {
         if pid > 0 && node > 0 {
             points.push((pid, (node - 1) as usize));
         }

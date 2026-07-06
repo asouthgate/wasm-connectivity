@@ -3,21 +3,21 @@ use crate::graph::EdgeTriplets;
 
 pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
     let norm: f64 = lap.data().iter().map(|&v| v * v).sum::<f64>().sqrt();
+    if !norm.is_finite() || norm <= 0.0 {
+        return;
+    }
     let epsilon = f64::EPSILON * norm;
-    if epsilon > 0.0 {
-        for v in lap.data_mut() {
-            *v += epsilon;
+    for (row, mut row_vec) in lap.outer_iterator_mut().enumerate() {
+        for (col, val) in row_vec.iter_mut() {
+            if col == row {
+                *val += epsilon;
+            }
         }
     }
 }
 
 pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     let mut row_sums = vec![0.0f64; num_nodes];
-
-    for k in 0..edges.len() {
-        let i = edges.row_indices[k];
-        row_sums[i] += edges.values[k];
-    }
 
     let nnz = edges.len() + num_nodes;
     let mut lap_rows: Vec<usize> = Vec::with_capacity(nnz);
@@ -26,13 +26,15 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
 
     for k in 0..edges.len() {
         let i = edges.row_indices[k];
+        row_sums[i] += edges.values[k];
+
         let j = edges.col_indices[k];
         lap_rows.push(i);
         lap_cols.push(j);
         lap_vals.push(-edges.values[k]);
     }
 
-    for (i, row_sum) in row_sums.iter_mut().enumerate() {
+    for (i, row_sum) in row_sums.iter().enumerate() {
         lap_rows.push(i);
         lap_cols.push(i);
         lap_vals.push(*row_sum);

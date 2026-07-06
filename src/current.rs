@@ -1,8 +1,13 @@
 use sprs::CsMat;
 
-pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec<f64> {
+pub fn compute_node_current_map_into(
+    laplacian: &CsMat<f64>,
+    voltages: &[f64],
+    out: &mut Vec<f64>,
+) {
     let n = laplacian.rows();
-    let mut node_currents = vec![0.0f64; n];
+    out.clear();
+    out.resize(n, 0.0);
 
     for node in 0..n {
         let mut pos_sum = 0.0f64;
@@ -25,10 +30,14 @@ pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec
             }
         }
 
-        node_currents[node] = pos_sum.max(neg_sum);
+        out[node] = pos_sum.max(neg_sum);
     }
+}
 
-    node_currents
+pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec<f64> {
+    let mut out = Vec::new();
+    compute_node_current_map_into(laplacian, voltages, &mut out);
+    out
 }
 
 pub fn reconstruct_grid_map(

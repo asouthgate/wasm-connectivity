@@ -10,13 +10,17 @@ pub mod resample;
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
 pub const DEFAULT_MAX_ITER: usize = 100_000;
 pub const DEFAULT_TOL: f64 = 1e-6;
 
 fn json_response<T: Serialize>(output: &T) -> String {
-    serde_json::to_string(output).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+    serde_json::to_string(output).unwrap_or_else(|e| {
+        serde_json::to_string(&json!({ "error": e.to_string() }))
+            .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
+    })
 }
 
 pub fn build_circuit_model(resistance_data: &[f64], nrows: usize, ncols: usize, nodata: f64) -> (Vec<i32>, usize, graph::EdgeTriplets, sprs::CsMat<f64>, Vec<Vec<usize>>) {
@@ -134,6 +138,7 @@ struct RasterizeOutput {
     layer_masks: Vec<geospatial::LayerMask>,
     nrows: usize,
     ncols: usize,
+    warnings: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -148,10 +153,10 @@ pub fn rasterize_geojson(
     ymax: f64,
     cellsize: f64,
 ) -> String {
-    let (resistance_data, layer_masks) = geospatial::prepare_geospatial_layers(
+    let (resistance_data, layer_masks, warnings) = geospatial::prepare_geospatial_layers(
         &base_raster, nrows, ncols, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
     );
-    let output = RasterizeOutput { resistance_map: resistance_data, layer_masks, nrows, ncols };
+    let output = RasterizeOutput { resistance_map: resistance_data, layer_masks, nrows, ncols, warnings };
     json_response(&output)
 }
 
@@ -222,7 +227,7 @@ mod tests {
     }
 
     fn write_pgm(filename: &str, data: &[f64], nrows: usize, ncols: usize) {
-        let max_val = data.iter().cloned().fold(0.0f64, f64::max);
+        let max_val = data.iter().copied().fold(0.0f64, f64::max);
         let scale = if max_val > 0.0 { 255.0 / max_val } else { 1.0 };
 
         let mut file = std::fs::File::create(filename).unwrap();
