@@ -13,6 +13,8 @@ pub struct LayerParams {
     pub width: f64,
 }
 
+// Geospatial transformation struct to handle coordinate
+//  conversions between geographic and pixel space.
 pub struct GeoTransform {
     pub xmin: f64,
     pub ymax: f64,
@@ -24,6 +26,7 @@ impl GeoTransform {
         self.cellsize.is_finite() && self.cellsize > 0.0
     }
 
+    // Converts geographic coordinates (x, y) to pixel coordinates (col, row).
     fn geo_to_pixel(&self, x: f64, y: f64) -> (isize, isize) {
         if !self.is_valid() {
             return (0, 0);
@@ -33,6 +36,7 @@ impl GeoTransform {
         (col, row)
     }
 
+    // Converts pixel coordinates (col, row) back to geographic coordinates (x, y).
     fn pixel_to_geo(&self, col: usize, row: usize) -> Point<f64> {
         Point::new(
             self.xmin + (col as f64 + 0.5) * self.cellsize,
@@ -40,6 +44,7 @@ impl GeoTransform {
         )
     }
 
+    // Clips the given geographic bounds to ensure they fit within the raster dimensions.
     fn clip_bounds(&self, col_min: isize, row_min: isize, col_max: isize, row_max: isize, nrows: usize, ncols: usize) -> (usize, usize, usize, usize) {
         let col_start = col_min.max(0) as usize;
         let col_end = (col_max.saturating_add(1)).min(ncols as isize).max(0) as usize;
@@ -49,6 +54,7 @@ impl GeoTransform {
     }
 }
 
+// Calculates the shortest distance from a point to a line string by checking each segment of the line string.
 fn point_to_line_distance(pt: &Point<f64>, ls: &LineString<f64>) -> f64 {
     let mut min_dist = f64::MAX;
     for segment in ls.lines() {
@@ -61,6 +67,15 @@ fn point_to_line_distance(pt: &Point<f64>, ls: &LineString<f64>) -> f64 {
 }
 
 /// Rasterizes a polygon into a raster grid, updating the raster values and mask.
+//
+// # Arguments
+// * `raster` - A mutable slice representing the raster grid values.
+/// * `mask` - A mutable slice representing the layer mask values.
+/// * `nrows` - Number of rows in the raster grid.
+/// * `ncols` - Number of columns in the raster grid.
+/// * `poly` - The polygon to rasterize.
+/// * `value` - The resistance value to assign to the raster cells covered by the polygon.
+/// * `transform` - The geospatial transformation for coordinate conversions.
 fn rasterize_polygon(
     raster: &mut [f64],
     mask: &mut [f64],

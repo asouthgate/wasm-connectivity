@@ -1,5 +1,7 @@
 use crate::grid::Grid;
 
+// Compute the harmonic mean of two conductances
+// which is used to determine the effective conductance between two nodes in a grid.
 fn conductance_avg(a: f64, b: f64) -> f64 {
     let denom = a + b;
     if denom > 0.0 {
@@ -54,6 +56,13 @@ impl Default for EdgeTriplets {
     }
 }
 
+// Builds the edge triplets for a grid based on the conductance values and the nodemap.
+//
+// # Arguments
+// * `conductance` - A reference to the Grid containing conductance values.
+// * `nodemap` - A slice containing the mapping from grid indices to node indices (1-based).
+// # Returns
+// An EdgeTriplets struct containing the edges and their corresponding conductance values.
 pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTriplets {
     let nrows = conductance.nrows;
     let ncols = conductance.ncols;
