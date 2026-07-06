@@ -8,9 +8,9 @@ pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec
     for node in 0..n {
         let mut pos_sum = 0.0f64;
         let mut neg_sum = 0.0f64;
-
+        let vn = voltages[node];
         for (neighbor, conductance) in get_row_neighbors(laplacian, node) {
-            let dv = voltages[node] - voltages[neighbor];
+            let dv = vn - voltages[neighbor];
             let branch_current = conductance * dv;
 
             if branch_current > 0.0 {
@@ -29,16 +29,13 @@ pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec
 pub fn reconstruct_grid_map(
     node_values: &[f64],
     nodemap: &[i32],
-    nrows: usize,
-    ncols: usize,
+    n: usize,
 ) -> Vec<f64> {
-    let mut grid = vec![0.0f64; nrows * ncols];
-    for row in 0..nrows {
-        for col in 0..ncols {
-            let node = nodemap[row * ncols + col];
-            if node > 0 {
-                grid[row * ncols + col] = node_values[(node - 1) as usize];
-            }
+    let mut grid = vec![0.0f64; n];
+    for aj in 0..n {
+        let node = nodemap[aj];
+        if node > 0 {
+            grid[aj] = node_values[(node - 1) as usize];
         }
     }
     grid
@@ -52,7 +49,7 @@ mod tests {
     fn test_reconstruct_grid_map() {
         let nodemap = vec![0, 1, 2, 0, 0, 3];
         let node_values = vec![10.0, 20.0, 30.0];
-        let grid = reconstruct_grid_map(&node_values, &nodemap, 2, 3);
+        let grid = reconstruct_grid_map(&node_values, &nodemap, 2 * 3);
         assert_eq!(grid, vec![0.0, 10.0, 20.0, 0.0, 0.0, 30.0]);
     }
 }
