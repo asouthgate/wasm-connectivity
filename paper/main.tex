@@ -20,7 +20,10 @@ Circuit theory has been successfully applied to ecological connectivity modellin
 
 \section{Introduction}
 
-The theory of linear circuits has found useful application in ecological connectivity modelling, population genetics, and conservation \cite{mcrae2008using, mcrae2006isolation, mcrae2007circuit}, especially through the circuitscape \cite{mcrae2016circuitscape} software. Circuit theory offers advantages beyond methods such as least-cost paths (see \cite{mcrae2007circuit}).
+The theory of linear circuits has found useful application in ecological connectivity modelling, 
+population genetics, and conservation \cite{mcrae2008using, mcrae2006isolation, mcrae2007circuit}, 
+especially through the circuitscape \cite{mcrae2016circuitscape} software. 
+Circuit theory offers advantages beyond methods such as least-cost paths (see \cite{mcrae2007circuit}).
 
 At the same time, compute is often constrained quantity due to global supply shortages and/or cost. 
 In the simplest case, a user runs circuitscape on their laptop or a server,
@@ -34,11 +37,17 @@ which is either close to the user's computer, or the user's computer itself.
 The problem with performing complex calculations in the browser is that browser code 
 (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction.
 To resolve this problem, WebAssembly was recently introduced,
-allowing fast C++ or Rust code to be run in a sandboxed browser environment.
+allowing fast C++ or Rust code to be run in a sandboxed browser environment. 
+It has previously been argued that WebAssembly is poised to transform scientific computing \cite{perkel2024no}.
 An academic might ask: why not just use my laptop?
 The answer to this is that often web applications integrate complex user controls
 (e.g. modelling controls directly on a map) that are time consuming to complete using scientific scripts,
 and requires expertise not always available to users outside of academia.
+
+WebAssembly has found use in several scientific projects, including: PyIodide, a CPython port, supporting installs of NumPy and SciPy, amongst other packages\cite{pyodide2026};
+WebR \cite{webr2026}, a WebAssembly compilation of the R language; ITK-Wasm, for spatial/image analysis \cite{itkwasm2026}. 
+Application domains include software for mapping pipeline corosion \cite{guarneri2024web}, viral genomics \cite{ji2024viralwasm}, or cancer genome visualisation \cite{finney2018chromatic}.
+
 
 This paper introduces a Rust library and WebAssembly bindings to allow connectivity analysis directly within web applications,
 such as GeoSpatial analysis software. We demonstrate reasonable
@@ -60,6 +69,10 @@ In order to demonstrate the functionality of our WASM toolset, a test region cor
 286600E, 79050N (EPSG:27700) was selected. The region includes buildings, roads, and a river. Vector data was obtained from
 the UK ordinance survey open data \cite{os_data}. 
 DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
+
+\subsection{Benchmarking}
+
+Benchmarking was undertaken on a laptop with a AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
 
 \subsection{Connectivity model}
 
@@ -160,15 +173,15 @@ For front-end web applications, it is crucial that data transfer is minimised
 For some ecological rasters, this method is not preferred,
 such as in Circuitscape, where the algebraic multigrid (AMG) preconditioner is offered \cite{hall2021circuitscape}.
 
-\subsection{Benchmarking time and memory}
-
-A react application was used with time and memory profiling in order to capture realistic performance metrics in the browser context (as opposed to e.g. the rust library itself).
-
 \subsection{Code}
 
 Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. This code contains several simple examples. All results can be easily reproduced by running the React development server, clicking to the benchmark panel, running the benchmarks, and downloading the results.
 
 \section{Results}
+
+Figure \ref{fig:wasm-connectivity} gives an example of a 1000x1000 resistance input and current map output
+rendered in a React frontend using raster source mode (`advanced mode') for the test region.
+Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. 
 
 \begin{figure}[h]
 \centering
@@ -177,9 +190,13 @@ Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. T
 \label{fig:wasm-connectivity}
 \end{figure}
 
-\subsection{Examples}
 
-\subsection{Benchmarking: CPU, memory, and raster sizes}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/benchmarking.png}
+\caption{Benchmarking results. Point in grey is cold start run, expected to be slower.}
+\label{fig:benchmarking}
+\end{figure}
 
 \section{Discussion}
 
