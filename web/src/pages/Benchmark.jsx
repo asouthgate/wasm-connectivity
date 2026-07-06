@@ -2,6 +2,9 @@ import { useState, useCallback, useEffect } from 'react';
 import { runBenchmark, downsample_raster } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { Spinner } from '../components/Spinner';
+import { StatusBar } from '../components/StatusBar';
+import { stat, downloadCSV } from '../lib/stats';
+import { useStatus } from '../lib/hooks';
 
 const GEO_BASE = '/geodata';
 const RESOLUTIONS = [1000, 800, 600, 400, 200];
@@ -12,23 +15,10 @@ const DEFAULT_PARAMS = {
   buildings:{ resistance: 500, width: 0 },
 };
 
-function stat(arr) {
-  if (arr.length === 0) return { n: 0 };
-  const s = [...arr].sort((a, b) => a - b);
-  const sum = s.reduce((a, b) => a + b, 0);
-  const mean = sum / s.length;
-  const med = s.length % 2 === 0 ? (s[s.length / 2 - 1] + s[s.length / 2]) / 2 : s[Math.floor(s.length / 2)];
-  const v = s.reduce((a, b) => a + (b - mean) ** 2, 0) / s.length;
-  return { n: s.length, mean, median: med, min: s[0], max: s[s.length - 1], stddev: Math.sqrt(v) };
-}
-
-function downloadCSV(runs) {
+function buildBenchmarkCSV(runs) {
   const h = 'resolution,repeat,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb\n';
   const rows = runs.map(r => `${r.resolution},${r.repeat},${(r.prepTimeMs/1000).toFixed(4)},${r.prepMemMb.toFixed(2)},${(r.connTimeMs/1000).toFixed(4)},${r.connMemMb.toFixed(2)}`).join('\n');
-  const b = new Blob([h + rows], { type: 'text/csv' });
-  const u = URL.createObjectURL(b);
-  const a = document.createElement('a'); a.href = u; a.download = 'benchmark.csv'; a.click();
-  URL.revokeObjectURL(u);
+  downloadCSV('benchmark.csv', h, rows);
 }
 
 export default function Benchmark() {
@@ -133,11 +123,9 @@ export default function Benchmark() {
         <input type="number" value={reps} onChange={e => setReps(Math.max(1, Math.min(20, +e.target.value || 1)))}
           disabled={running} style={{ width: 50, background: '#222', border: '1px solid #444', color: '#ccc', padding: '3px 6px', font: '12px monospace' }} />
         <button className="btn run" onClick={start} disabled={!hasData || running}>Run</button>
-        {runs.length > 0 && <button className="btn" onClick={() => downloadCSV(runs)}>Download CSV</button>}
+        {runs.length > 0 && <button className="btn" onClick={() => buildBenchmarkCSV(runs)}>Download CSV</button>}
       </div>
-      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center', position: 'relative', zIndex: 91 }}>
-        {running && <Spinner />}{status.text}
-      </div>
+      <StatusBar status={status} loading={running} />
 
       {hasData && (
         <div style={{ fontSize: '.75em', color: '#888', marginBottom: 8 }}>

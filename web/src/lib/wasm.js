@@ -1,4 +1,4 @@
-import initModule, { solve_point_sources as _solvePts, solve_raster_sources as _solveRaster, solve_geospatial as _solveGeo, rasterize_geojson as _rasterizeGeo, downsample_raster as _downsample, get_memory, __reset } from './wasm_connect.js';
+import initModule, { solve_point_sources as _solvePts, solve_raster_sources as _solveRaster, downsample_raster as _downsample, get_memory, __reset } from './wasm_connect.js';
 import wasmUrl from './wasm_connect_bg.wasm?url';
 
 let ready = false;
@@ -26,16 +26,8 @@ export function solve_raster_sources(resData, nrows, ncols, nodata, srcData, gnd
   return _solveRaster(resData, nrows, ncols, nodata, srcData, gndData, maxIter, tol);
 }
 
-export function solve_geospatial(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
-  return _solveGeo(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol);
-}
-
 export function downsample_raster(data, nrows, ncols, nodata, targetRows, targetCols) {
   return _downsample(data, nrows, ncols, nodata, targetRows, targetCols);
-}
-
-export function rasterize_geojson(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize) {
-  return _rasterizeGeo(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
 }
 
 export function getWasmMemoryMB() {
@@ -68,8 +60,8 @@ export async function solve_raster_sources_async(resData, nrows, ncols, nodata, 
   return _callWorker('solve_raster_sources', [resData, nrows, ncols, nodata, srcData, gndData, maxIter, tol]);
 }
 
-export async function solve_geospatial_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
-  return _callWorker('solve_geospatial', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol]);
+export async function run_geospatial_pipeline_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
+  return _callWorker('run_geospatial_pipeline', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol]);
 }
 
 export function runBenchmark(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {

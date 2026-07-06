@@ -3,7 +3,9 @@ import { solve_raster_sources_async } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { PRESETS } from '../lib/presets';
 import MapView from '../components/MapView';
-import { Spinner } from '../components/Spinner';
+import { StatusBar } from '../components/StatusBar';
+import { PresetList } from '../components/PresetList';
+import { ComputeModal } from '../components/ComputeModal';
 
 const RASTER_PRESETS = PRESETS.filter(g => g.mode === 'raster');
 
@@ -63,25 +65,16 @@ export default function Raster() {
 
   return (
     <div>
+      <ComputeModal visible={loading} />
       <div className="row">
         <button className="btn run" onClick={run} disabled={!hasData || loading}>Run</button>
         <span className="timer">{timer}</span>
       </div>
-      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center', position: 'relative', zIndex: 91 }}>
-        {loading && <Spinner />}{status.text}
-      </div>
+      <StatusBar status={status} loading={loading} />
 
       <div className="layout">
         <div className="sidebar">
-          {RASTER_PRESETS.map(grp => (
-            <div key={grp.group} className="preset-group">
-              <h3>{grp.group}</h3>
-              {grp.items.map(p => (
-                <div key={p.id} className={'preset' + (selPreset === p.id ? ' sel' : '')}
-                  onClick={() => !loading && loadPreset(p)} style={loading ? { pointerEvents: 'none', opacity: 0.5 } : {}}>{p.name}</div>
-              ))}
-            </div>
-          ))}
+          <PresetList presets={RASTER_PRESETS} selectedId={selPreset} onSelect={loadPreset} disabled={loading} />
         </div>
         <div className="main">
           {hasData && (
@@ -99,7 +92,6 @@ export default function Raster() {
           )}
         </div>
       </div>
-      {loading && <div style={{ position: 'fixed', inset: 0, zIndex: 90, cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} />}
     </div>
   );
 }

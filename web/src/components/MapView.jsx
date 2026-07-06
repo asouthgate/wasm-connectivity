@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { renderMap, renderPoints } from '../lib/render';
+import { renderMap, renderPoints, VIRIDIS_GRADIENT, PLASMA_GRADIENT } from '../lib/render';
 
 export default function MapView({ type, data, meta, logScale, onToggleScale }) {
   const canvasRef = useRef(null);
@@ -21,9 +21,7 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
   const dim = meta ? `${meta.ncols}×${meta.nrows}` : '';
   const fmt = (v) => Math.abs(v) < 0.01 ? v.toExponential(1) : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toPrecision(3);
 
-  const legendGrad = isCurVolt
-    ? 'linear-gradient(to right,#0d0887,#7e03a8,#cc4778,#f89540,#f0f921)'
-    : 'linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725)';
+  const legendStyle = { flex: 1, height: 14, borderRadius: 3, border: '1px solid #444' };
 
   return (
     <div style={{ border: '1px solid #333', display: 'flex', flexDirection: 'column', maxWidth: '100%' }}>
@@ -44,7 +42,7 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
       {type !== 'points' && (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '.65em', padding: '3px 6px', color: '#999', background: '#121212' }}>
           <span style={{ minWidth: '4em', textAlign: 'right' }}>{fmt(range.min)}</span>
-          <div style={{ flex: 1, height: 14, borderRadius: 3, background: legendGrad, border: '1px solid #444' }} />
+          <div style={{ ...legendStyle, background: isCurVolt ? PLASMA_GRADIENT : VIRIDIS_GRADIENT }} />
           <span style={{ minWidth: '4em' }}>{fmt(range.max)}</span>
         </div>
       )}

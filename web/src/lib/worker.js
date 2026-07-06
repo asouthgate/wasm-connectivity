@@ -1,5 +1,5 @@
 import initModule, {
-  solve_geospatial as _geo,
+  run_geospatial_pipeline as _geo,
   solve_point_sources as _pts,
   solve_raster_sources as _rast,
   rasterize_geojson as _rasterize,
@@ -13,7 +13,7 @@ function mb() { return get_memory().buffer.byteLength / (1024 * 1024); }
 async function ensure() { if (!ready) { await initModule(wasmUrl); ready = true; } }
 
 const FN_MAP = {
-  solve_geospatial: _geo,
+  run_geospatial_pipeline: _geo,
   solve_point_sources: _pts,
   solve_raster_sources: _rast,
 };

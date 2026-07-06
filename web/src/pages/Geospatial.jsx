@@ -1,10 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { flushSync } from 'react-dom';
-import { solve_geospatial_async } from '../lib/wasm';
+import { run_geospatial_pipeline_async } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { renderMap } from '../lib/render';
 import MapView from '../components/MapView';
-import { Spinner } from '../components/Spinner';
+import { StatusBar } from '../components/StatusBar';
 import { ComputeModal } from '../components/ComputeModal';
 
 const GEO_BASE = '/geodata';
@@ -84,7 +83,7 @@ export default function Geospatial() {
       };
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
       const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
-      const json = await solve_geospatial_async(
+      const json = await run_geospatial_pipeline_async(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(params),
         baseMeta.xllcorner, ymax, baseMeta.cellsize,
@@ -123,9 +122,7 @@ export default function Geospatial() {
         <button className="btn run" onClick={run} disabled={!hasData || loading}>Run</button>
         <span className="timer">{timer}</span>
       </div>
-      <div className="status" style={{ color: status.color, display: 'flex', alignItems: 'center', position: 'relative', zIndex: 91 }}>
-        {loading && !computing && <Spinner />}{status.text}
-      </div>
+      <StatusBar status={status} loading={loading && !computing} />
 
       <div className="layout">
         <div className="sidebar">

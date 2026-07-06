@@ -32,7 +32,7 @@ export function init_panic_hook() {
  * @param {Float64Array} base_raster
  * @param {number} nrows
  * @param {number} ncols
- * @param {number} nodata
+ * @param {number} _nodata
  * @param {string} geojson_str
  * @param {string} layer_params_str
  * @param {number} xmin
@@ -40,7 +40,7 @@ export function init_panic_hook() {
  * @param {number} cellsize
  * @returns {string}
  */
-export function rasterize_geojson(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize) {
+export function rasterize_geojson(base_raster, nrows, ncols, _nodata, geojson_str, layer_params_str, xmin, ymax, cellsize) {
     let deferred4_0;
     let deferred4_1;
     try {
@@ -50,7 +50,7 @@ export function rasterize_geojson(base_raster, nrows, ncols, nodata, geojson_str
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(layer_params_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.rasterize_geojson(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize);
+        const ret = wasm.rasterize_geojson(ptr0, len0, nrows, ncols, _nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize);
         deferred4_0 = ret[0];
         deferred4_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
@@ -75,7 +75,7 @@ export function rasterize_geojson(base_raster, nrows, ncols, nodata, geojson_str
  * @param {number} tol
  * @returns {string}
  */
-export function solve_geospatial(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol) {
+export function run_geospatial_pipeline(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol) {
     let deferred6_0;
     let deferred6_1;
     try {
@@ -89,7 +89,7 @@ export function solve_geospatial(base_raster, nrows, ncols, nodata, geojson_str,
         const len3 = WASM_VECTOR_LEN;
         const ptr4 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
         const len4 = WASM_VECTOR_LEN;
-        const ret = wasm.solve_geospatial(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize, ptr3, len3, ptr4, len4, max_iter, tol);
+        const ret = wasm.run_geospatial_pipeline(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize, ptr3, len3, ptr4, len4, max_iter, tol);
         deferred6_0 = ret[0];
         deferred6_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);

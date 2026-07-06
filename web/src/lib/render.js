@@ -19,6 +19,9 @@ const PLASMA_STOPS = [
   [1.0, 240,249, 33],
 ];
 
+export const VIRIDIS_GRADIENT = 'linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725)';
+export const PLASMA_GRADIENT = 'linear-gradient(to right,#0d0887,#7e03a8,#cc4778,#f89540,#f0f921)';
+
 function colorFromStops(t, stops) {
   t = Math.max(0, Math.min(1, t));
   let i = 0;
