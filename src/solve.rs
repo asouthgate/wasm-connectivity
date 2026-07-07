@@ -178,6 +178,32 @@ fn compute_point_sources_inner(
 // Raster-source mode
 // ----------------------------------------------------------------------------
 
+/// Annotated variant of `compute_raster_sources` that returns the total
+/// PCG iteration count.
+pub fn compute_raster_sources_annotated(
+    resistance_data: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    remove_average: bool,
+) -> AnnotatedOutput<RasterOutput> {
+    let (nodemap, num_nodes, _edges, laplacian, components) =
+        crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
+    let current_global = build_global_currents(
+        &nodemap, num_nodes, nrows, ncols, nodata, source_data, ground_data,
+    );
+    let (voltages_global, iters) = solve_component_voltages_warm(
+        &components, &current_global, &laplacian,
+        num_nodes, max_iter, tol, remove_average, None,
+    );
+    let output = build_raster_output(&voltages_global, &laplacian, &nodemap, nrows, ncols);
+    AnnotatedOutput { output, total_iters: iters }
+}
+
 /// Cold raster-mode solve. Builds the circuit model from scratch and does
 /// not touch the warm-start cache. Bit-for-bit identical behaviour to the
 /// pre-warm-start implementation.
@@ -192,16 +218,10 @@ pub fn compute_raster_sources(
     tol: f64,
     remove_average: bool,
 ) -> RasterOutput {
-    let (nodemap, num_nodes, _edges, laplacian, components) =
-        crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
-    let current_global = build_global_currents(
-        &nodemap, num_nodes, nrows, ncols, nodata, source_data, ground_data,
-    );
-    let (voltages_global, _iters) = solve_component_voltages_warm(
-        &components, &current_global, &laplacian,
-        num_nodes, max_iter, tol, remove_average, None,
-    );
-    build_raster_output(&voltages_global, &laplacian, &nodemap, nrows, ncols)
+    compute_raster_sources_annotated(
+        resistance_data, nrows, ncols, nodata,
+        source_data, ground_data, max_iter, tol, remove_average,
+    ).output
 }
 
 /// Cached raster-mode solve. Uses the global cache (`cache` module):
