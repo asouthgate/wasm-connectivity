@@ -5,7 +5,7 @@
 //! preconditioner applies one V-cycle per CG iteration.
 
 use sprs::CsMat;
-use crate::solver::{self, Preconditioner};
+use crate::solver::{self, Preconditioner, mat_vec_mul_slice};
 use crate::cholesky;
 use std::time::Instant;
 use std::cell::RefCell;
@@ -28,7 +28,7 @@ struct MgLevel {
 struct LevelWorkspace {
     z: Vec<f64>,
     r: Vec<f64>,
-    ax: Vec<f64>,
+    rhs: Vec<f64>,
 }
 
 /// Multigrid preconditioner: applies one V-cycle as `M⁻¹·r`.
@@ -44,46 +44,50 @@ pub struct MgPreconditioner {
 // ---------------------------------------------------------------------------
 
 /// Build a sparse prolongation matrix P: coarse → fine.
-/// Each coarse cell maps to a 2x2 block of fine cells with weight 1.0.
+/// Uses bilinear interpolation: each coarse cell contributes to a 4×4
+/// block of fine cells with weights derived from the tensor product of
+/// linear interpolation in each dimension.
+///
+/// Row weights: [1/4, 3/4, 3/4, 1/4]  (centered at the coarse cell)
+/// Col weights: [1/4, 3/4, 3/4, 1/4]
+/// The 2-D weight is the product, giving 9/16 on the four center fine
+/// cells, 3/16 on the eight edge neighbours, and 1/16 on the four corners.
+///
 /// P has dimensions (fine_nrows * fine_ncols) x (coarse_nrows * coarse_ncols).
-/// Returns (row_indices, col_indices, values) triplets for efficient mat-vec.
+/// Returns (row_indices, col_indices, values) triplets.
 fn build_prolongation_triplets(
     fine_nrows: usize,
     fine_ncols: usize,
     coarse_nrows: usize,
     coarse_ncols: usize,
 ) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
-    let mut rows = Vec::new();
-    let mut cols = Vec::new();
-    let mut vals = Vec::new();
+    let fine_n = fine_nrows * fine_ncols;
+    let mut rows = Vec::with_capacity(fine_n * 4);
+    let mut cols = Vec::with_capacity(fine_n * 4);
+    let mut vals = Vec::with_capacity(fine_n * 4);
+
+    let rw: [f64; 4] = [0.25, 0.75, 0.75, 0.25];
+    let cw: [f64; 4] = [0.25, 0.75, 0.75, 0.25];
+    let offsets: [isize; 4] = [-1, 0, 1, 2];
 
     for cr in 0..coarse_nrows {
         for cc in 0..coarse_ncols {
             let coarse_idx = cr * coarse_ncols + cc;
-            let r0 = cr * 2;
-            let c0 = cc * 2;
-            let r1 = r0 + 1;
-            let c1 = c0 + 1;
 
-            if r0 < fine_nrows && c0 < fine_ncols {
-                rows.push(r0 * fine_ncols + c0);
-                cols.push(coarse_idx);
-                vals.push(1.0);
-            }
-            if r0 < fine_nrows && c1 < fine_ncols {
-                rows.push(r0 * fine_ncols + c1);
-                cols.push(coarse_idx);
-                vals.push(1.0);
-            }
-            if r1 < fine_nrows && c0 < fine_ncols {
-                rows.push(r1 * fine_ncols + c0);
-                cols.push(coarse_idx);
-                vals.push(1.0);
-            }
-            if r1 < fine_nrows && c1 < fine_ncols {
-                rows.push(r1 * fine_ncols + c1);
-                cols.push(coarse_idx);
-                vals.push(1.0);
+            for (ri, &ro) in offsets.iter().enumerate() {
+                let fr = 2 * cr as isize + ro;
+                if fr < 0 || fr >= fine_nrows as isize { continue; }
+                let fr = fr as usize;
+
+                for (ci, &co) in offsets.iter().enumerate() {
+                    let fc = 2 * cc as isize + co;
+                    if fc < 0 || fc >= fine_ncols as isize { continue; }
+                    let fc = fc as usize;
+
+                    rows.push(fr * fine_ncols + fc);
+                    cols.push(coarse_idx);
+                    vals.push(rw[ri] * cw[ci]);
+                }
             }
         }
     }
@@ -229,7 +233,7 @@ impl MgPreconditioner {
             LevelWorkspace {
                 z: vec![0.0; n],
                 r: vec![0.0; n],
-                ax: vec![0.0; n],
+                rhs: vec![0.0; n],
             }
         }).collect();
 
@@ -248,11 +252,10 @@ impl MgPreconditioner {
     // V-cycle
     // -----------------------------------------------------------------------
 
-    fn v_cycle(&self, workspaces: &std::cell::RefCell<Vec<LevelWorkspace>>, b: &[f64], level: usize) {
+    fn v_cycle(&self, workspaces: &RefCell<Vec<LevelWorkspace>>, b: &[f64], level: usize) {
         let lvl = &self.levels[level];
         let n = lvl.nrows * lvl.ncols;
 
-        // Coarsest level — solve exactly with precomputed Cholesky
         if level == self.levels.len() - 1 {
             if let Some(ref l) = lvl.cholesky_l {
                 let x = crate::cholesky::cholesky_solve(l, b, n);
@@ -265,68 +268,81 @@ impl MgPreconditioner {
             return;
         }
 
-        // --- FIXED: Enforce clear states and an initial guess of EXACTLY ZERO ---
         {
             let mut ws = workspaces.borrow_mut();
-            ws[level].z.fill(0.0);   // The initial guess for error correction MUST be zero
-            ws[level].r.fill(0.0);
-            ws[level].ax.fill(0.0);
-        }
-
-        // Pre-smooth with symmetric Gauss-Seidel
-        for _ in 0..self.nu {
-            let mut ws = workspaces.borrow_mut();
-            symmetric_gauss_seidel_smooth(&lvl.laplacian, &mut ws[level].z, b, self.omega);
-        }
-
-        // Residual r = b - L·z
-        {
-            let mut ws = workspaces.borrow_mut();
-            let (z_ref, r_ref) = unsafe {
-                let ptr = ws.as_mut_ptr();
-                (&(*ptr.add(level)).z, &mut (*ptr.add(level)).r)
-            };
-            mat_vec_mul_into(&lvl.laplacian, z_ref, r_ref);
-            for i in 0..n {
-                ws[level].r[i] = b[i] - ws[level].r[i];
+            ws[level].z.fill(0.0);
+            if b.as_ptr() != ws[level].rhs.as_ptr() {
+                ws[level].rhs.copy_from_slice(b);
             }
         }
 
-        // Downsample current level's residual (r) directly into the next level's r buffer
-        // Using Galerkin restriction: r_coarse = P^T * r_fine
-        {
+        for _ in 0..self.nu {
             let mut ws = workspaces.borrow_mut();
-            let curr_r: Vec<f64> = ws[level].r.clone();
-            let (p_rows, p_cols, p_vals) = self.levels[level + 1].prolongation.as_ref().expect("prolongation missing");
-            restrict_sparse(p_rows, p_cols, p_vals, &curr_r, &mut ws[level + 1].r);
+            unsafe {
+                let ptr = ws.as_mut_ptr().add(level);
+                let z = std::slice::from_raw_parts_mut((*ptr).z.as_mut_ptr(), n);
+                let rhs = std::slice::from_raw_parts((*ptr).rhs.as_ptr(), n);
+                symmetric_gauss_seidel_smooth(&lvl.laplacian, z, rhs, self.omega);
+            }
+            drop(ws);
         }
 
-        // RECURSION STEP
-        let next_b = workspaces.borrow()[level + 1].r.clone();
-        self.v_cycle(workspaces, &next_b, level + 1);
+        {
+            let mut ws = workspaces.borrow_mut();
+            unsafe {
+                let ptr = ws.as_mut_ptr().add(level);
+                let z = std::slice::from_raw_parts((*ptr).z.as_ptr(), n);
+                let r = std::slice::from_raw_parts_mut((*ptr).r.as_mut_ptr(), n);
+                let rhs = std::slice::from_raw_parts((*ptr).rhs.as_ptr(), n);
+                mat_vec_mul_slice(&lvl.laplacian, z, r);
+                for i in 0..n {
+                    r[i] = rhs[i] - r[i];
+                }
+            }
+        }
 
-        // Prolongate correction: z_fine += P * z_coarse
+        let next_b_ptr: *const f64;
+        let next_b_len: usize;
+        {
+            let mut ws = workspaces.borrow_mut();
+            let ws_slice = ws.as_mut_slice();
+            let (left, right) = ws_slice.split_at_mut(level + 1);
+            let fine_ws = &left[level];
+            let coarse_ws = &mut right[0];
+            let (p_rows, p_cols, p_vals) = self.levels[level + 1].prolongation.as_ref().unwrap();
+            coarse_ws.rhs.fill(0.0);
+            restrict_sparse(p_rows, p_cols, p_vals, &fine_ws.r, &mut coarse_ws.rhs);
+            next_b_ptr = coarse_ws.rhs.as_ptr();
+            next_b_len = coarse_ws.rhs.len();
+        }
+
+        let next_b: &[f64] = unsafe { std::slice::from_raw_parts(next_b_ptr, next_b_len) };
+        self.v_cycle(workspaces, next_b, level + 1);
+
         let next_lvl = &self.levels[level + 1];
         {
             let mut ws = workspaces.borrow_mut();
-            ws[level].r.fill(0.0);
-            let next_z: Vec<f64> = ws[level + 1].z.clone();
-            let (p_rows, p_cols, p_vals) = next_lvl.prolongation.as_ref().expect("prolongation missing");
-            prolongate_sparse(p_rows, p_cols, p_vals, &next_z, &mut ws[level].r);
-        }
-
-        // Correct the current level's guess using the upsampled data
-        {
-            let mut ws = workspaces.borrow_mut();
+            let ws_slice = ws.as_mut_slice();
+            let (left, right) = ws_slice.split_at_mut(level + 1);
+            let fine_ws = &mut left[level];
+            let coarse_ws = &right[0];
+            let (p_rows, p_cols, p_vals) = next_lvl.prolongation.as_ref().unwrap();
+            fine_ws.r.fill(0.0);
+            prolongate_sparse(p_rows, p_cols, p_vals, &coarse_ws.z, &mut fine_ws.r);
             for i in 0..n {
-                ws[level].z[i] += ws[level].r[i];
+                fine_ws.z[i] += fine_ws.r[i];
             }
         }
 
-        // Post-smooth with symmetric Gauss-Seidel
         for _ in 0..self.nu {
             let mut ws = workspaces.borrow_mut();
-            symmetric_gauss_seidel_smooth(&lvl.laplacian, &mut ws[level].z, b, self.omega);
+            unsafe {
+                let ptr = ws.as_mut_ptr().add(level);
+                let z = std::slice::from_raw_parts_mut((*ptr).z.as_mut_ptr(), n);
+                let rhs = std::slice::from_raw_parts((*ptr).rhs.as_ptr(), n);
+                symmetric_gauss_seidel_smooth(&lvl.laplacian, z, rhs, self.omega);
+            }
+            drop(ws);
         }
     }
 }
@@ -389,6 +405,7 @@ fn symmetric_gauss_seidel_smooth(
     }
 }
 
+#[allow(dead_code)]
 fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
     solver::mat_vec_mul_into(a, v, out);
 }

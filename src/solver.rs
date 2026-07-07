@@ -125,3 +125,15 @@ pub(crate) fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
         }
     }
 }
+
+pub(crate) fn mat_vec_mul_slice(a: &CsMat<f64>, v: &[f64], out: &mut [f64]) {
+    for (row, out_slot) in out.iter_mut().enumerate() {
+        if let Some(rv) = a.outer_view(row) {
+            let mut acc = 0.0f64;
+            for (col, &val) in rv.iter() {
+                acc += val * v[col];
+            }
+            *out_slot = acc;
+        }
+    }
+}
