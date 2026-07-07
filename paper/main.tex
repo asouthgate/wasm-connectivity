@@ -6,7 +6,7 @@
 \usepackage{graphicx}
 \usepackage{hyperref} 
 
-\title{A WebAssembly/Rust connectivity modelling toolset for ecological and geospatial edge computing}
+\title{A connectivity modelling toolset for ecological and geospatial edge computing in WebAssembly/rust}
 \author{Alex Southgate}
 \date{\today}
 
@@ -15,42 +15,40 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the CircuitScape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust implementation of connectivity analysis functionality offered by scientific software such as Circuitscape. This approach may be useful for geospatial modelling software where the memory footprint/raster sizes are sufficiently small, especially when subject to resource constraints.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our implementation offers warm starts for repeated runs in interactive analysis, such as for repeated resistance map editing (e.g. adding features in scenario planning). Our results show that as expected, run-times for 1000x1000 raster networks are slower than Circuitscape, but fast enough to run in the browser without requiring a server.
 \end{abstract}
 
 \section{Introduction}
 
 The theory of linear circuits has found useful application in ecological connectivity modelling, 
 population genetics, and conservation \cite{mcrae2008using, mcrae2006isolation, mcrae2007circuit}, 
-especially through the circuitscape \cite{mcrae2016circuitscape} software. 
+especially through the Circuitscape \cite{mcrae2016circuitscape} software. 
 Circuit theory offers advantages beyond methods such as least-cost paths (see \cite{mcrae2007circuit}).
+At the same time, these modelling approaches can require large compute resources, cloud instances or servers,
+and technical expertise for maintenance.
 
-At the same time, compute is often constrained quantity due to global supply shortages and/or cost. 
-In the simplest case, a user runs circuitscape on their laptop or a server,
-depending on compute requirements and model complexity, as is typical in scientific computing. 
 In modern web applications, 
 a front-end browser application is often paired with a backend server which performs more computationally expensive jobs. 
 When scientific code is deployed into production web applications for practical use by customers (e.g. analysts) 
 outside of academia, a backend is required. However, for many applications, maintaining this infrastructure is costly. 
-Edge computing is a paradigm which basically means making use of compute close to the 'edge' of the cloud, 
+Edge computing means making use of compute close to the `edge' of the cloud, 
 which is either close to the user's computer, or the user's computer itself. 
 The problem with performing complex calculations in the browser is that browser code 
 (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction.
 To resolve this problem, WebAssembly was recently introduced,
 allowing fast C++ or Rust code to be run in a sandboxed browser environment. 
 It has previously been argued that WebAssembly is poised to transform scientific computing \cite{perkel2024no}.
-An academic might ask: why not just use my laptop?
-The answer to this is that often web applications integrate complex user controls
+In addition, web applications may integrate complex user controls
 (e.g. modelling controls directly on a map) that are time consuming to complete using scientific scripts,
-and requires expertise not always available to users outside of academia.
+requiring expertise not always available to users outside of academia.
 
-WebAssembly has found use in several scientific projects, including: PyIodide, a CPython port, supporting installs of NumPy and SciPy, amongst other packages\cite{pyodide2026};
+WebAssembly has found use in several scientific projects, including: Pyodide, a CPython port, supporting installs of NumPy and SciPy, amongst other packages\cite{pyodide2026};
 WebR \cite{webr2026}, a WebAssembly compilation of the R language; ITK-Wasm, for spatial/image analysis \cite{itkwasm2026}. 
-Application domains include software for mapping pipeline corosion \cite{guarneri2024web}, viral genomics \cite{ji2024viralwasm}, or cancer genome visualisation \cite{finney2018chromatic}.
+Application domains include software for mapping pipeline corrosion \cite{guarneri2024web}, viral genomics \cite{ji2024viralwasm}, or cancer genome visualisation \cite{finney2018chromatic}.
 
 
 This paper introduces a Rust library and WebAssembly bindings to allow connectivity analysis directly within web applications,
-such as GeoSpatial analysis software. We demonstrate reasonable
+such as geospatial analysis software. We demonstrate reasonable
  performance provided input images fit within browser sandbox memory limits,
  which has potential use for deployed scientific applications.
 
@@ -73,6 +71,9 @@ DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lida
 \subsection{Benchmarking}
 
 Benchmarking was undertaken on a laptop with a AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
+Benchmarking code was wrapped in a React applet which can be run locally and accessed via the code repository. Two benchmarks were run. 
+In the first case, a resistance map was generated at 1000x1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
+It was expected that, in the browser context, the first run would be slowest.
 
 \subsection{Connectivity model}
 
