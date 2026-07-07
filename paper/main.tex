@@ -87,21 +87,21 @@ We use the methodology introduced by \cite{mcrae2006isolation} to describe conne
 I = CV
 \end{equation}
 
-Secondly, for a given node (pixel), the conservation equation (Kirchoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) \eqref{eq:conservation} just means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$:
+Secondly, for a given node (pixel), the conservation equation (Kirchhoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) \eqref{eq:conservation} just means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$:
 
 \begin{equation}
 \label{eq:conservation}
-I_i = \sum_{j \in N(i)} C_{ij}V_{ij} + S_i = 0
+I_i = \sum_{j \in N(i)} C_{ij}V_{ij} - S_i = 0
 \end{equation}
 
 Given these two equations, only voltage differences $V_{ij}$ are unknown. Voltage, as a potential can be assumed to be a scalar quantity for a single node up to some constant, which leads to a system of equations \eqref{eq:system}:
 
 \begin{equation}
-\sum_{j \in N(i)} C_{ij}(V_i - V_j) = -S_i
+\sum_{j \in N(i)} C_{ij}(V_i - V_j) = S_i
 \end{equation}
 
 \begin{equation}
-\Big(\sum_{j \in N(i)} C_{ij}\Big)V_i - \sum_{j \in N(i)} C_{ij}V_j = -S_i
+\Big(\sum_{j \in N(i)} C_{ij}\Big)V_i - \sum_{j \in N(i)} C_{ij}V_j = S_i
 \end{equation}
 
 \begin{equation}
@@ -113,7 +113,7 @@ Which is a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. The matrix 
 
 \subsection{Modes}
 
-The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). If a raster image of source nodes is provided, then the resulting output is connectivity given inputs from the combined input sources, solved together, as in a conventional physical system like electrical circuits. Instead of the combined mode, where current will flow according to the global pressure gradient, some users may choose to intentionally superimpose $n \choose 2$ pairwise simulations from pairs of $n$ nodes, or $n \times m$ simulations between $n$ ssources and $m$ sinks. Each approach has different assumptions and interpretation. Each mode has the same underlying mathematical system and solver; in the case of a single pair, only two rows of the matrix $G$ are source/sink; in the case of a raster of currents, many rows are set to sources. Superposition of the different cases can be undertaken in a loop over the chosen sets of pairs.
+The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). If a raster image of source nodes is provided, then the resulting output is connectivity given inputs from the combined input sources, solved together, as in a conventional physical system like electrical circuits. Instead of the combined mode, where current will flow according to the global pressure gradient, some users may choose to intentionally superimpose $n \choose 2$ pairwise simulations from pairs of $n$ nodes, or $n \times m$ simulations between $n$ sources and $m$ sinks. Each approach has different assumptions and interpretation. Each mode has the same underlying mathematical system and solver; in the case of a single pair, only two rows of the matrix $L$ are source/sink; in the case of a raster of currents, many rows are set to sources. Superposition of the different cases can be undertaken in a loop over the chosen sets of pairs.
 
 \subsection{Solver}
 
@@ -143,10 +143,10 @@ Stepping in the direction $r$ at step $k$ gives us a new guess.
 \mathbf{v}_{k+1} = \mathbf{v}_{k} + \mathbf{\alpha} \mathbf{r}_k
 \]
 
-Taking the gradient and choosing an optimal step size $\alpha$ gets to the bottom of the hill for that slice. The next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. To get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that:
+Taking the gradient and choosing an optimal step size $\alpha$ gets to the bottom of the hill for that slice. The next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. In steepest descent, to get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that:
 
 \[
-\mathbf{\alpha}_{k} = \frac{\mathbf{p}_{k}^T \mathbf{r}_k}{\mathbf{p}_k^T \mathbf{L}\mathbf{p}_k}
+\mathbf{\alpha}_{k} = \frac{\mathbf{r}_{k}^T \mathbf{r}_k}{\mathbf{r}_k^T \mathbf{L}\mathbf{r}_k}
 \]
 
 However, stepping maximally in a sequence of orthogonal steps can be inefficient and lead to zig-zag steps. Instead, a kind of moving average or momentum can be applied to the steps. 
@@ -158,10 +158,10 @@ However, stepping maximally in a sequence of orthogonal steps can be inefficient
 In the case of CG, $\beta$ is:
 
 \[
-\beta_k = \frac{\mathbf{r}^T_k\mathbf{r}_k}{\mathbf{r}_{k-1}^T\mathbf{r}_{k-1}}
+\beta_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{r}_{k}^T\mathbf{r}_{k}}
 \]
 
-We also implement a preconditioner. As described in \cite[Ch. 4.3.4]{leveque2007finite}), convergence rate depends on condition number. We solve a transformed system:
+We also implement a preconditioner. As described in \cite[Ch. 4.3.4]{leveque2007finite}, convergence rate depends on condition number. We solve a transformed system:
 
 \[
 \mathbf{M}^{-1}\mathbf{L}\mathbf{v} = \mathbf{M}^{-1}\mathbf{s}
