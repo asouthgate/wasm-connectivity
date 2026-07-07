@@ -6,12 +6,6 @@ pub struct CgResult {
     pub iters: usize,
 }
 
-impl CgResult {
-    pub fn into_x(self) -> Vec<f64> {
-        self.x
-    }
-}
-
 /// Trait for PCG preconditioners. The implementor must approximate
 /// `M⁻¹·r` where `M` is a preconditioning matrix close to `A`.
 pub trait Preconditioner {
@@ -25,20 +19,7 @@ pub struct JacobiPreconditioner {
 
 impl JacobiPreconditioner {
     pub fn new(a: &CsMat<f64>) -> Self {
-        let n = a.rows();
-        let mut diag_inv = vec![0.0f64; n];
-        for (row, d) in diag_inv.iter_mut().enumerate() {
-            if let Some(rv) = a.outer_view(row) {
-                for (col, &val) in rv.iter() {
-                    if col == row {
-                        let abs_val = val.abs();
-                        *d = if abs_val > 1e-15 { 1.0 / abs_val } else { 0.0 };
-                        break;
-                    }
-                }
-            }
-        }
-        Self { diag_inv }
+        Self { diag_inv: crate::laplacian::extract_diag_inv(a) }
     }
 }
 
@@ -98,9 +79,6 @@ pub fn cg_solve_precond(
         }
 
         let r_norm = dot(&r, &r).sqrt();
-        println!("Iteration {:4}: Residual Norm = {:.6e}, Relative = {:.6e}", 
-            iter, r_norm, if b_norm > 1e-12 { r_norm / b_norm } else { r_norm }
-        );
 
         if r_norm / b_norm < tol { break; }
 
@@ -133,7 +111,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
-fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
+pub(crate) fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
     let n = a.rows();
     out.clear();
     out.resize(n, 0.0);

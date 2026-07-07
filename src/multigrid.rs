@@ -6,7 +6,6 @@
 
 use sprs::CsMat;
 use crate::solver::{self, Preconditioner};
-use crate::resample;
 use crate::cholesky;
 use std::time::Instant;
 use std::cell::RefCell;
@@ -19,7 +18,6 @@ const FILL_RESISTANCE: f64 = 1e9;
 /// One level of the multigrid hierarchy.
 struct MgLevel {
     laplacian: CsMat<f64>,
-    diag_inv: Vec<f64>,
     nrows: usize,
     ncols: usize,
     cholesky_l: Option<Vec<f64>>,
@@ -154,22 +152,8 @@ impl MgPreconditioner {
             num_nodes, nr * nc
         );
 
-        let mut diag_inv = vec![0.0f64; num_nodes];
-        for row in 0..num_nodes {
-            if let Some(rv) = laplacian.outer_view(row) {
-                for (col, &val) in rv.iter() {
-                    if col == row {
-                        let abs_val = val.abs();
-                        diag_inv[row] = if abs_val > 1e-15 { 1.0 / abs_val } else { 0.0 };
-                        break;
-                    }
-                }
-            }
-        }
-
         levels.push(MgLevel {
             laplacian,
-            diag_inv,
             nrows: nr,
             ncols: nc,
             cholesky_l: None,
@@ -206,22 +190,8 @@ impl MgPreconditioner {
             let mut laplacian = sprs::smmp::mul_csr_csr::<f64, f64, f64, usize, usize>(pt_lap.view(), p.view());
             crate::laplacian::regularize_laplacian(&mut laplacian);
 
-            let mut diag_inv = vec![0.0f64; coarse_n];
-            for row in 0..coarse_n {
-                if let Some(rv) = laplacian.outer_view(row) {
-                    for (col, &val) in rv.iter() {
-                        if col == row {
-                            let abs_val = val.abs();
-                            diag_inv[row] = if abs_val > 1e-15 { 1.0 / abs_val } else { 0.0 };
-                            break;
-                        }
-                    }
-                }
-            }
-
             levels.push(MgLevel {
                 laplacian,
-                diag_inv,
                 nrows: next_nr,
                 ncols: next_nc,
                 cholesky_l: None,
@@ -368,29 +338,9 @@ impl Preconditioner for MgPreconditioner {
         let elapsed = t0.elapsed();
         eprintln!("  V-cycle: {:.3}ms", elapsed.as_micros() as f64 / 1000.0);
         
-        let mut ws = self.workspaces.borrow_mut();
+        let ws = self.workspaces.borrow_mut();
         z.resize(r.len(), 0.0);
         z.copy_from_slice(&ws[0].z);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Smoother: damped Jacobi
-// ---------------------------------------------------------------------------
-
-fn damped_jacobi_smooth(
-    laplacian: &CsMat<f64>,
-    diag_inv: &[f64],
-    x: &mut [f64],
-    b: &[f64],
-    omega: f64,
-    ax: &mut Vec<f64>,
-) {
-    let n = b.len();
-    mat_vec_mul_into(laplacian, x, ax);
-    for row in 0..n {
-        let residual = b[row] - ax[row];
-        x[row] += omega * residual * diag_inv[row];
     }
 }
 
@@ -439,107 +389,8 @@ fn symmetric_gauss_seidel_smooth(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Restriction: 9-point full-weighting
-// ---------------------------------------------------------------------------
-
-pub fn restrict_2d_into(fine: &[f64], fine_nrows: usize, fine_ncols: usize, coarse: &mut [f64]) {
-    let cn = fine_nrows / 2;
-    let cm = fine_ncols / 2;
-    
-    for val in coarse.iter_mut() { *val = 0.0; }
-
-    for cr in 0..cn {
-        for cc in 0..cm {
-            let r0 = cr * 2;
-            let c0 = cc * 2;
-            let r1 = r0 + 1;
-            let c1 = c0 + 1;
-
-            let mut sum = 0.0;
-            let mut count = 0.0;
-
-            sum += fine[r0 * fine_ncols + c0];
-            count += 1.0;
-            if c1 < fine_ncols {
-                sum += fine[r0 * fine_ncols + c1];
-                count += 1.0;
-            }
-            if r1 < fine_nrows {
-                sum += fine[r1 * fine_ncols + c0];
-                count += 1.0;
-                if c1 < fine_ncols {
-                    sum += fine[r1 * fine_ncols + c1];
-                    count += 1.0;
-                }
-            }
-            coarse[cr * cm + cc] = sum / count;
-        }
-    }
-}
-
-pub fn prolongate_2d_into(
-    coarse: &[f64],
-    coarse_nrows: usize,
-    coarse_ncols: usize,
-    fine_nrows: usize,
-    fine_ncols: usize,
-    fine: &mut [f64],
-) {
-    for val in fine.iter_mut() { *val = 0.0; }
-
-    for cr in 0..coarse_nrows {
-        for cc in 0..coarse_ncols {
-            let val = coarse[cr * coarse_ncols + cc];
-            let r0 = cr * 2;
-            let c0 = cc * 2;
-            let r1 = r0 + 1;
-            let c1 = c0 + 1;
-
-            if r0 < fine_nrows && c0 < fine_ncols {
-                fine[r0 * fine_ncols + c0] += val;
-            }
-            if r0 < fine_nrows && c1 < fine_ncols {
-                fine[r0 * fine_ncols + c1] += val;
-            }
-            if r1 < fine_nrows && c0 < fine_ncols {
-                fine[r1 * fine_ncols + c0] += val;
-            }
-            if r1 < fine_nrows && c1 < fine_ncols {
-                fine[r1 * fine_ncols + c1] += val;
-            }
-        }
-    }
-}
-
 fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
-    let n = a.rows();
-    out.resize(n, 0.0);
-    out.fill(0.0);
-
-    // Bind the indptr view storage locally so its lifetime lasts for the entire function
-    let indptr_storage = a.indptr();
-    let indptr = indptr_storage.as_slice().expect("CSR matrix missing standard indptr slice");
-    let indices = a.indices();
-    let data = a.data();
-
-    for row in 0..n {
-        let start = indptr[row];
-        let end = indptr[row + 1];
-        
-        let mut acc = 0.0;
-        let mut i = start;
-        while i < end {
-            acc += data[i] * v[indices[i]];
-            i += 1;
-        }
-        out[row] = acc;
-    }
-}
-/// Helper function to safely split a mutable slice around a focal level index for recursive manipulation
-fn error_split_at_mut(slice: &mut [LevelWorkspace], index: usize) -> (&mut LevelWorkspace, &mut [LevelWorkspace]) {
-    let (left, right) = slice.split_at_mut(index + 1);
-    (&mut left[index], right)
+    solver::mat_vec_mul_into(a, v, out);
 }
 
 #[cfg(test)]
@@ -588,25 +439,6 @@ mod tests {
             (dot_x_my - dot_y_mx).abs() < 1e-6, 
             "MG Preconditioner is asymmetric! x*M(y) = {}, y*M(x) = {}", dot_x_my, dot_y_mx
         );
-    }
-
-    #[test]
-    fn test_restriction_prolongation_preservation() {
-        let fine_rows = 15;
-        let fine_cols = 15;
-        let coarse_rows = 7;
-        let coarse_cols = 7;
-        
-        let fine_constant = vec![1.0; fine_rows * fine_cols];
-        let mut coarse_out = vec![0.0; coarse_rows * coarse_cols];
-        
-        // Restrict down
-        restrict_2d_into(&fine_constant, fine_rows, fine_cols, &mut coarse_out);
-        
-        // A uniform vector must map cleanly. Ensure no nodes are dropped or left unvisited.
-        for (i, &val) in coarse_out.iter().enumerate() {
-            assert!(val > 0.0, "Restriction zeroed out or dropped node at index {}", i);
-        }
     }
 
     #[test]
@@ -686,10 +518,11 @@ mod tests {
                                 "Level {}: diagonal[{}] = {:.6e} (must be positive)",
                                 level_idx, row, val
                             );
+                            let diag_inv = if val.abs() > 1e-15 { 1.0 / val.abs() } else { 0.0 };
                             assert!(
-                                lvl.diag_inv[row] > 0.0,
+                                diag_inv > 0.0,
                                 "Level {}: diag_inv[{}] = {:.6e} (must be positive)",
-                                level_idx, row, lvl.diag_inv[row]
+                                level_idx, row, diag_inv
                             );
                         }
                     }
@@ -706,7 +539,7 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
 
-        let z: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.7 + 1.3).sin() * 0.5 + 0.3)).collect();
+        let z: Vec<f64> = (0..n).map(|i| (i as f64 * 0.7 + 1.3).sin() * 0.5 + 0.3).collect();
         let mut mz = vec![0.0; n];
         mg.apply(&z, &mut mz);
 
@@ -717,7 +550,7 @@ mod tests {
             z_mz
         );
 
-        let z2: Vec<f64> = (0..n).map(|i| ((i as f64 * 1.1 + 2.7).cos() * 0.8 - 0.2)).collect();
+        let z2: Vec<f64> = (0..n).map(|i| (i as f64 * 1.1 + 2.7).cos() * 0.8 - 0.2).collect();
         let mut mz2 = vec![0.0; n];
         mg.apply(&z2, &mut mz2);
         let z2_mz2: f64 = z2.iter().zip(mz2.iter()).map(|(a, b)| a * b).sum();
@@ -748,132 +581,6 @@ mod tests {
             r_z > 0.0,
             "Preconditioned residual is anti-aligned with residual: rᵀ·z = {:.6e} (must be > 0)",
             r_z
-        );
-    }
-
-    #[test]
-    fn test_restriction_prolongation_roundtrip() {
-        let fine_rows = 15;
-        let fine_cols = 15;
-        let coarse_rows = 7;
-        let coarse_cols = 7;
-
-        let fine_constant = vec![1.0; fine_rows * fine_cols];
-
-        let mut coarse = vec![0.0; coarse_rows * coarse_cols];
-        restrict_2d_into(&fine_constant, fine_rows, fine_cols, &mut coarse);
-
-        for cr in 0..coarse_rows {
-            for cc in 0..coarse_cols {
-                assert!(
-                    (coarse[cr * coarse_cols + cc] - 1.0).abs() < 1e-10,
-                    "Coarse point ({},{}) = {:.6e}, expected 1.0",
-                    cr, cc, coarse[cr * coarse_cols + cc]
-                );
-            }
-        }
-
-        let mut fine_roundtrip = vec![0.0; fine_rows * fine_cols];
-        prolongate_2d_into(&coarse, coarse_rows, coarse_cols, fine_rows, fine_cols, &mut fine_roundtrip);
-
-        // Only check the covered region (0..2*coarse_rows, 0..2*coarse_cols)
-        // since odd fine dimensions leave orphaned boundary cells.
-        let covered_rows = 2 * coarse_rows;
-        let covered_cols = 2 * coarse_cols;
-        let mut max_err = 0.0;
-        for r in 0..covered_rows {
-            for c in 0..covered_cols {
-                let err = (1.0 - fine_roundtrip[r * fine_cols + c]).abs();
-                if err > max_err {
-                    max_err = err;
-                }
-            }
-        }
-        assert!(
-            max_err < 1e-10,
-            "Covered-region roundtrip error too large: max_err = {:.6e}",
-            max_err
-        );
-    }
-
-    #[test]
-    fn test_restriction_prolongation_roundtrip_full() {
-        let fine_rows = 16;
-        let fine_cols = 16;
-        let coarse_rows = 8;
-        let coarse_cols = 8;
-
-        let fine_constant = vec![1.0; fine_rows * fine_cols];
-
-        let mut coarse = vec![0.0; coarse_rows * coarse_cols];
-        restrict_2d_into(&fine_constant, fine_rows, fine_cols, &mut coarse);
-
-        for cr in 0..coarse_rows {
-            for cc in 0..coarse_cols {
-                assert!(
-                    (coarse[cr * coarse_cols + cc] - 1.0).abs() < 1e-10,
-                    "Coarse point ({},{}) = {:.6e}, expected 1.0",
-                    cr, cc, coarse[cr * coarse_cols + cc]
-                );
-            }
-        }
-
-        let mut fine_roundtrip = vec![0.0; fine_rows * fine_cols];
-        prolongate_2d_into(&coarse, coarse_rows, coarse_cols, fine_rows, fine_cols, &mut fine_roundtrip);
-
-        let mut max_err = 0.0;
-        for i in 0..fine_constant.len() {
-            let err = (fine_constant[i] - fine_roundtrip[i]).abs();
-            if err > max_err {
-                max_err = err;
-            }
-        }
-        assert!(
-            max_err < 1e-10,
-            "Full roundtrip error too large: max_err = {:.6e}",
-            max_err
-        );
-    }
-
-    #[test]
-    fn test_restriction_prolongation_linear() {
-        let fine_rows = 16;
-        let fine_cols = 16;
-        let coarse_rows = 8;
-        let coarse_cols = 8;
-
-        let fine_linear: Vec<f64> = (0..fine_rows * fine_cols)
-            .map(|i| {
-                let r = i / fine_cols;
-                let c = i % fine_cols;
-                (r as f64) / (fine_rows as f64) + (c as f64) / (fine_cols as f64)
-            })
-            .collect();
-
-        let mut coarse = vec![0.0; coarse_rows * coarse_cols];
-        restrict_2d_into(&fine_linear, fine_rows, fine_cols, &mut coarse);
-
-        let mut fine_roundtrip = vec![0.0; fine_rows * fine_cols];
-        prolongate_2d_into(&coarse, coarse_rows, coarse_cols, fine_rows, fine_cols, &mut fine_roundtrip);
-
-        // Block-averaged linear function should roundtrip exactly at coarse points
-        // and be piecewise-constant in between.
-        let mut max_err = 0.0;
-        for r in 0..fine_rows {
-            for c in 0..fine_cols {
-                let cr = r / 2;
-                let cc = c / 2;
-                let expected = coarse[cr * coarse_cols + cc];
-                let err = (fine_roundtrip[r * fine_cols + c] - expected).abs();
-                if err > max_err {
-                    max_err = err;
-                }
-            }
-        }
-        assert!(
-            max_err < 1e-10,
-            "Linear roundtrip error too large: max_err = {:.6e}",
-            max_err
         );
     }
 
@@ -925,11 +632,10 @@ mod tests {
             let n = lvl.nrows * lvl.ncols;
             let b = vec![0.0; n];
             let mut x: Vec<f64> = (0..n).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
-            let mut ax = vec![0.0; n];
 
             let initial_norm = x.iter().map(|v| v * v).sum::<f64>().sqrt();
             for _ in 0..3 {
-                damped_jacobi_smooth(&lvl.laplacian, &lvl.diag_inv, &mut x, &b, mg.omega, &mut ax);
+                symmetric_gauss_seidel_smooth(&lvl.laplacian, &mut x, &b, mg.omega);
             }
             let final_norm = x.iter().map(|v| v * v).sum::<f64>().sqrt();
 
@@ -1039,13 +745,13 @@ mod tests {
         let n = nrows * ncols;
 
         let resistance = generate_mock_resistance(nrows, ncols);
-        let (_nodemap, num_nodes, _edges, full_lap, components) =
+        let (_nodemap, _num_nodes, _edges, full_lap, components) =
             crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
 
         assert_eq!(components.len(), 1, "Uniform grid should have exactly 1 component");
         assert_eq!(components[0].len(), n, "Component should include all nodes");
 
-        let (a_local, node_to_local) = crate::components::build_subgraph_laplacian(&full_lap, &components[0]);
+        let (a_local, _node_to_local) = crate::components::build_subgraph_laplacian(&full_lap, &components[0]);
 
         // Build inverse map: local index -> global index
         let comp = &components[0];
@@ -1090,15 +796,16 @@ mod tests {
         let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
+            let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
             let n = lvl.nrows * lvl.ncols;
             let mut min_inv = f64::MAX;
             let mut max_inv = 0.0;
             for i in 0..n {
-                if lvl.diag_inv[i] < min_inv {
-                    min_inv = lvl.diag_inv[i];
+                if diag_inv[i] < min_inv {
+                    min_inv = diag_inv[i];
                 }
-                if lvl.diag_inv[i] > max_inv {
-                    max_inv = lvl.diag_inv[i];
+                if diag_inv[i] > max_inv {
+                    max_inv = diag_inv[i];
                 }
             }
             eprintln!("Level {}: diag_inv range = [{:.6e}, {:.6e}] (ratio = {:.2e})",
@@ -1176,12 +883,13 @@ mod tests {
         let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
+            let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
             let nn = lvl.nrows * lvl.ncols;
             let mut min_d = f64::MAX;
             let mut max_d = 0.0;
             for i in 0..nn {
-                if lvl.diag_inv[i] < min_d { min_d = lvl.diag_inv[i]; }
-                if lvl.diag_inv[i] > max_d { max_d = lvl.diag_inv[i]; }
+                if diag_inv[i] < min_d { min_d = diag_inv[i]; }
+                if diag_inv[i] > max_d { max_d = diag_inv[i]; }
             }
             eprintln!("Level {}: diag_inv [{:.4e}, {:.4e}] ratio {:.2e}",
                 level_idx, min_d, max_d, max_d / min_d.max(1e-30));

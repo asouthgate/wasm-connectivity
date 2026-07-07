@@ -1,6 +1,23 @@
 use sprs::CsMat;
 use crate::graph::EdgeTriplets;
 
+pub fn extract_diag_inv(lap: &CsMat<f64>) -> Vec<f64> {
+    let n = lap.rows();
+    let mut diag_inv = vec![0.0f64; n];
+    for row in 0..n {
+        if let Some(rv) = lap.outer_view(row) {
+            for (col, &val) in rv.iter() {
+                if col == row {
+                    let abs_val = val.abs();
+                    diag_inv[row] = if abs_val > 1e-15 { 1.0 / abs_val } else { 0.0 };
+                    break;
+                }
+            }
+        }
+    }
+    diag_inv
+}
+
 // Regularizes the Laplacian matrix by adding a small value to the diagonal elements,
 // in order to ensure numerical stability and avoid singular matrices.
 pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
@@ -65,19 +82,6 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     lap
 }
 
-// Retrieves the neighbors of a given node in the Laplacian matrix.
-pub fn get_row_neighbors(lap: &CsMat<f64>, row: usize) -> Vec<(usize, f64)> {
-    let mut neighbors = Vec::new();
-    if let Some(rv) = lap.outer_view(row) {
-        for (col, &val) in rv.iter() {
-            if col != row {
-                neighbors.push((col, val.abs()));
-            }
-        }
-    }
-    neighbors
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,7 +96,14 @@ mod tests {
         assert_eq!(lap.rows(), 2);
         assert_eq!(lap.cols(), 2);
 
-        let neighbors = get_row_neighbors(&lap, 0);
+        let mut neighbors = Vec::new();
+        if let Some(rv) = lap.outer_view(0) {
+            for (col, &val) in rv.iter() {
+                if col != 0 {
+                    neighbors.push((col, val.abs()));
+                }
+            }
+        }
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].0, 1);
         assert!((neighbors[0].1 - 5.0).abs() < 1e-10);

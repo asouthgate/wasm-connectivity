@@ -442,8 +442,7 @@ pub fn solve_raster_sources_mg(
 }
 
 /// Solve the full-grid system `L * v = b` with a preconditioner.
-/// Unlike `solve_component_voltages_precond`, this does NOT extract
-/// subgraph Laplacians — it operates on the full-grid matrix directly.
+/// Operates on the full-grid matrix directly (no subgraph extraction).
 fn solve_full_grid_precond(
     current_global: &[f64],
     laplacian: &CsMat<f64>,
@@ -467,67 +466,6 @@ fn solve_full_grid_precond(
 
     let res = solver::cg_solve_precond(laplacian, &b, max_iter, tol, None, precond);
     (res.x, res.iters)
-}
-
-fn solve_component_voltages_precond(
-    components: &[Vec<usize>],
-    current_global: &[f64],
-    laplacian: &CsMat<f64>,
-    num_nodes: usize,
-    max_iter: usize,
-    tol: f64,
-    remove_average: bool,
-    prior_voltages: Option<&[f64]>,
-    precond: &dyn solver::Preconditioner,
-) -> (Vec<f64>, usize) {
-    let mut voltages_global = vec![0.0f64; num_nodes];
-    let mut current_local = Vec::with_capacity(num_nodes);
-    let mut total_iters = 0usize;
-
-    for comp in components {
-        let total_current: f64 = comp.iter().map(|&gn| current_global[gn].abs()).sum();
-        if !total_current.is_finite() || total_current < 1e-15 {
-            continue;
-        }
-
-        let (a_local, _node_to_local) =
-            components::build_subgraph_laplacian(laplacian, comp);
-        let comp_size = comp.len();
-
-        current_local.clear();
-        for &gn in comp {
-            current_local.push(current_global[gn]);
-        }
-
-        if remove_average {
-            let sum: f64 = current_local.iter().sum();
-            if sum.abs() > 1e-15 {
-                let mean = sum / comp_size as f64;
-                for v in &mut current_local {
-                    *v -= mean;
-                }
-            }
-        }
-
-        let local_seed = prior_voltages.map(|pv| {
-            let mut seed = Vec::with_capacity(comp_size);
-            for &gn in comp {
-                seed.push(if gn < pv.len() { pv[gn] } else { 0.0 });
-            }
-            seed
-        });
-        let local_seed_ref = local_seed.as_ref().map(|s| s.as_slice());
-
-        let res = solver::cg_solve_precond(&a_local, &current_local, max_iter, tol, local_seed_ref, precond);
-        total_iters += res.iters;
-        let voltages_local = res.x;
-
-        for (li, &gn) in comp.iter().enumerate() {
-            voltages_global[gn] = voltages_local[li];
-        }
-    }
-
-    (voltages_global, total_iters)
 }
 
 fn solve_component_voltages_warm(

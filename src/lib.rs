@@ -316,7 +316,6 @@ fn compute_points(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn make_uniform_resistance_grid(size: usize, resistance: f64) -> (Vec<f64>, Vec<i32>) {
         let n = size * size;
@@ -344,24 +343,6 @@ mod tests {
         point_data[n - 1] = 2;
 
         (res_data, point_data)
-    }
-
-    fn write_pgm(filename: &str, data: &[f64], nrows: usize, ncols: usize) {
-        let max_val = data.iter().copied().fold(0.0f64, f64::max);
-        let scale = if max_val > 0.0 { 255.0 / max_val } else { 1.0 };
-
-        let mut file = std::fs::File::create(filename).unwrap();
-        writeln!(file, "P2").unwrap();
-        writeln!(file, "{} {}", ncols, nrows).unwrap();
-        writeln!(file, "255").unwrap();
-
-        for row in 0..nrows {
-            for col in 0..ncols {
-                let v = (data[row * ncols + col] * scale).round() as u32;
-                write!(file, "{} ", v.min(255)).unwrap();
-            }
-            writeln!(file).unwrap();
-        }
     }
 
     #[test]
@@ -461,20 +442,5 @@ mod tests {
             center_voltage > 0.0,
             "Center voltage should be positive for current source"
         );
-    }
-
-    #[test]
-    fn test_output_pgm_images() {
-        let (res_data, point_data) = make_uniform_resistance_grid(10, 1.0);
-        let output = compute_points(&res_data, 10, 10, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
-
-        write_pgm("/tmp/uniform_current.pgm", &output.current_map, 10, 10);
-        println!("Wrote /tmp/uniform_current.pgm");
-
-        let (res_data2, point_data2) = make_corridor_grid();
-        let output2 = compute_points(&res_data2, 10, 10, NODATA_SENTINEL, point_data2, DEFAULT_MAX_ITER, DEFAULT_TOL);
-
-        write_pgm("/tmp/corridor_current.pgm", &output2.current_map, 10, 10);
-        println!("Wrote /tmp/corridor_current.pgm");
     }
 }
