@@ -380,6 +380,11 @@ fn build_global_currents(
 /// high resistance so the domain is a perfect rectangle, builds a
 /// geometric multigrid hierarchy, and uses MG V-cycles as the CG
 /// preconditioner.  Returns the output plus total PCG iteration count.
+///
+/// Unlike the Jacobi-preconditioned path, this solves the full-grid system
+/// directly (no component extraction) because the MG hierarchy is built on
+/// the full rectangular grid and its restriction/prolongation operators
+/// assume raster-order indexing.
 pub fn solve_raster_sources_mg(
     resistance_data: &[f64],
     nrows: usize,
@@ -394,7 +399,7 @@ pub fn solve_raster_sources_mg(
     // Fill nodata → every cell is a node → rectangular grid
     let filled = multigrid::fill_nodata(resistance_data, nodata);
 
-    let (nodemap, num_nodes, _edges, laplacian, components) =
+    let (nodemap, num_nodes, _edges, laplacian, _components) =
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
 
     let current_global = build_global_currents(
@@ -404,16 +409,44 @@ pub fn solve_raster_sources_mg(
     // Build MG hierarchy on the filled resistance
     let mg = MgPreconditioner::build(&filled, nrows, ncols, nodata, 8);
 
-    // Solve with MG preconditioner
-    let (voltages_global, iters) = solve_component_voltages_precond(
-        &components, &current_global, &laplacian,
-        num_nodes, max_iter, tol, remove_average, None,
+    // Solve the full-grid system directly (no subgraph extraction)
+    let (voltages_global, iters) = solve_full_grid_precond(
+        &current_global, &laplacian,
+        num_nodes, max_iter, tol, remove_average,
         &mg,
     );
 
     let out = build_raster_output(&voltages_global, &laplacian, &nodemap, nrows, ncols);
 
     AnnotatedOutput { output: out, total_iters: iters }
+}
+
+/// Solve the full-grid system `L * v = b` with a preconditioner.
+/// Unlike `solve_component_voltages_precond`, this does NOT extract
+/// subgraph Laplacians — it operates on the full-grid matrix directly.
+fn solve_full_grid_precond(
+    current_global: &[f64],
+    laplacian: &CsMat<f64>,
+    num_nodes: usize,
+    max_iter: usize,
+    tol: f64,
+    remove_average: bool,
+    precond: &dyn solver::Preconditioner,
+) -> (Vec<f64>, usize) {
+    let mut b = current_global.to_vec();
+
+    if remove_average {
+        let sum: f64 = b.iter().sum();
+        if sum.abs() > 1e-15 {
+            let mean = sum / num_nodes as f64;
+            for v in &mut b {
+                *v -= mean;
+            }
+        }
+    }
+
+    let res = solver::cg_solve_precond(laplacian, &b, max_iter, tol, None, precond);
+    (res.x, res.iters)
 }
 
 fn solve_component_voltages_precond(
