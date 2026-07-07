@@ -2,6 +2,8 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage{amsmath, amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
 \DeclareMathOperator{\diag}{diag} 
 \usepackage{graphicx}
 \usepackage{hyperref} 
@@ -114,7 +116,7 @@ The simplest run mode is for a source and sink pair, equivalent to a conditional
 
 \subsection{Solver}
 
-Given an $N\times M$ image, the matrix $L$ takes $O(NM)$ space. In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised CHOLMOD libraries that are not available in a WASM context. We utilise the conjugate gradient method with jacobi preconditioning for simplicity. This method is iterative and memory efficient, at $O(MN)$ space and $O(kMN)$ time for $k$ iterations. We implement our CG solver in order to reduce dependencies for the WASM context. 
+Given an $N\times M$ image, the matrix $L$ takes $O(NM)$ space. In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised CHOLMOD libraries that are not available in a WASM context. In order to keep the WASM binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
 
 A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for WASM, a brief explanation follows. Solving the system:
 
@@ -158,21 +160,89 @@ In the case of CG, $\beta$ is:
 \beta_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{r}_{k}^T\mathbf{r}_{k}}
 \]
 
-We also implement a preconditioner. As described in \cite[Ch. 4.3.4]{leveque2007finite}, convergence rate depends on condition number. We solve a transformed system:
+
+\subsubsection{Preconditioning} 
+
+As described in \cite[Ch. 4.3.4]{leveque2007finite}, convergence rate depends on condition number. We solve a transformed system:
 
 \[
 \mathbf{M}^{-1}\mathbf{L}\mathbf{v} = \mathbf{M}^{-1}\mathbf{s}
 \] 
 
-Where $\mathbf{M}^{-1}$ approximates $\mathbf{L}$, 
-reducing the condition number. 
-We utilise a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, 
-also known as a Jacobi preconditioner, 
-which can be useful in instances of highly variable parameters such as material density or irregular meshes \cite{wathen2015preconditioning}.
-We utilise this simple method to reduce WASM dependencies and binary footprint. 
-For front-end web applications, it is crucial that data transfer is minimised
-For some ecological rasters, this method is not preferred,
+Where $\mathbf{M}^{-1}$ approximates $\mathbf{L}$, reducing the condition number. 
+We compare several preconditioners: a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, 
+which can be useful for some data \cite{wathen2015preconditioning}; a geometric multigrid (GMG) preconditioner, which is more complex but converges faster \cite{tatebe1993multigrid};
+an Alcouffe preconditioner \cite{alcouffe1981multi}, which is better for sharply contrasting features.
+We implement these methods directly to reduce WASM dependencies and binary footprint. 
 such as in Circuitscape, where the algebraic multigrid (AMG) preconditioner is offered \cite{hall2021circuitscape}.
+
+The GMG preconditioner is more complex than the Jacobi preconditioner, which smoothes high-frequency features. It requires computing a correction $\mathbf{e}$ using a sequence of coarse-grained matrices and passing them up. At the lowest resolution, the system is solved using Cholesky decomposition. The algorithm proceeds as follows.
+The finest grid is smoothed with a few iterations of a Jacobi smoother. The residual is calculated:
+
+\[
+r = \mathbf{s} - \mathbf{L}\mathbf{v}
+\]
+
+This residual is passed down to a coarser grid using a restriction operator $R$. 
+This will be balanced with a prolongation operator, which is a scaled transpose $P = cR^T$, on the way back up.
+These operators are comparable to downsampling and upsampling.
+This is applied repeatedly until the coarsest resolution is reached.
+Then, the system is solved directly to get the coarse error:
+
+\[
+\mathbf{e}_{coarse} = \Big(\mathbf{L}_{coarse}\Big)^{-1}\mathbf{r}_{coarse}
+\]
+
+After the coarse error is calculated, it is passed upwards via the prolongation $P$,
+which was implemented with bilinear interpolation. The errors are passed up:
+
+\[
+\mathbf{e}_{fine} = P\mathbf{e}_{coarse}
+\]
+
+\[
+\mathbf{v}_{fine} \leftarrow \mathbf{v}_{fine} + \mathbf{e}_{fine}
+\]
+
+At the end of each step, post-smoothing is required to balance pre-smoothing. This cycle is referred to as the `V-cycle'. 
+Algorithm \ref{alg:gmg_vcycle} shows one cycle.
+
+\begin{figure}[h]
+\centering
+\hrule
+\vspace{0.5em}
+\noindent\textbf{Algorithm: Geometric Multigrid V-Cycle Preconditioner Step}
+\vspace{0.5em}
+\hrule
+\vspace{0.5em}
+\begin{tabbing}
+\quad \= \quad \= \quad \= \quad \= \kill
+\textbf{Function} $\text{V}(\mathbf{L}_l, \mathbf{s}_l, \mathbf{v}_l, l)$ \\
+\> \> \textbf{if} $l == 0$ \textbf{then}\\
+\> \> \> \> \textbf{return} $\mathbf{e}_0 = \text{Solve}(\mathbf{L}_0, \mathbf{s}_0)$ \\
+\> \> \textbf{end if} \\
+\\
+\> \> $\mathbf{v}_l \leftarrow \text{Smooth}(\mathbf{L}_l, \mathbf{v}_l, \mathbf{s}_l)$ \\
+\\
+\> \> $\mathbf{r}_l = \mathbf{s}_l - \mathbf{L}_l \mathbf{v}_l$ \\
+\> \> $\mathbf{s}_{l-1} = R \mathbf{r}_l$ \\
+\> \> $\mathbf{v}_{l-1} = \mathbf{0}$ \\
+\\
+\> \> $\mathbf{e}_{l-1} \leftarrow \text{V}(\mathbf{L}_{l-1}, \mathbf{s}_{l-1}, \mathbf{v}_{l-1}, l-1)$ \\
+\\
+\> \> $\mathbf{e}_l = P \mathbf{e}_{l-1}$ \\
+\> \> $\mathbf{v}_l \leftarrow \mathbf{v}_l + \mathbf{e}_l$ \\
+\\
+\> \> $\mathbf{v}_l \leftarrow \text{Smooth}(\mathbf{L}_l, \mathbf{v}_l, \mathbf{s}_l)$ \\
+\\
+\> \> \textbf{return} $\mathbf{v}_l$ \\
+\textbf{End Function}
+\end{tabbing}
+\hrule
+\caption{One step of the preconditioner V-cycle}
+\label{alg:gmg_vcycle}
+\end{figure}
+
 
 \subsection{Code}
 
