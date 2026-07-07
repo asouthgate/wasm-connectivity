@@ -8,16 +8,18 @@ pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
     if !norm.is_finite() || norm <= 0.0 {
         return;
     }
-    let epsilon = f64::EPSILON * norm;
-    for (row, mut row_vec) in lap.outer_iterator_mut().enumerate() {
+    
+    // Explicitly ground the first node on every level.
+    // This creates a reliable, invariant potential reference across the entire hierarchy.
+    if let Some(mut row_vec) = lap.outer_view_mut(0) {
         for (col, val) in row_vec.iter_mut() {
-            if col == row {
-                *val += epsilon;
+            if col == 0 {
+                *val += 1e-5 * norm;
+                break;
             }
         }
     }
 }
-
 // Compute the effective conductances between nodes
 //
 // This is the matrix L = D - A

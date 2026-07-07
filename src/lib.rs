@@ -5,8 +5,11 @@ pub mod components;
 pub mod solver;
 pub mod current;
 pub mod solve;
+pub mod cache;
 pub mod geospatial;
 pub mod resample;
+pub mod multigrid;
+pub mod cholesky;
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -86,6 +89,87 @@ pub fn solve_raster_sources(
 }
 
 #[wasm_bindgen]
+pub fn solve_raster_sources_cached(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+    rebuild_laplacian: bool,
+) -> String {
+    let annotated = solve::solve_raster_cached(
+        &resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+        true,
+        rebuild_laplacian,
+    );
+    json_response(&annotated)
+}
+
+#[wasm_bindgen]
+pub fn solve_raster_sources_mg(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+) -> String {
+    let annotated = solve::solve_raster_sources_mg(
+        &resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+        true,
+    );
+    json_response(&annotated)
+}
+
+#[wasm_bindgen]
+pub fn solve_point_sources_cached(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    point_data: Vec<i32>,
+    max_iter: usize,
+    tol: f64,
+    rebuild_laplacian: bool,
+) -> String {
+    let annotated = solve::solve_point_cached(
+        &resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        &point_data,
+        max_iter,
+        tol,
+        rebuild_laplacian,
+    );
+    json_response(&annotated)
+}
+
+#[wasm_bindgen]
+pub fn reset_cache() {
+    cache::reset();
+}
+
+#[wasm_bindgen]
 pub fn run_geospatial_pipeline(
     base_raster: Vec<f64>,
     nrows: usize,
@@ -115,6 +199,42 @@ pub fn run_geospatial_pipeline(
         &ground_data,
         max_iter,
         tol,
+    );
+    json_response(&output)
+}
+
+#[wasm_bindgen]
+pub fn run_geospatial_pipeline_cached(
+    base_raster: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+    rebuild_laplacian: bool,
+) -> String {
+    let output = geospatial::run_geospatial_pipeline_cached(
+        &base_raster,
+        nrows,
+        ncols,
+        nodata,
+        &geojson_str,
+        &layer_params_str,
+        xmin,
+        ymax,
+        cellsize,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+        rebuild_laplacian,
     );
     json_response(&output)
 }

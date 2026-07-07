@@ -278,6 +278,10 @@ pub struct GeospatialOutput {
     pub nrows: usize,
     pub ncols: usize,
     pub warnings: Vec<String>,
+    /// Total PCG iterations across all component solves. `0` for the
+    /// uncached path which does not report iteration counts; populated
+    /// only by the cached warm-start variant.
+    pub total_iters: usize,
 }
 
 pub fn prepare_geospatial_layers(
@@ -307,10 +311,11 @@ pub fn prepare_geospatial_layers(
     let (resistance_data, m) = rasterize_features(
         geojson_str, &layer_params, base_raster, nrows, ncols, &transform, &mut warnings,
     );
-    let layer_masks: Vec<LayerMask> = m.into_iter()
+    let mut layer_masks: Vec<LayerMask> = m.into_iter()
         .filter(|(_, v)| v.iter().any(|&x| x > 0.0))
         .map(|(name, data)| LayerMask { name, data })
         .collect();
+    layer_masks.sort_by(|a, b| a.name.cmp(&b.name));
     (resistance_data, layer_masks, warnings)
 }
 
@@ -362,6 +367,49 @@ pub fn run_geospatial_pipeline(
         nrows: raster_output.nrows,
         ncols: raster_output.ncols,
         warnings,
+        total_iters: 0,
+    }
+}
+
+/// Cached variant of `run_geospatial_pipeline` that routes the solve
+/// through `solve::solve_raster_cached` and reports the total PCG
+/// iteration count. See that function's docs for the
+/// `rebuild_laplacian` contract.
+pub fn run_geospatial_pipeline_cached(
+    base_raster: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: &str,
+    layer_params_str: &str,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    rebuild_laplacian: bool,
+) -> GeospatialOutput {
+    let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
+        base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
+    );
+
+    let annotated = crate::solve::solve_raster_cached(
+        &resistance_data, nrows, ncols, nodata,
+        source_data, ground_data, max_iter, tol, true,
+        rebuild_laplacian,
+    );
+
+    GeospatialOutput {
+        resistance_map: resistance_data,
+        current_map: annotated.output.current_map,
+        voltage_map: annotated.output.voltages,
+        layer_masks,
+        nrows: annotated.output.nrows,
+        ncols: annotated.output.ncols,
+        warnings,
+        total_iters: annotated.total_iters,
     }
 }
 

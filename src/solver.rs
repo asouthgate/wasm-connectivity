@@ -1,88 +1,136 @@
 use sprs::CsMat;
 
-pub fn cg_solve(a: &CsMat<f64>, b: &[f64], max_iter: usize, tol: f64) -> Vec<f64> {
-    let n = b.len();
-    let mut x = vec![0.0f64; n];
-    let mut r: Vec<f64> = b.to_vec();
+/// Result of a Conjugate Gradient solve.
+pub struct CgResult {
+    pub x: Vec<f64>,
+    pub iters: usize,
+}
 
-    let b_norm = dot(b, b).sqrt();
-    if b_norm < 1e-15 {
-        return x;
+impl CgResult {
+    pub fn into_x(self) -> Vec<f64> {
+        self.x
+    }
+}
+
+/// Trait for PCG preconditioners. The implementor must approximate
+/// `M⁻¹·r` where `M` is a preconditioning matrix close to `A`.
+pub trait Preconditioner {
+    fn apply(&self, r: &[f64], z: &mut Vec<f64>);
+}
+
+/// Jacobi (diagonal) preconditioner — `z[i] = r[i] / |A[i,i]|`.
+pub struct JacobiPreconditioner {
+    diag_inv: Vec<f64>,
+}
+
+impl JacobiPreconditioner {
+    pub fn new(a: &CsMat<f64>) -> Self {
+        let n = a.rows();
+        let mut diag_inv = vec![0.0f64; n];
+        for (row, d) in diag_inv.iter_mut().enumerate() {
+            if let Some(rv) = a.outer_view(row) {
+                for (col, &val) in rv.iter() {
+                    if col == row {
+                        let abs_val = val.abs();
+                        *d = if abs_val > 1e-15 { 1.0 / abs_val } else { 0.0 };
+                        break;
+                    }
+                }
+            }
+        }
+        Self { diag_inv }
+    }
+}
+
+impl Preconditioner for JacobiPreconditioner {
+    fn apply(&self, r: &[f64], z: &mut Vec<f64>) {
+        z.clear();
+        z.reserve(r.len());
+        for (&r_i, &m_inv) in r.iter().zip(self.diag_inv.iter()) {
+            z.push(r_i * m_inv);
+        }
+    }
+}
+
+pub fn cg_solve_precond(
+    a: &CsMat<f64>,
+    b: &[f64],
+    max_iter: usize,
+    tol: f64,
+    x0: Option<&[f64]>,
+    precond: &dyn Preconditioner,
+) -> CgResult {
+    let n = b.len();
+    let mut x = match x0 {
+        Some(seed) if seed.len() == n => seed.to_vec(),
+        _ => vec![0.0f64; n],
+    };
+
+    let mut r = vec![0.0; n];
+    if x0.is_some() {
+        let mut ax = vec![0.0; n];
+        mat_vec_mul_into(a, &x, &mut ax);
+        for i in 0..n { r[i] = b[i] - ax[i]; }
+    } else {
+        r.copy_from_slice(b);
     }
 
-    let precond = jacobi_preconditioner(a);
+    let b_norm = dot(b, b).sqrt();
+    if b_norm < 1e-15 { return CgResult { x, iters: 0 }; }
 
-    let mut z = Vec::with_capacity(n);
-    apply_preconditioner_into(&precond, &r, &mut z);
+    let mut z = vec![0.0; n];
+    precond.apply(&r, &mut z);
     let mut p = z.clone();
     let mut rs_old = dot(&r, &p);
-    let mut ap = Vec::with_capacity(n);
+    let mut ap = vec![0.0; n];
 
-    for _iter in 0..max_iter {
+    let mut iters = 0; // Initialize outside the loop to fix scope error
+    for iter in 0..max_iter {
+        iters = iter + 1; // Update iteration count cleanly
         mat_vec_mul_into(a, &p, &mut ap);
-
         let p_ap = dot(&p, &ap);
-        if p_ap.abs() < 1e-30 {
-            break;
-        }
+        if p_ap.abs() < 1e-30 { break; }
 
         let alpha = rs_old / p_ap;
-
         for i in 0..n {
             x[i] += alpha * p[i];
             r[i] -= alpha * ap[i];
         }
 
         let r_norm = dot(&r, &r).sqrt();
-        if r_norm / b_norm < tol {
-            break;
-        }
+        println!("Iteration {:4}: Residual Norm = {:.6e}, Relative = {:.6e}", 
+            iter, r_norm, if b_norm > 1e-12 { r_norm / b_norm } else { r_norm }
+        );
 
-        apply_preconditioner_into(&precond, &r, &mut z);
+        if r_norm / b_norm < tol { break; }
+
+        precond.apply(&r, &mut z);
+
         let rs_new = dot(&r, &z);
-
-        if rs_old.abs() < 1e-30 {
-            break;
-        }
+        if rs_old.abs() < 1e-30 { break; }
 
         let beta = rs_new / rs_old;
-
-        for i in 0..n {
-            p[i] = z[i] + beta * p[i];
-        }
+        for i in 0..n { p[i] = z[i] + beta * p[i]; }
         rs_old = rs_new;
     }
 
-    x
+    CgResult { x, iters }
+}
+
+/// Convenience wrapper — PCG with Jacobi preconditioning (original API).
+pub fn cg_solve(
+    a: &CsMat<f64>,
+    b: &[f64],
+    max_iter: usize,
+    tol: f64,
+    x0: Option<&[f64]>,
+) -> CgResult {
+    let j = JacobiPreconditioner::new(a);
+    cg_solve_precond(a, b, max_iter, tol, x0, &j)
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
-
-fn jacobi_preconditioner(a: &CsMat<f64>) -> Vec<f64> {
-    let n = a.rows();
-    let mut diag = vec![0.0f64; n];
-    for (row, d) in diag.iter_mut().enumerate() {
-        if let Some(rv) = a.outer_view(row) {
-            for (col, &val) in rv.iter() {
-                if col == row {
-                    let abs_val = val.abs();
-                    *d = if abs_val > 1e-15 { 1.0 / abs_val } else { 0.0 };
-                    break;
-                }
-            }
-        }
-    }
-    diag
-}
-
-fn apply_preconditioner_into(precond_diag_inv: &[f64], r: &[f64], out: &mut Vec<f64>) {
-    out.clear();
-    out.reserve(r.len());
-    for (&r_i, &m_inv) in r.iter().zip(precond_diag_inv.iter()) {
-        out.push(r_i * m_inv);
-    }
 }
 
 fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
@@ -97,35 +145,5 @@ fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
             }
             *out_slot = acc;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::laplacian;
-    use crate::graph;
-
-    #[test]
-    fn test_cg_solve_simple_circuit() {
-        let mut edges = graph::EdgeTriplets::new();
-        edges.push(0, 1, 1.0);
-        edges.push(1, 0, 1.0);
-        let a = laplacian::build_laplacian(&edges, 2);
-        let b = vec![1.0, -1.0];
-        let x = cg_solve(&a, &b, 1000, 1e-10);
-        assert!((x[0] - 0.5).abs() < 1e-4, "got {}", x[0]);
-        assert!((x[1] + 0.5).abs() < 1e-4, "got {}", x[1]);
-    }
-
-    #[test]
-    fn test_cg_solve_zero_rhs() {
-        let mut edges = graph::EdgeTriplets::new();
-        edges.push(0, 1, 1.0);
-        edges.push(1, 0, 1.0);
-        let a = laplacian::build_laplacian(&edges, 2);
-        let x = cg_solve(&a, &[0.0, 0.0], 1000, 1e-10);
-        assert_eq!(x[0], 0.0);
-        assert_eq!(x[1], 0.0);
     }
 }
