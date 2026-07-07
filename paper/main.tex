@@ -15,7 +15,7 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our implementation offers warm starts for repeated runs in interactive analysis, such as for repeated resistance map editing (e.g. adding features in scenario planning). Our results show that as expected, run-times for 1000x1000 raster networks are slower than Circuitscape, but fast enough to run in the browser without requiring a server.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, run-times for 1000x1000 raster networks are slower than Circuitscape, but fast enough to run in the browser without requiring a server.
 \end{abstract}
 
 \section{Introduction}
@@ -73,10 +73,7 @@ DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lida
 Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
 Benchmarking code was wrapped in a React applet which can be run locally and accessed via the code repository. Two benchmarks were run. 
 In the first case, a resistance map was generated at 1000$\times$1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
-It was expected that, in the browser context, the first run would be slowest due to V8/WASM JIT compilation engine warm-up. This is the first type of `cold-start'
-distinct from the `warm-start' algorithm approach by reusing voltage rasters. In the second case,
-the 1000x1000 raster was repeatedly edited by the addition of a randomly placed building; the time taken for post-edit runs (with `warm-start' initialization) was 
-compared to runs executed without the `warm-start' (i.e. $v=0$ initialization) algorithm approach to evaluate the ability to reuse solutions for repeated runs.
+It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/WASM JIT compilation engine warm-up (`warm start').
 
 \subsection{Connectivity model}
 
