@@ -271,9 +271,20 @@ Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of 
 
 \section{Discussion}
 
-For front-end web applications, it is crucial that data transfer is minimised
+We present a WASM/Rust connectivity library for interactive geospatial edge-computing by implementing the core Circuitscape connectivity model with
+a custom conjugate gradient solver with geometric multigrid preconditioning. This method can be integrated into geospatial web applications,
+allowing fast connectivity modelling in the resource-limited browser WASM context.
 
-We present a WebAssembly/Rust connectivity library for interactive geospatial edge-computing. This method can be integrated into geospatial web applications. Future work could be used to explore alternative solver methods and optimisations for the browser context. 
+Limitations of the WASM environment are primarily constraints in memory, CPU, and binary size. Traditionally, scientific software relies on 
+highly optimised libraries such as BLAS or, in the case of Circuitscape, CHOLMOD or AMG libraries. In principle, this is possible for WASM, but it is not straightforward.
+Projects like Pyodide \cite{pyodide2026} demonstrate the work required for compiling existing packages into WASM executables. 
+In addition, for front-end web applications, it is often important that data transfer is minimised to enable responsive pages.
+
+Some of the methods applicable in this paper, as image processing codes, could be suitable for GPU acceleration, such as through WebGPU. Dedicated GPU
+cards offer acceleration for highly parallel workloads. While dedicated GPU cards can be expensive and in short supply, consumer hardware often includes
+integrated GPU that can be exploited for acceleration provided a suitable workload. In addition, it is possible to implement multithreaded applications
+using shared buffers and web workers, which could also be explored in future work.
+Future work could also explore alternative solver methods and optimisations for the browser context, such as via using mixed-precision or SIMD instructions.
 
 \section{LLM disclaimer}
 
