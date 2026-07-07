@@ -449,6 +449,42 @@ pub fn run_geospatial_pipeline_cached_mg(
     }
 }
 
+pub fn run_geospatial_pipeline_cached_mg_alcouffe(
+    base_raster: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: &str,
+    layer_params_str: &str,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+) -> GeospatialOutput {
+    let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
+        base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
+    );
+
+    let annotated = crate::solve::solve_raster_sources_mg_alcouffe(
+        &resistance_data, nrows, ncols, nodata,
+        source_data, ground_data, max_iter, tol, true,
+    );
+
+    GeospatialOutput {
+        resistance_map: resistance_data,
+        current_map: annotated.output.current_map,
+        voltage_map: annotated.output.voltages,
+        layer_masks,
+        nrows: annotated.output.nrows,
+        ncols: annotated.output.ncols,
+        warnings,
+        total_iters: annotated.total_iters,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

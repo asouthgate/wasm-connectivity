@@ -1,8 +1,3 @@
-const POINT_COLORS = [
-  [255, 50, 50], [50, 200, 50], [50, 100, 255],
-  [255, 200, 50], [255, 50, 255], [50, 255, 255],
-];
-
 const VIRIDIS_STOPS = [
   [0,    68,   1,  84],
   [0.25, 59,  82, 139],
@@ -80,32 +75,4 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
   }
   ctx.putImageData(img, 0, 0);
   return { min: isFinite(minRaw) ? minRaw : 0, max: isFinite(maxRaw) ? maxRaw : 1 };
-}
-
-export function renderPoints(canvas, data, nrows, ncols, nodata, maxSide = 400) {
-  const scale = Math.max(1, Math.floor(maxSide / Math.max(nrows, ncols)));
-  const w = ncols * scale, h = nrows * scale;
-  if (canvas.width !== w) canvas.width = w;
-  if (canvas.height !== h) canvas.height = h;
-
-  const ctx = canvas.getContext('2d');
-  const img = ctx.createImageData(w, h);
-
-  for (let r = 0; r < nrows; r++) {
-    for (let c = 0; c < ncols; c++) {
-      const v = data[r * ncols + c];
-      let rr = 17, gg = 17, bb = 17;
-      if (v !== nodata && v > 0 && !isNaN(v)) {
-        const col = POINT_COLORS[(v - 1) % POINT_COLORS.length];
-        rr = col[0]; gg = col[1]; bb = col[2];
-      }
-      for (let dy = 0; dy < scale; dy++) {
-        for (let dx = 0; dx < scale; dx++) {
-          const i = ((r * scale + dy) * w + c * scale + dx) * 4;
-          img.data[i] = rr; img.data[i + 1] = gg; img.data[i + 2] = bb; img.data[i + 3] = 255;
-        }
-      }
-    }
-  }
-  ctx.putImageData(img, 0, 0);
 }

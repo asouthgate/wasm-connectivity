@@ -9,7 +9,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font: 13px monospace; background: #111; color: #ccc; padding: 12px; }
     h1 { font-size: 1em; margin-bottom: 8px; }
-    h3 { font-size: .7em; color: #666; text-transform: uppercase; margin: 4px 0; letter-spacing: 1px; }
+    h3 { font-size: .7em; text-transform: uppercase; margin: 4px 0; letter-spacing: 1px; }
 
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
     .btn { padding: 5px 12px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; font: 12px monospace; }
@@ -18,8 +18,7 @@
     .btn.run:hover { background: #2ea043; }
     .btn.run:disabled { opacity: .4; cursor: not-allowed; }
     .status { font-size: .8em; margin: 4px 0; }
-    .timer { font-size: .75em; color: #f90; }
-    .fname { font-size: .7em; color: #555; max-width: 130px; overflow: hidden; white-space: nowrap; }
+    .timer { font-size: .75em; }
 
     .layout { display: flex; gap: 12px; }
     .sidebar { width: 180px; flex-shrink: 0; }
@@ -31,13 +30,11 @@
     .preset.sel { border-color: #58a6ff; color: #58a6ff; }
 
     .maps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .resistances { margin-top: 10px; }
-    .resistances table, .log table { border-collapse: collapse; font-size: .75em; }
-    .resistances td, .resistances th, .log td, .log th { padding: 2px 8px; border: 1px solid #333; }
-    .resistances td, .log td { text-align: right; }
-    .resistances th, .log th { background: #1a1a1a; color: #888; text-align: right; font-weight: normal; }
     .log { max-height: 350px; overflow-y: auto; margin-top: 8px; }
-    .log table { width: 100%; }
+    .log table { border-collapse: collapse; font-size: .75em; width: 100%; }
+    .log td, .log th { padding: 2px 8px; border: 1px solid #333; }
+    .log td { text-align: right; }
+    .log th { background: #1a1a1a; color: #888; text-align: right; font-weight: normal; }
 
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>

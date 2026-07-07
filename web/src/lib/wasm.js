@@ -1,37 +1,17 @@
-import initModule, { solve_point_sources as _solvePts, solve_raster_sources as _solveRaster, downsample_raster as _downsample, get_memory, __reset } from './wasm_connect.js';
+import initModule, { downsample_raster as _downsample } from './wasm_connect.js';
 import wasmUrl from './wasm_connect_bg.wasm?url';
 
 let ready = false;
-let wasmMemory = null;
 
 export async function load() {
   if (!ready) {
     await initModule(wasmUrl);
-    wasmMemory = get_memory();
     ready = true;
   }
 }
 
-export async function reset() {
-  __reset();
-  await initModule(wasmUrl);
-  wasmMemory = get_memory();
-}
-
-export function solve_point_sources(resData, nrows, ncols, nodata, ptData, maxIter = 100_000, tol = 1e-6) {
-  return _solvePts(resData, nrows, ncols, nodata, ptData, maxIter, tol);
-}
-
-export function solve_raster_sources(resData, nrows, ncols, nodata, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
-  return _solveRaster(resData, nrows, ncols, nodata, srcData, gndData, maxIter, tol);
-}
-
 export function downsample_raster(data, nrows, ncols, nodata, targetRows, targetCols) {
   return _downsample(data, nrows, ncols, nodata, targetRows, targetCols);
-}
-
-export function getWasmMemoryMB() {
-  return wasmMemory ? wasmMemory.buffer.byteLength / (1024 * 1024) : null;
 }
 
 const _worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -52,26 +32,6 @@ function _callWorker(fn, args) {
   });
 }
 
-export async function solve_point_sources_async(resData, nrows, ncols, nodata, ptData, maxIter = 100_000, tol = 1e-6) {
-  return _callWorker('solve_point_sources', [resData, nrows, ncols, nodata, ptData, maxIter, tol]);
-}
-
-export async function solve_raster_sources_async(resData, nrows, ncols, nodata, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
-  return _callWorker('solve_raster_sources', [resData, nrows, ncols, nodata, srcData, gndData, maxIter, tol]);
-}
-
-export async function solve_raster_sources_mg_async(resData, nrows, ncols, nodata, srcData, gndData, maxIter = 50_000, tol = 1e-6) {
-  return _callWorker('solve_raster_sources_mg', [resData, nrows, ncols, nodata, srcData, gndData, maxIter, tol]);
-}
-
-export async function run_geospatial_pipeline_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 100_000, tol = 1e-6) {
-  return _callWorker('run_geospatial_pipeline', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol]);
-}
-
-export async function run_geospatial_pipeline_cached_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 100_000, tol = 1e-6, rebuildLaplacian = false) {
-  return _callWorker('run_geospatial_pipeline_cached', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol, rebuildLaplacian]);
-}
-
 export async function run_geospatial_pipeline_cached_mg_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 50_000, tol = 1e-6) {
   return _callWorker('run_geospatial_pipeline_cached_mg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol]);
 }
@@ -80,19 +40,12 @@ export async function reset_cache_async() {
   return _callWorker('reset_cache', []);
 }
 
-// Per-phase benchmark worker fns. Each returns { prepTimeMs, connTimeMs,
-// prepMemMb, connMemMb, totalIters }. The three phases form one logical
-// benchmark "rep":
-//   cold: full WASM reset + rasterize + cold solve (drops cache)
-//   warm: same raster + perturbed sources, solve_raster_sources_cached(rebuild=false)
-//   hot:  rasterize with user-supplied hot geojson (e.g. extra buildings),
-//        solve_raster_sources_cached(rebuild=true) seeded with prior voltages
-export function benchmarkCold(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
-  return _callWorker('benchmark_cold', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
+export function benchmarkJacobi(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
+  return _callWorker('benchmark_jacobi', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
 }
-export function benchmarkWarm(srcData, gndData, nrows, ncols, nodata) {
-  return _callWorker('benchmark_warm', [srcData, gndData, nrows, ncols, nodata]);
+export function benchmarkGmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
+  return _callWorker('benchmark_gmg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
 }
-export function benchmarkHot(baseRaster, nrows, ncols, nodata, hotGeojson, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
-  return _callWorker('benchmark_hot', [baseRaster, nrows, ncols, nodata, hotGeojson, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
+export function benchmarkAlcouffe(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
+  return _callWorker('benchmark_alcouffe', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
 }
