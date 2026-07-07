@@ -141,6 +141,31 @@ pub fn solve_raster_sources_mg(
 }
 
 #[wasm_bindgen]
+pub fn solve_raster_sources_mg_alcouffe(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+) -> String {
+    let annotated = solve::solve_raster_sources_mg_alcouffe(
+        &resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+        true,
+    );
+    json_response(&annotated)
+}
+
+#[wasm_bindgen]
 pub fn solve_point_sources_cached(
     resistance_data: Vec<f64>,
     nrows: usize,

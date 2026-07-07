@@ -441,6 +441,44 @@ pub fn solve_raster_sources_mg(
     AnnotatedOutput { output: out, total_iters: iters }
 }
 
+/// Matrix-dependent (Alcouffe) variant of `solve_raster_sources_mg`.
+/// Uses operator-induced prolongation weights derived from the fine-grid
+/// Laplacian entries instead of fixed bilinear interpolation. This gives
+/// better convergence for problems with strongly varying resistance
+/// coefficients (e.g. land-use maps with roads, rivers, and buildings).
+pub fn solve_raster_sources_mg_alcouffe(
+    resistance_data: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    remove_average: bool,
+) -> AnnotatedOutput<RasterOutput> {
+    let filled = multigrid::fill_nodata(resistance_data, nodata);
+
+    let (nodemap, num_nodes, _edges, laplacian, _components) =
+        crate::build_circuit_model(&filled, nrows, ncols, nodata);
+
+    let current_global = build_global_currents(
+        &nodemap, num_nodes, nrows, ncols, nodata, source_data, ground_data,
+    );
+
+    let mg = MgPreconditioner::build_alcouffe(&filled, nrows, ncols, nodata, 8);
+
+    let (voltages_global, iters) = solve_full_grid_precond(
+        &current_global, &laplacian,
+        num_nodes, max_iter, tol, remove_average,
+        &mg,
+    );
+
+    let out = build_raster_output(&voltages_global, &laplacian, &nodemap, nrows, ncols);
+
+    AnnotatedOutput { output: out, total_iters: iters }
+}
+
 /// Solve the full-grid system `L * v = b` with a preconditioner.
 /// Operates on the full-grid matrix directly (no subgraph extraction).
 fn solve_full_grid_precond(
