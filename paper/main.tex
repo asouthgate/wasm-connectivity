@@ -63,17 +63,20 @@ data such as MVT derived from mbtiles.
 
 \subsection{Example datasets}
 
-In order to demonstrate the functionality of our WASM toolset, a test region corresponding to a 1000 $m^2$ region centered at
+In order to demonstrate the functionality of our WASM toolset, a test region corresponding to a 1~$\text{km}^2$ region centered at
 286600E, 79050N (EPSG:27700) was selected. The region includes buildings, roads, and a river. Vector data was obtained from
-the UK ordinance survey open data \cite{os_data}. 
+the UK Ordnance Survey open data \cite{os_data}. 
 DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
 
 \subsection{Benchmarking}
 
-Benchmarking was undertaken on a laptop with a AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
+Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
 Benchmarking code was wrapped in a React applet which can be run locally and accessed via the code repository. Two benchmarks were run. 
-In the first case, a resistance map was generated at 1000x1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
-It was expected that, in the browser context, the first run would be slowest.
+In the first case, a resistance map was generated at 1000$\times$1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
+It was expected that, in the browser context, the first run would be slowest due to V8/WASM JIT compilation engine warm-up. This is the first type of `cold-start'
+distinct from the `warm-start' algorithm approach by reusing voltage rasters. In the second case,
+the 1000x1000 raster was repeatedly edited by the addition of a randomly placed building; the time taken for post-edit runs (with `warm-start' initialization) was 
+compared to runs executed without the `warm-start' (i.e. $v=0$ initialization) algorithm approach to evaluate the ability to reuse solutions for repeated runs.
 
 \subsection{Connectivity model}
 
