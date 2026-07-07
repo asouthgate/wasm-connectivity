@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { run_geospatial_pipeline_async } from '../lib/wasm';
+import { run_geospatial_pipeline_async, run_geospatial_pipeline_cached_async, run_geospatial_pipeline_cached_mg_async, reset_cache_async } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { renderMap } from '../lib/render';
 import MapView from '../components/MapView';
 import { StatusBar } from '../components/StatusBar';
 import { ComputeModal } from '../components/ComputeModal';
+import { randomSquareBuildings, mergeGeoJson } from '../lib/randomBuildings';
 
 const GEO_BASE = '/geodata';
 
@@ -32,6 +33,10 @@ export default function Geospatial() {
   const [computing, setComputing] = useState(false);
   const [status, setStatus] = useState({ text: 'Pick a resolution and load data.', color: '#888' });
   const [timer, setTimer] = useState('');
+  const [coldSolved, setColdSolved] = useState(false);
+  const [coldStats, setColdStats] = useState(null);
+  const [warmStats, setWarmStats] = useState(null);
+  const warmCount = useRef(0);
 
   const [terrainRes, setTerrainRes] = useState(1.0);
   const [roadRes, setRoadRes] = useState(50);
@@ -39,6 +44,7 @@ export default function Geospatial() {
   const [riverRes, setRiverRes] = useState(0.5);
   const [riverWidth, setRiverWidth] = useState(4);
   const [buildRes, setBuildRes] = useState(500);
+  const [solver, setSolver] = useState('mg');
 
   const loadData = useCallback(async (res) => {
     setResolution(res);
@@ -68,10 +74,15 @@ export default function Geospatial() {
 
   useEffect(() => { loadData('500'); }, []);
 
+  useEffect(() => {
+    setColdSolved(false); setColdStats(null); setWarmStats(null); warmCount.current = 0;
+    reset_cache_async().catch(() => {});
+  }, [resolution, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes]);
+
   const run = useCallback(async () => {
     if (!baseData || !srcData || !geojsonStr) return;
     setComputing(true); setLoading(true);
-    setStatus({ text: 'rasterising features + solving...', color: '#f90' }); setTimer('');
+    setStatus({ text: `rasterising features + solving (cold, ${solver === 'mg' ? 'MG' : 'Jacobi'})...`, color: '#f90' }); setTimer('');
     const t0 = performance.now();
     try {
       const nd = baseMeta.nodata || -9999;
@@ -83,24 +94,76 @@ export default function Geospatial() {
       };
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
       const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
-      const json = await run_geospatial_pipeline_async(
-        scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
-        geojsonStr, JSON.stringify(params),
-        baseMeta.xllcorner, ymax, baseMeta.cellsize,
-        srcData, gd,
-      );
+      const pipeFn = solver === 'mg' ? run_geospatial_pipeline_cached_mg_async : run_geospatial_pipeline_cached_async;
+      const pipeArgs = solver === 'mg'
+        ? [scaledBase, baseMeta.nrows, baseMeta.ncols, nd, geojsonStr, JSON.stringify(params), baseMeta.xllcorner, ymax, baseMeta.cellsize, srcData, gd]
+        : [scaledBase, baseMeta.nrows, baseMeta.ncols, nd, geojsonStr, JSON.stringify(params), baseMeta.xllcorner, ymax, baseMeta.cellsize, srcData, gd, 100_000, 1e-6, false];
+      const json = await pipeFn(...pipeArgs);
       const r = JSON.parse(json);
       setResult(r);
-      const s = ((performance.now() - t0) / 1000).toFixed(1);
+      const s = ((performance.now() - t0) / 1000).toFixed(2);
       setTimer(`${s}s`);
-      setStatus({ text: `solved in ${s}s`, color: '#3fb950' });
+      const iters = r.total_iters || 0;
+      setColdStats({ secs: s, iters });
+      setColdSolved(true);
+      setWarmStats(null);
+      warmCount.current = 0;
+      setStatus({ text: `cold start ${s}s · ${iters} iters${solver === 'jacobi' ? ' — click "Warm start + new building" to add a random square' : solver === 'mg' ? ' (MG — warm start disabled)' : ''}`, color: '#3fb950' });
     } catch (err) {
       setStatus({ text: `error: ${err.message}`, color: '#f44' });
     } finally {
       setLoading(false);
       setComputing(false);
     }
-  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes]);
+  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes, solver]);
+
+  const runWarm = useCallback(async () => {
+    if (!baseData || !srcData || !geojsonStr) return;
+    setComputing(true); setLoading(true);
+    setStatus({ text: `adding new building + warm-starting...`, color: '#f90' }); setTimer('');
+    const t0 = performance.now();
+    try {
+      const nd = baseMeta.nodata || -9999;
+      const scaledBase = baseData.map(v => v !== nd ? v * terrainRes : v);
+      const params = {
+        roads:    { resistance: roadRes,    width: roadWidth },
+        rivers:   { resistance: riverRes,   width: riverWidth },
+        buildings:{ resistance: buildRes,   width: 0 },
+      };
+      const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
+      const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
+
+      const seed = (Date.now() + warmCount.current) & 0xffffffff;
+      const extra = randomSquareBuildings(1, baseMeta.nrows, baseMeta.ncols, baseMeta.xllcorner, ymax, baseMeta.cellsize, 100, seed);
+      const merged = mergeGeoJson(geojsonStr, extra);
+      warmCount.current += 1;
+
+      const json = await run_geospatial_pipeline_cached_async(
+        scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
+        merged, JSON.stringify(params),
+        baseMeta.xllcorner, ymax, baseMeta.cellsize,
+        srcData, gd, 100_000, 1e-6, true,  // rebuild=true
+      );
+      const r = JSON.parse(json);
+      setResult(r);
+      const s = ((performance.now() - t0) / 1000).toFixed(2);
+      setTimer(`${s}s`);
+      const iters = r.total_iters || 0;
+      setWarmStats({ secs: s, iters });
+      const cs = coldStats;
+      const dIter = cs ? (iters - cs.iters) : 0;
+      const dSecs = cs ? ((parseFloat(s) - parseFloat(cs.secs))).toFixed(2) : null;
+      setStatus({
+        text: `warm start ${s}s · ${iters} iters · Δiters=${dIter}${dSecs !== null ? ` · Δt=${dSecs}s` : ''} (total warm starts ${warmCount.current})`,
+        color: '#3fb950',
+      });
+    } catch (err) {
+      setStatus({ text: `warm start error: ${err.message}`, color: '#f44' });
+    } finally {
+      setLoading(false);
+      setComputing(false);
+    }
+  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes, coldStats]);
 
   const hasData = !!(baseData && srcData && geojsonStr);
 
@@ -119,7 +182,17 @@ export default function Geospatial() {
     <div>
       <ComputeModal visible={computing} />
       <div className="row">
-        <button className="btn run" onClick={run} disabled={!hasData || loading}>Run</button>
+        <button className="btn run" onClick={run} disabled={!hasData || loading} title="Cold solve — rasterises and builds the Laplacian from scratch">
+          Cold start
+        </button>
+        <button className="btn" onClick={runWarm} disabled={!hasData || loading || !coldSolved || solver === 'mg'} title="Adds a random square building and warm-starts PCG from the prior voltage">
+          Warm start + new building
+        </button>
+        <select className="btn" value={solver} onChange={e => setSolver(e.target.value)} disabled={loading}
+          style={{ background: '#1a1a1a', color: '#ccc', border: '1px solid #444', padding: '2px 4px', font: '12px monospace' }}>
+          <option value="mg">MG CG</option>
+          <option value="jacobi">Jacobi CG</option>
+        </select>
         <span className="timer">{timer}</span>
       </div>
       <StatusBar status={status} loading={loading && !computing} />

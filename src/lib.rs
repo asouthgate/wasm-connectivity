@@ -240,6 +240,40 @@ pub fn run_geospatial_pipeline_cached(
 }
 
 #[wasm_bindgen]
+pub fn run_geospatial_pipeline_cached_mg(
+    base_raster: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+) -> String {
+    let output = geospatial::run_geospatial_pipeline_cached_mg(
+        &base_raster,
+        nrows,
+        ncols,
+        nodata,
+        &geojson_str,
+        &layer_params_str,
+        xmin,
+        ymax,
+        cellsize,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+    );
+    json_response(&output)
+}
+
+#[wasm_bindgen]
 pub fn downsample_raster(
     data: Vec<f64>,
     nrows: usize,

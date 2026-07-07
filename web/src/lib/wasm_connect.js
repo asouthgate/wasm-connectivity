@@ -59,6 +59,10 @@ export function rasterize_geojson(base_raster, nrows, ncols, _nodata, geojson_st
     }
 }
 
+export function reset_cache() {
+    wasm.reset_cache();
+}
+
 /**
  * @param {Float64Array} base_raster
  * @param {number} nrows
@@ -99,6 +103,85 @@ export function run_geospatial_pipeline(base_raster, nrows, ncols, nodata, geojs
 }
 
 /**
+ * @param {Float64Array} base_raster
+ * @param {number} nrows
+ * @param {number} ncols
+ * @param {number} nodata
+ * @param {string} geojson_str
+ * @param {string} layer_params_str
+ * @param {number} xmin
+ * @param {number} ymax
+ * @param {number} cellsize
+ * @param {Float64Array} source_data
+ * @param {Float64Array} ground_data
+ * @param {number} max_iter
+ * @param {number} tol
+ * @param {boolean} rebuild_laplacian
+ * @returns {string}
+ */
+export function run_geospatial_pipeline_cached(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol, rebuild_laplacian) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passArrayF64ToWasm0(base_raster, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(geojson_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(layer_params_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayF64ToWasm0(source_data, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ret = wasm.run_geospatial_pipeline_cached(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize, ptr3, len3, ptr4, len4, max_iter, tol, rebuild_laplacian);
+        deferred6_0 = ret[0];
+        deferred6_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
+ * @param {Float64Array} base_raster
+ * @param {number} nrows
+ * @param {number} ncols
+ * @param {number} nodata
+ * @param {string} geojson_str
+ * @param {string} layer_params_str
+ * @param {number} xmin
+ * @param {number} ymax
+ * @param {number} cellsize
+ * @param {Float64Array} source_data
+ * @param {Float64Array} ground_data
+ * @param {number} max_iter
+ * @param {number} tol
+ * @returns {string}
+ */
+export function run_geospatial_pipeline_cached_mg(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passArrayF64ToWasm0(base_raster, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(geojson_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(layer_params_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayF64ToWasm0(source_data, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ret = wasm.run_geospatial_pipeline_cached_mg(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize, ptr3, len3, ptr4, len4, max_iter, tol);
+        deferred6_0 = ret[0];
+        deferred6_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
  * @param {Float64Array} resistance_data
  * @param {number} nrows
  * @param {number} ncols
@@ -130,6 +213,34 @@ export function solve_point_sources(resistance_data, nrows, ncols, nodata, point
  * @param {number} nrows
  * @param {number} ncols
  * @param {number} nodata
+ * @param {Int32Array} point_data
+ * @param {number} max_iter
+ * @param {number} tol
+ * @param {boolean} rebuild_laplacian
+ * @returns {string}
+ */
+export function solve_point_sources_cached(resistance_data, nrows, ncols, nodata, point_data, max_iter, tol, rebuild_laplacian) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArrayF64ToWasm0(resistance_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(point_data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.solve_point_sources_cached(ptr0, len0, nrows, ncols, nodata, ptr1, len1, max_iter, tol, rebuild_laplacian);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * @param {Float64Array} resistance_data
+ * @param {number} nrows
+ * @param {number} ncols
+ * @param {number} nodata
  * @param {Float64Array} source_data
  * @param {Float64Array} ground_data
  * @param {number} max_iter
@@ -147,6 +258,67 @@ export function solve_raster_sources(resistance_data, nrows, ncols, nodata, sour
         const ptr2 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
         const len2 = WASM_VECTOR_LEN;
         const ret = wasm.solve_raster_sources(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {Float64Array} resistance_data
+ * @param {number} nrows
+ * @param {number} ncols
+ * @param {number} nodata
+ * @param {Float64Array} source_data
+ * @param {Float64Array} ground_data
+ * @param {number} max_iter
+ * @param {number} tol
+ * @param {boolean} rebuild_laplacian
+ * @returns {string}
+ */
+export function solve_raster_sources_cached(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, rebuild_laplacian) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passArrayF64ToWasm0(resistance_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(source_data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.solve_raster_sources_cached(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol, rebuild_laplacian);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {Float64Array} resistance_data
+ * @param {number} nrows
+ * @param {number} ncols
+ * @param {number} nodata
+ * @param {Float64Array} source_data
+ * @param {Float64Array} ground_data
+ * @param {number} max_iter
+ * @param {number} tol
+ * @returns {string}
+ */
+export function solve_raster_sources_mg(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passArrayF64ToWasm0(resistance_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(source_data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.solve_raster_sources_mg(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol);
         deferred4_0 = ret[0];
         deferred4_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
@@ -406,5 +578,18 @@ async function __wbg_init(module_or_path) {
 }
 
 export { initSync, __wbg_init as default };
-export function get_memory() { return wasm.memory; }
-export function __reset() { wasm = undefined; wasmInstance = undefined; }
+
+export function get_memory() {
+    if (!wasmInstance) throw new Error('WASM not initialized');
+    return wasmInstance.exports.memory;
+}
+
+export function __reset() {
+    wasm = null;
+    wasmInstance = null;
+    wasmModule = null;
+    cachedDataViewMemory0 = null;
+    cachedFloat64ArrayMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
+    cachedUint8ArrayMemory0 = null;
+}

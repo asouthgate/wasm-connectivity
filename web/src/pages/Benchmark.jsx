@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect } from 'react';
-import { runBenchmark, downsample_raster } from '../lib/wasm';
+import { benchmarkCold, benchmarkWarm, benchmarkHot, run_geospatial_pipeline_cached_async, downsample_raster, reset_cache_async } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { Spinner } from '../components/Spinner';
 import { StatusBar } from '../components/StatusBar';
 import { stat, downloadCSV } from '../lib/stats';
 import { useStatus } from '../lib/hooks';
+import { randomSquareBuildings, mergeGeoJson } from '../lib/randomBuildings';
 
 const GEO_BASE = '/geodata';
 const RESOLUTIONS = [1000, 800, 600, 400, 200];
@@ -15,9 +16,39 @@ const DEFAULT_PARAMS = {
   buildings:{ resistance: 500, width: 0 },
 };
 
+const PHASES = ['cold', 'warm', 'hot'];
+
+function perturbSources(srcData, ncols, nrows, nodata) {
+  // Perturb ~5% of source cells by a small random factor; produce a
+  // fresh copy so the warm phase is not returning the exact same RHS as
+  // the cold solve (which would just give back the identical voltage
+  // solution in trivial CG iteration count).
+  const out = Float64Array.from(srcData);
+  const n = ncols * nrows;
+  const count = Math.max(1, Math.floor(n * 0.005));
+  let s = 0xabcdef12 >>> 0;
+  const rnd = () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < count; i++) {
+    const idx = Math.floor(rnd() * n);
+    const v = out[idx];
+    if (v === nodata || !isFinite(v) || v <= 0) continue;
+    const factor = 0.5 + rnd() * 1.5; // [0.5, 2.0]
+    out[idx] = v * factor;
+  }
+  return out;
+}
+
 function buildBenchmarkCSV(runs) {
-  const h = 'resolution,repeat,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb\n';
-  const rows = runs.map(r => `${r.resolution},${r.repeat},${(r.prepTimeMs/1000).toFixed(4)},${r.prepMemMb.toFixed(2)},${(r.connTimeMs/1000).toFixed(4)},${r.connMemMb.toFixed(2)}`).join('\n');
+  const h = 'resolution,repeat,phase,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb,total_iters\n';
+  const rows = runs.map(r =>
+    `${r.resolution},${r.repeat},${r.phase},${(r.prepTimeMs/1000).toFixed(4)},${r.prepMemMb.toFixed(2)},${(r.connTimeMs/1000).toFixed(4)},${r.connMemMb.toFixed(2)},${r.totalIters||0}`
+  ).join('\n');
   downloadCSV('benchmark.csv', h, rows);
 }
 
@@ -27,7 +58,7 @@ export default function Benchmark() {
   const [srcData, setSrcData] = useState(null);
   const [gndData, setGndData] = useState(null);
   const [geojsonStr, setGeojsonStr] = useState('');
-  const [reps, setReps] = useState(3);
+  const [reps, setReps] = useState(2);
   const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState([]);
   const [status, setStatus] = useState({ text: 'Loading Chudleigh data...', color: '#888' });
@@ -58,6 +89,7 @@ export default function Benchmark() {
     const paramsJson = JSON.stringify(DEFAULT_PARAMS);
 
     const allResults = [];
+    let warmSeedCounter = 0;
 
     for (const res of RESOLUTIONS) {
       let rsData = baseData, srcR = srcData, gndR = gndData;
@@ -77,20 +109,33 @@ export default function Benchmark() {
       }
 
       for (let r = 1; r <= reps; r++) {
-        setStatus({ text: `Running ${res}×${res}, repeat ${r}/${reps}...`, color: '#f90' });
+        // === Phase 1: COLD ===
+        setStatus({ text: `Running ${res}×${res}, rep ${r}/${reps}: cold...`, color: '#f90' });
         try {
-          const bench = await runBenchmark(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
-          allResults.push({
-            resolution: res,
-            repeat: r,
-            prepTimeMs: bench.prepTimeMs,
-            prepMemMb: bench.prepMemMb,
-            connTimeMs: bench.connTimeMs,
-            connMemMb: bench.connMemMb,
-          });
+          // Ensure no stale cache before the cold call (it starts from
+          // __reset internally too, but be explicit).
+          await reset_cache_async();
+          const cold = await benchmarkCold(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
+          allResults.push({ resolution: res, repeat: r, phase: 'cold', ...cold });
+          setRuns([...allResults]);
+
+          // === Phase 2: WARM (perturbed sources, no rebuild) ===
+          setStatus({ text: `Running ${res}×${res}, rep ${r}/${reps}: warm...`, color: '#f90' });
+          const srcPert = perturbSources(srcR, ncols, nrows, nd);
+          const warm = await benchmarkWarm(srcPert, gndR, nrows, ncols, nd);
+          allResults.push({ resolution: res, repeat: r, phase: 'warm', ...warm });
+          setRuns([...allResults]);
+
+          // === Phase 3: HOT (3 random building squares, rebuild=true) ===
+          setStatus({ text: `Running ${res}×${res}, rep ${r}/${reps}: hot...`, color: '#f90' });
+          const seed = (Date.now() + (++warmSeedCounter) * 7919) & 0xffffffff;
+          const extra = randomSquareBuildings(3, nrows, ncols, xmin, ymax, cellsize, 0.10, seed);
+          const hotGeo = mergeGeoJson(geojsonStr, extra);
+          const hot = await benchmarkHot(rsData, nrows, ncols, nd, hotGeo, paramsJson, xmin, ymax, cellsize, srcR, gndR);
+          allResults.push({ resolution: res, repeat: r, phase: 'hot', ...hot });
           setRuns([...allResults]);
         } catch (err) {
-          allResults.push({ resolution: res, repeat: r, prepTimeMs: 0, prepMemMb: 0, connTimeMs: 0, connMemMb: 0, error: err.message });
+          allResults.push({ resolution: res, repeat: r, phase: '?', prepTimeMs: 0, prepMemMb: 0, connTimeMs: 0, connMemMb: 0, totalIters: 0, error: err.message });
           setRuns([...allResults]);
         }
       }
@@ -105,15 +150,17 @@ export default function Benchmark() {
   const fmtMs = (ms) => (ms / 1000).toFixed(3) + 's';
   const fmtMb = (mb) => mb.toFixed(1) + ' MB';
 
-  const summaryByRes = {};
+  // Summary per (resolution, phase)
+  const summary = {};
   for (const r of runs) {
     if (r.error) continue;
-    const key = r.resolution;
-    if (!summaryByRes[key]) summaryByRes[key] = { prepTimes: [], connTimes: [], prepMems: [], connMems: [] };
-    summaryByRes[key].prepTimes.push(r.prepTimeMs / 1000);
-    summaryByRes[key].connTimes.push(r.connTimeMs / 1000);
-    summaryByRes[key].prepMems.push(r.prepMemMb);
-    summaryByRes[key].connMems.push(r.connMemMb);
+    const key = `${r.resolution}_${r.phase}`;
+    if (!summary[key]) summary[key] = { prepTimes: [], connTimes: [], prepMems: [], connMems: [], iters: [] };
+    summary[key].prepTimes.push(r.prepTimeMs / 1000);
+    summary[key].connTimes.push(r.connTimeMs / 1000);
+    summary[key].prepMems.push(r.prepMemMb);
+    summary[key].connMems.push(r.connMemMb);
+    summary[key].iters.push(r.totalIters || 0);
   }
 
   return (
@@ -129,52 +176,67 @@ export default function Benchmark() {
 
       {hasData && (
         <div style={{ fontSize: '.75em', color: '#888', marginBottom: 8 }}>
-          Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} repeat{reps !== 1 ? 's' : ''}
+          Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} rep{reps !== 1 ? 's' : ''} · 3 phases per rep: <span style={{color:'#58a6ff'}}>cold</span> · <span style={{color:'#f08080'}}>warm</span> · <span style={{color:'#f90'}}>hot</span>
+          <div style={{ marginTop: 4, fontSize: '.95em' }}>
+            <span style={{color:'#58a6ff'}}>cold</span> = full WASM reset+rasterize+cold solve (caches the circuit model)  ·
+            <span style={{color:'#f08080'}}> warm</span> = same resistance + perturbed sources, cache reuse (no rebuild)  ·
+            <span style={{color:'#f90'}}> hot</span> = 3 random square buildings added, rebuild laplacian, PCG seeded from prior voltage
+          </div>
         </div>
       )}
 
-      <div className="log" style={{ maxHeight: '60vh' }}>
+      <div className="log" style={{ maxHeight: '50vh' }}>
         <table>
           <thead><tr>
-            <th>res</th><th>rep</th><th>prep time</th><th>prep mem</th><th>conn time</th><th>conn mem</th>
+            <th>res</th><th>rep</th><th>phase</th><th>prep time</th><th>prep mem</th><th>conn time</th><th>conn mem</th><th>iters</th>
           </tr></thead>
           <tbody>
             {runs.map((r, i) => (
               <tr key={i} style={r.error ? { color: '#f44' } : {}}>
                 <td>{r.resolution}</td><td>{r.repeat}/{reps}</td>
+                <td style={{ color: r.phase === 'cold' ? '#58a6ff' : r.phase === 'warm' ? '#f08080' : r.phase === 'hot' ? '#f90' : '#f44' }}>{r.phase}</td>
                 <td>{r.error ? 'err' : fmtMs(r.prepTimeMs)}</td>
                 <td>{r.error ? 'err' : fmtMb(r.prepMemMb)}</td>
                 <td>{r.error ? 'err' : fmtMs(r.connTimeMs)}</td>
                 <td>{r.error ? 'err' : fmtMb(r.connMemMb)}</td>
+                <td>{r.error ? 'err' : (r.totalIters || 0)}</td>
               </tr>
             ))}
-            {running && runs.length < RESOLUTIONS.length * reps && (
-              <tr><td colSpan={6} style={{ color: '#f90' }}><Spinner size={12} /> running...</td></tr>
+            {running && runs.length < RESOLUTIONS.length * reps * 3 && (
+              <tr><td colSpan={8} style={{ color: '#f90' }}><Spinner size={12} /> running...</td></tr>
             )}
           </tbody>
         </table>
       </div>
 
-      {Object.keys(summaryByRes).length > 0 && (
+      {Object.keys(summary).length > 0 && (
         <div style={{ marginTop: 12 }}>
-          <h3 style={{ marginBottom: 4 }}>Summary</h3>
+          <h3 style={{ marginBottom: 4 }}>Summary (μ over reps)</h3>
           <div className="log" style={{ maxHeight: '50vh' }}>
             <table>
-              <thead><tr><th>res</th><th>n</th><th>prep μ</th><th>prep σ</th><th>prep mem μ</th><th>conn μ</th><th>conn σ</th><th>conn mem μ</th></tr></thead>
+              <thead><tr><th>res</th><th>phase</th><th>n</th><th>prep μ</th><th>prep mem μ</th><th>conn μ</th><th>conn σ</th><th>conn mem μ</th><th>iters μ</th></tr></thead>
               <tbody>
-                {RESOLUTIONS.filter(r => summaryByRes[r]).map(res => {
-                  const s = summaryByRes[res];
-                  const pt = stat(s.prepTimes), ct = stat(s.connTimes), pm = stat(s.prepMems), cm = stat(s.connMems);
-                  return (
-                    <tr key={res}>
-                      <td>{res}</td><td>{s.prepTimes.length}</td>
-                      <td>{pt.mean?.toFixed(3)}s</td><td>{pt.stddev?.toFixed(3)}s</td>
-                      <td>{pm.mean?.toFixed(1)} MB</td>
-                      <td>{ct.mean?.toFixed(3)}s</td><td>{ct.stddev?.toFixed(3)}s</td>
-                      <td>{cm.mean?.toFixed(1)} MB</td>
-                    </tr>
-                  );
-                })}
+                {RESOLUTIONS.flatMap(res =>
+                  PHASES.map(phase => {
+                    const key = `${res}_${phase}`;
+                    const s = summary[key];
+                    if (!s) return null;
+                    const pt = stat(s.prepTimes), ct = stat(s.connTimes), pm = stat(s.prepMems), cm = stat(s.connMems), it = stat(s.iters);
+                    return (
+                      <tr key={key}>
+                        <td>{res}</td>
+                        <td style={{ color: phase === 'cold' ? '#58a6ff' : phase === 'warm' ? '#f08080' : '#f90' }}>{phase}</td>
+                        <td>{s.connTimes.length}</td>
+                        <td>{pt.mean?.toFixed(3)}s</td>
+                        <td>{pm.mean?.toFixed(1)} MB</td>
+                        <td>{ct.mean?.toFixed(3)}s</td>
+                        <td>{ct.stddev?.toFixed(3)}s</td>
+                        <td>{cm.mean?.toFixed(1)} MB</td>
+                        <td>{it.mean?.toFixed(0)}</td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

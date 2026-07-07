@@ -7,7 +7,6 @@
 use sprs::CsMat;
 use crate::solver::{self, Preconditioner, mat_vec_mul_slice};
 use crate::cholesky;
-use std::time::Instant;
 use std::cell::RefCell;
 
 /// Resistance value used to fill nodata cells. 1e9 Ω makes the edge
@@ -139,16 +138,19 @@ impl MgPreconditioner {
         nodata: f64,
         max_levels: usize,
     ) -> Self {
-        let t0 = Instant::now();
         let filled = fill_nodata(resistance, nodata);
         let mut levels = Vec::new();
         let (mut nr, mut nc) = (nrows, ncols);
 
         // Build level 0 from the full resistance grid
-        let t1 = Instant::now();
+        #[cfg(not(target_arch = "wasm32"))]
+        let t1 = std::time::Instant::now();
         let (_nodemap, num_nodes, _edges, laplacian, _components) =
             crate::build_circuit_model(&filled, nr, nc, nodata);
+        #[cfg(not(target_arch = "wasm32"))]
         let build_ms = t1.elapsed().as_millis();
+        #[cfg(target_arch = "wasm32")]
+        let build_ms: u128 = 0;
 
         debug_assert_eq!(
             num_nodes, nr * nc,
@@ -176,7 +178,8 @@ impl MgPreconditioner {
                 break;
             }
 
-            let t1 = Instant::now();
+            #[cfg(not(target_arch = "wasm32"))]
+            let t1 = std::time::Instant::now();
             let (p_rows, p_cols, p_vals) = build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc);
             let fine_lap = &levels.last().unwrap().laplacian;
             let fine_n = fine_nr * fine_nc;
@@ -187,8 +190,6 @@ impl MgPreconditioner {
             let p = p_tri.to_csr();
 
             // Galerkin: L_coarse = P^T * L_fine * P
-            // Use sprs::smmp::mul_csr_csr for efficient sparse-sparse multiplication
-            // Note: transpose_view() returns CSC, so we convert to CSR for mul_csr_csr
             let pt = p.transpose_view().to_csr();
             let pt_lap = sprs::smmp::mul_csr_csr::<f64, f64, f64, usize, usize>(pt.view(), fine_lap.view());
             let mut laplacian = sprs::smmp::mul_csr_csr::<f64, f64, f64, usize, usize>(pt_lap.view(), p.view());
@@ -201,8 +202,12 @@ impl MgPreconditioner {
                 cholesky_l: None,
                 prolongation: Some((p_rows, p_cols, p_vals)),
             });
+            #[cfg(not(target_arch = "wasm32"))]
+            let galerkin_ms = t1.elapsed().as_millis();
+            #[cfg(target_arch = "wasm32")]
+            let galerkin_ms: u128 = 0;
             eprintln!("  MG level {}: {}x{} ({} nodes) built in {}ms (Galerkin)",
-                levels.len() - 1, next_nr, next_nc, coarse_n, t1.elapsed().as_millis());
+                levels.len() - 1, next_nr, next_nc, coarse_n, galerkin_ms);
 
             nr = next_nr;
             nc = next_nc;
@@ -236,9 +241,6 @@ impl MgPreconditioner {
                 rhs: vec![0.0; n],
             }
         }).collect();
-
-        let elapsed = t0.elapsed();
-        eprintln!("MG hierarchy built in {}ms ({} levels)", elapsed.as_millis(), levels.len());
 
         Self {
             levels,
@@ -349,10 +351,14 @@ impl MgPreconditioner {
 
 impl Preconditioner for MgPreconditioner {
     fn apply(&self, r: &[f64], z: &mut Vec<f64>) {
-        let t0 = Instant::now();
+        #[cfg(not(target_arch = "wasm32"))]
+        let t0 = std::time::Instant::now();
         self.v_cycle(&self.workspaces, r, 0);
-        let elapsed = t0.elapsed();
-        eprintln!("  V-cycle: {:.3}ms", elapsed.as_micros() as f64 / 1000.0);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let elapsed = t0.elapsed();
+            eprintln!("  V-cycle: {:.3}ms", elapsed.as_micros() as f64 / 1000.0);
+        }
         
         let ws = self.workspaces.borrow_mut();
         z.resize(r.len(), 0.0);
