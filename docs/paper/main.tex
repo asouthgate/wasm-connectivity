@@ -8,7 +8,7 @@
 \usepackage{graphicx}
 \usepackage{hyperref} 
 
-\title{A connectivity modelling toolset for ecological and geospatial edge computing in WebAssembly/rust}
+\title{A connectivity modelling toolset for ecological and geospatial edge computing}
 \author{Alex Southgate}
 \date{\today}
 
@@ -17,7 +17,7 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, run-times for 1000x1000 raster networks are slower than Circuitscape, but fast enough to run in the browser without requiring a server.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, Circuitscape solves 1000x1000 raster networks 2-3x faster, but accounting for total program runtime, our web implementation is significantly quicker for the execution context.
 \end{abstract}
 
 \section{Introduction}
@@ -35,6 +35,8 @@ When scientific code is deployed into production web applications for practical 
 outside of academia, a backend is required. However, for many applications, maintaining this infrastructure is costly. 
 Edge computing means making use of compute close to the `edge' of the cloud, 
 which is either close to the user's computer, or the user's computer itself. 
+An additional advantage to this paradigm is simplified data governance, as storage of personal data can be avoided if
+computation occurs directly in the user's browser.
 The problem with performing complex calculations in the browser is that browser code 
 (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction.
 To resolve this problem, WebAssembly was recently introduced,
@@ -76,6 +78,8 @@ Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, L
 Benchmarking code was wrapped in a React applet which can be run locally and accessed via the code repository. Two benchmarks were run. 
 In the first case, a resistance map was generated at 1000$\times$1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
 It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/WASM JIT compilation engine warm-up (`warm start').
+
+For comparison with Circuitscape, a configuation file was created with \texttt{scenario=advanced}, \texttt{write\_as\_tif=True} and run with 4 threads.
 
 \subsection{Connectivity model}
 
@@ -274,6 +278,9 @@ Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of 
 We present a WASM/Rust connectivity library for interactive geospatial edge-computing by implementing the core Circuitscape connectivity model with
 a custom conjugate gradient solver with geometric multigrid preconditioning. This method can be integrated into geospatial web applications,
 allowing fast connectivity modelling in the resource-limited browser WASM context.
+
+Different solvers have different performance on different input matrices. While this implementation gives reasonable performance for the
+tested data, it is likely to vary with different rasters depending on the type of features they contain.
 
 Limitations of the WASM environment are primarily constraints in memory, CPU, and binary size. Traditionally, scientific software relies on 
 highly optimised libraries such as BLAS or, in the case of Circuitscape, CHOLMOD or AMG libraries. In principle, this is possible for WASM, but it is not straightforward.
