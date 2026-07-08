@@ -1,13 +1,12 @@
-//! Dense Cholesky factorization and solve for small SPD systems.
-//!
-//! Used at the coarsest level of the multigrid hierarchy where the system
-//! is small enough (typically < 1000 unknowns) that a direct solve is
-//! faster and more robust than an iterative method.
+///! Cholesky decomposition/solver for (small) symmetric positive-definite matrices.
+///! The method is as follows: compute A = LL^T, then solve Ly = b, then L^Tx = y.
 
-/// Compute the lower-triangular Cholesky factor L such that A = L·Lᵀ.
+/// Compute the lower-triangular Cholesky factor L such that A = LL^T
 ///
-/// `a` is a symmetric positive-definite matrix in row-major order (n×n).
-/// Returns `None` if the matrix is not SPD (non-positive pivot encountered).
+/// # Arguments
+/// * `a` - A slice representing the symmetric positive-definite matrix in row-major order (n x n).
+/// * `n` - The dimension (n x n)
+/// Returns `Some(l)` where `l` is the lower-triangular factor
 pub fn cholesky_decompose(a: &[f64], n: usize) -> Option<Vec<f64>> {
     let mut l = vec![0.0; n * n];
 
@@ -36,9 +35,12 @@ pub fn cholesky_decompose(a: &[f64], n: usize) -> Option<Vec<f64>> {
     Some(l)
 }
 
-/// Solve L·y = b via forward substitution.
+/// Solve Ly = b via forward substitution.
 ///
-/// `l` is lower-triangular in row-major order (n×n).
+/// # Arguments
+/// * `l` - The lower-triangular factor in row-major order (n x n).
+/// * `b` - The right-hand side vector (n elements).
+/// * `n` - The dimension of the matrix.
 fn forward_substitute(l: &[f64], b: &[f64], n: usize) -> Vec<f64> {
     let mut y = vec![0.0; n];
     for i in 0..n {
@@ -56,9 +58,12 @@ fn forward_substitute(l: &[f64], b: &[f64], n: usize) -> Vec<f64> {
     y
 }
 
-/// Solve Lᵀ·x = y via back substitution.
+/// Solve L^Tx = y via back substitution.
 ///
-/// `l` is lower-triangular in row-major order (n×n).
+/// # Arguments
+/// * `l` - The lower-triangular factor in row-major order (n x n).
+/// * `y` - The right-hand side vector (n elements).
+/// * `n` - The dimension of the matrix.
 fn back_substitute(l: &[f64], y: &[f64], n: usize) -> Vec<f64> {
     let mut x = vec![0.0; n];
     for i in (0..n).rev() {
@@ -76,9 +81,14 @@ fn back_substitute(l: &[f64], y: &[f64], n: usize) -> Vec<f64> {
     x
 }
 
-/// Solve A·x = b using precomputed Cholesky factor L.
+/// Solve Ax = b using precomputed Cholesky factor L.
 ///
-/// `l` is the lower-triangular factor from `cholesky_decompose` (n×n, row-major).
+/// The method is as follows: compute A = LL^T, then solve Ly = b, then L^Tx = y.
+///
+/// # Arguments
+/// * `l` - The lower-triangular factor in row-major order (n x n).
+/// * `b` - The right-hand side vector (n elements).
+/// * `n` - The dimension of the matrix.
 pub fn cholesky_solve(l: &[f64], b: &[f64], n: usize) -> Vec<f64> {
     let y = forward_substitute(l, b, n);
     back_substitute(l, &y, n)
@@ -110,7 +120,7 @@ mod tests {
         let n = 3;
         let l = cholesky_decompose(&a, n).expect("SPD matrix should decompose");
 
-        // Verify L·Lᵀ = A
+        // Verify LL^T = A
         for i in 0..n {
             for j in 0..n {
                 let mut sum = 0.0;
@@ -133,7 +143,7 @@ mod tests {
         let l = cholesky_decompose(&a, n).expect("SPD matrix should decompose");
         let x = cholesky_solve(&l, &b, n);
 
-        // Verify A·x = b
+        // Verify Ax = b
         for i in 0..n {
             let mut sum = 0.0;
             for j in 0..n {

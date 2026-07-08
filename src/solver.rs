@@ -135,7 +135,7 @@ pub fn cg_solve_precond(
     CgResult { x, iters }
 }
 
-/// Convenience wrapper — PCG with Jacobi preconditioning (original API).
+/// Wrapper for Jacobi preconditioner.
 pub fn cg_solve(
     a: &CsMat<f64>,
     b: &[f64],
