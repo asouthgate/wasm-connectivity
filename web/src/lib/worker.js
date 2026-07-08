@@ -1,4 +1,5 @@
 import {
+  initSync,
   run_geospatial_pipeline_cached_mg as _geoCmg,
   solve_raster_sources_cached as _rastC,
   solve_raster_sources_mg as _rastMg,
@@ -6,27 +7,44 @@ import {
   rasterize_geojson as _rasterize,
   reset_cache as _resetCache,
   get_memory,
+  __reset,
 } from './wasm_connect.js';
 import wasmUrl from './wasm_connect_bg.wasm?url';
-import initModule from './wasm_connect.js';
 
-let ready = false;
+let compiledModule = null;
+
 function mb() { return get_memory().buffer.byteLength / (1024 * 1024); }
-async function ensure() { if (!ready) { await initModule(wasmUrl); ready = true; } }
+
+async function getCompiledModule() {
+  if (!compiledModule) {
+    const resp = await fetch(wasmUrl);
+    compiledModule = await WebAssembly.compile(await resp.arrayBuffer());
+  }
+  return compiledModule;
+}
+
+function freshInstance() {
+  const m = compiledModule;
+  if (!m) throw new Error('no compiled wasm module');
+  __reset();
+  initSync(m);
+}
 
 self.onmessage = async (e) => {
   const { id, fn, args } = e.data;
 
   try {
     if (fn === 'reset_cache') {
-      await ensure();
+      await getCompiledModule();
+      freshInstance();
       _resetCache();
       self.postMessage({ id, result: { ok: true } });
       return;
     }
 
     if (fn === 'run_geospatial_pipeline_cached_mg') {
-      await ensure();
+      await getCompiledModule();
+      freshInstance();
       const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol] = args;
       const r = _geoCmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol);
       self.postMessage({ id, result: r });
@@ -34,7 +52,8 @@ self.onmessage = async (e) => {
     }
 
     if (fn === 'benchmark_jacobi') {
-      await ensure();
+      await getCompiledModule();
+      freshInstance();
       const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData] = args;
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
@@ -57,7 +76,8 @@ self.onmessage = async (e) => {
     }
 
     if (fn === 'benchmark_gmg') {
-      await ensure();
+      await getCompiledModule();
+      freshInstance();
       const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData] = args;
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
@@ -80,7 +100,8 @@ self.onmessage = async (e) => {
     }
 
     if (fn === 'benchmark_alcouffe') {
-      await ensure();
+      await getCompiledModule();
+      freshInstance();
       const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData] = args;
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);

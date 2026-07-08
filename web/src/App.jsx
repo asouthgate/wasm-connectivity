@@ -4,16 +4,11 @@ import Benchmark from './pages/Benchmark';
 
 function Nav() {
   const loc = useLocation();
-  const active = (path) => loc.pathname === path;
-  const link = (path) => ({
-    color: active(path) ? '#ccc' : '#888',
-    textDecoration: active(path) ? 'underline' : 'none',
-    fontSize: '.85em', padding: '2px 8px',
-  });
+  const linkClass = (path) => `nav-link${loc.pathname === path ? ' nav-link--active' : ''}`;
   return (
-    <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
-      <Link to="/example" style={link('/example')}>example</Link>
-      <Link to="/benchmark" style={link('/benchmark')}>benchmark</Link>
+    <div className="nav">
+      <Link to="/example" className={linkClass('/example')}>example</Link>
+      <Link to="/benchmark" className={linkClass('/benchmark')}>benchmark</Link>
     </div>
   );
 }

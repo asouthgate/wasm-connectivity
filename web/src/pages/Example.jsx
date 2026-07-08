@@ -14,7 +14,7 @@ function LayerMaskCanvas({ data, nrows, ncols }) {
     const c = canvasRef.current;
     if (c && data) renderMap(c, data, nrows, ncols, -1, false);
   }, [data, nrows, ncols]);
-  return <canvas ref={canvasRef} style={{ display: 'block', imageRendering: 'pixelated', width: '100%', height: 'auto' }} />;
+  return <canvas ref={canvasRef} className="layer-mask-canvas" />;
 }
 
 export default function Example() {
@@ -112,11 +112,11 @@ export default function Example() {
   const layerMasks = result ? (result.layer_masks || []) : [];
 
   const numInput = (label, value, setter, min = 0.01, max = 1000, step = 0.01) => (
-    <div style={{ marginBottom: 6 }}>
-      <div style={{ fontSize: '.7em', marginBottom: 1 }}>{label}</div>
+    <div className="example-num-wrap">
+      <div className="example-num-label">{label}</div>
       <input type="number" min={min} max={max} step={step} value={value}
         onChange={e => setter(+e.target.value || min)} disabled={loading}
-        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #444', color: '#ccc', padding: '2px 4px', font: '12px monospace', borderRadius: 2 }} />
+        className="example-num-input" />
     </div>
   );
 
@@ -134,9 +134,8 @@ export default function Example() {
           <div className="preset-group">
             <h3>Resolution</h3>
             {['500', '1000'].map(r => (
-              <div key={r} className={'preset' + (resolution === r ? ' sel' : '')}
-                onClick={() => !loading && loadData(r)}
-                style={loading ? { pointerEvents: 'none', opacity: 0.5 } : {}}>
+              <div key={r} className={'preset' + (resolution === r ? ' sel' : '') + (loading ? ' loading' : '')}
+                onClick={() => !loading && loadData(r)}>
                 Chudleigh {r}×{r}
               </div>
             ))}
@@ -149,7 +148,7 @@ export default function Example() {
               {numInput('Road Res', roadRes, setRoadRes)}
               {numInput('River Res', riverRes, setRiverRes)}
               {numInput('Build Res', buildRes, setBuildRes)}
-              <h3 style={{ marginTop: 8 }}>Line Widths</h3>
+              <h3>Line Widths</h3>
               {numInput('Road Width', roadWidth, setRoadWidth, 0, 20, 0.5)}
               {numInput('River Width', riverWidth, setRiverWidth, 0, 20, 0.5)}
             </div>
@@ -158,18 +157,18 @@ export default function Example() {
 
         <div className="main">
           {!hasData && (
-            <div style={{ padding: 40, textAlign: 'center', fontSize: '.85em' }}>
+            <div className="example-placeholder">
               Select a resolution above to load Chudleigh data.
             </div>
           )}
           {hasData && !result && (
-            <div style={{ padding: 40, textAlign: 'center', fontSize: '.85em' }}>
+            <div className="example-placeholder">
               Adjust parameters and press Run to compute.
             </div>
           )}
           {result && (
             <>
-              <div className="maps" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              <div className="maps">
                 <MapView type="res" data={result.resistance_map}
                   meta={{ nrows: result.nrows, ncols: result.ncols, nodata: baseMeta.nodata }}
                   logScale={resScale === 'log'} onToggleScale={setResScale} />
@@ -181,10 +180,10 @@ export default function Example() {
                   logScale={voltScale === 'log'} onToggleScale={setVoltScale} />
               </div>
               {layerMasks.length > 0 && (
-                <div className="maps" style={{ gridTemplateColumns: `repeat(${Math.min(layerMasks.length, 3)}, 1fr)`, marginTop: 8 }}>
+                <div className="maps maps--auto" style={{ '--grid-cols': Math.min(layerMasks.length, 3) }}>
                   {layerMasks.map(m => (
-                    <div key={m.name} style={{ border: '1px solid #333' }}>
-                      <div style={{ fontSize: '.65em', padding: '3px 6px', background: '#1a1a1a', borderBottom: '1px solid #333' }}>
+                    <div key={m.name} className="layer-mask-card">
+                      <div className="layer-mask-header">
                         {m.name} mask {result.ncols}×{result.nrows}
                       </div>
                       <LayerMaskCanvas data={m.data} nrows={result.nrows} ncols={result.ncols} />

@@ -15,7 +15,7 @@ load()
   })
   .catch(err => {
     root.render(
-      <div style={{ color: '#f44', padding: 20, font: '13px monospace' }}>
+      <div className="error-boundary">
         <p>Failed to load WASM module.</p>
         <pre>{err.message}</pre>
       </div>

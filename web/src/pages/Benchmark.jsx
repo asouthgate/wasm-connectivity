@@ -116,28 +116,28 @@ export default function Benchmark() {
   return (
     <div>
       <div className="row">
-        <span style={{ fontSize: '.75em' }}>repetitions:</span>
+        <span className="bench-reps-label">repetitions:</span>
         <input type="number" value={reps} onChange={e => setReps(Math.max(1, Math.min(20, +e.target.value || 1)))}
-          disabled={running} style={{ width: 50, background: '#222', border: '1px solid #444', color: '#ccc', padding: '3px 6px', font: '12px monospace' }} />
+          disabled={running} className="bench-input" />
         <button className="btn run" onClick={start} disabled={!hasData || running}>Run</button>
         {runs.length > 0 && <button className="btn" onClick={() => buildBenchmarkCSV(runs)}>Download CSV</button>}
       </div>
       <StatusBar status={status} loading={running} />
 
       {hasData && (
-        <div style={{ fontSize: '.75em', marginBottom: 8 }}>
+        <div className="bench-info">
           Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} rep{reps !== 1 ? 's' : ''} · 3 solvers per rep: Jacobi CG, GMG CG, GMG Alcouffe
         </div>
       )}
 
-      <div className="log" style={{ maxHeight: '50vh' }}>
+      <div className="log log--bench">
         <table>
           <thead><tr>
             <th>res</th><th>rep</th><th>run</th><th>prep time</th><th>prep mem</th><th>conn time</th><th>conn mem</th><th>iters</th>
           </tr></thead>
           <tbody>
             {runs.map((r, i) => (
-              <tr key={i} style={r.error ? { color: '#f44' } : {}}>
+              <tr key={i} className={r.error ? 'bench-log-row--error' : ''}>
                 <td>{r.resolution}</td><td>{r.repeat}</td>
                 <td>{r.run}</td>
                 <td>{r.error ? 'err' : fmtMs(r.prepTimeMs)}</td>

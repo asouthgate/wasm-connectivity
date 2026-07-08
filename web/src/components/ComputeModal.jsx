@@ -3,11 +3,10 @@ import { Spinner } from './Spinner';
 export function ComputeModal({ visible }) {
   if (!visible) return null;
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.75)' }}
-      onClick={e => e.stopPropagation()}>
-      <div style={{ textAlign: 'center', padding: '28px 40px', background: '#1a1a1a', border: '1px solid #444', borderRadius: 6 }}>
+    <div className="modal-overlay" onClick={e => e.stopPropagation()}>
+      <div className="modal-box">
         <Spinner size={28} />
-        <div style={{ marginTop: 14, fontSize: '.85em' }}>Computing...</div>
+        <div className="modal-status">Computing...</div>
       </div>
     </div>
   );

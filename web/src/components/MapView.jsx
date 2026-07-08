@@ -17,28 +17,29 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
   const dim = meta ? `${meta.ncols}×${meta.nrows}` : '';
   const fmt = (v) => Math.abs(v) < 0.01 ? v.toExponential(1) : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toPrecision(3);
 
-  const legendStyle = { flex: 1, height: 14, borderRadius: 3, border: '1px solid #444' };
-
   return (
-    <div style={{ border: '1px solid #333', display: 'flex', flexDirection: 'column', maxWidth: '100%' }}>
-      <div style={{ fontSize: '.65em', padding: '3px 6px', background: '#1a1a1a', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="map-view">
+      <div className="map-header">
         <span>{labels[type] || type} {dim && dim}</span>
         {onToggleScale && (
-          <div style={{ display: 'flex', gap: '2px' }}>
-            {['log', 'lin'].map(s => (
-              <span key={s} onClick={() => onToggleScale(s)}
-                style={{ padding: '1px 4px', border: '1px solid #333', cursor: 'pointer', background: logScale === (s === 'log') ? '#238636' : 'transparent', fontSize: '.85em' }}>
-                {s}
-              </span>
-            ))}
+          <div className="map-scale-toggles">
+            {['log', 'lin'].map(s => {
+              const isActive = logScale === (s === 'log');
+              return (
+                <span key={s} onClick={() => onToggleScale(s)}
+                  className={`map-scale-btn${isActive ? ' map-scale-btn--active' : ''}`}>
+                  {s}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>
-      <canvas ref={canvasRef} style={{ display: 'block', imageRendering: 'pixelated', width: '100%', height: 'auto' }} />
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '.65em', padding: '3px 6px', background: '#121212' }}>
-        <span style={{ minWidth: '4em', textAlign: 'right' }}>{fmt(range.min)}</span>
-        <div style={{ ...legendStyle, background: isCurVolt ? PLASMA_GRADIENT : VIRIDIS_GRADIENT }} />
-        <span style={{ minWidth: '4em' }}>{fmt(range.max)}</span>
+      <canvas ref={canvasRef} className="map-canvas" />
+      <div className="map-legend">
+        <span className="map-legend-label map-legend-label--right">{fmt(range.min)}</span>
+        <div className="map-legend-gradient" style={{ '--legend-bg': isCurVolt ? PLASMA_GRADIENT : VIRIDIS_GRADIENT }} />
+        <span className="map-legend-label">{fmt(range.max)}</span>
       </div>
     </div>
   );

@@ -1,0 +1,75 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font: 13px monospace; background: #111; color: #ccc; padding: 12px; }
+h1 { font-size: 1em; margin-bottom: 8px; }
+h3 { font-size: .7em; text-transform: uppercase; margin: 8px 0 4px; letter-spacing: 1px; }
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.btn { padding: 5px 12px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; font: 12px monospace; }
+.btn:hover { border-color: #888; }
+.btn.run { background: #238636; border-color: #238636; color: #fff; font-weight: bold; }
+.btn.run:hover { background: #2ea043; }
+.btn.run:disabled { opacity: .4; cursor: not-allowed; }
+.status { font-size: .8em; margin: 4px 0; }
+.timer { font-size: .75em; }
+
+.layout { display: flex; gap: 12px; }
+.sidebar { width: 180px; flex-shrink: 0; }
+.main { flex: 1; min-width: 0; }
+
+.preset-group { margin-bottom: 8px; }
+.preset { padding: 3px 8px; border: 1px solid #333; border-radius: 2px; cursor: pointer; margin-bottom: 2px; font-size: .75em; }
+.preset:hover { background: #1a1a1a; border-color: #555; }
+.preset.sel { border-color: #58a6ff; color: #58a6ff; }
+.preset.loading { pointer-events: none; opacity: 0.5; }
+
+.maps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.maps--auto { grid-template-columns: repeat(var(--grid-cols), 1fr); margin-top: 8px; }
+.log { max-height: 350px; overflow-y: auto; margin-top: 8px; }
+.log table { border-collapse: collapse; font-size: .75em; width: 100%; }
+.log td, .log th { padding: 2px 8px; border: 1px solid #333; }
+.log td { text-align: right; }
+.log th { background: #1a1a1a; color: #888; text-align: right; font-weight: normal; }
+.log--bench { max-height: 50vh; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error-boundary { color: #f44; padding: 20px; font: 13px monospace; }
+
+.nav { display: flex; gap: 16px; margin-bottom: 12px; }
+.nav-link { font-size: .85em; padding: 2px 8px; color: #888; text-decoration: none; }
+.nav-link--active { color: #ccc; text-decoration: underline; }
+
+.spinner { display: inline-block; width: var(--spinner-size); height: var(--spinner-size); border: 2px solid #444; border-top-color: #ccc; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-right: 6px; flex-shrink: 0; }
+
+.status-bar { display: flex; align-items: center; }
+.status-bar--error { color: #f44; }
+
+.modal-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); }
+.modal-box { text-align: center; padding: 28px 40px; background: #1a1a1a; border: 1px solid #444; border-radius: 6px; }
+.modal-status { margin-top: 14px; font-size: .85em; }
+
+.map-view { border: 1px solid #333; display: flex; flex-direction: column; max-width: 100%; }
+.map-header { font-size: .65em; padding: 3px 6px; background: #1a1a1a; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+.map-canvas { display: block; image-rendering: pixelated; width: 100%; height: auto; }
+.map-legend { display: flex; gap: 6px; align-items: center; font-size: .65em; padding: 3px 6px; background: #121212; }
+.map-legend-label { min-width: 4em; }
+.map-legend-label--right { text-align: right; }
+.map-legend-gradient { flex: 1; height: 14px; border-radius: 3px; border: 1px solid #444; background: var(--legend-bg); }
+.map-scale-toggles { display: flex; gap: 2px; }
+.map-scale-btn { padding: 1px 4px; border: 1px solid #333; cursor: pointer; font-size: .85em; background: transparent; }
+.map-scale-btn--active { background: #238636; }
+
+.layer-mask-card { border: 1px solid #333; }
+.layer-mask-header { font-size: .65em; padding: 3px 6px; background: #1a1a1a; border-bottom: 1px solid #333; }
+.layer-mask-canvas { display: block; image-rendering: pixelated; width: 100%; height: auto; }
+
+.bench-reps-label { font-size: .75em; }
+.bench-input { width: 50px; background: #1a1a1a; border: 1px solid #444; color: #ccc; padding: 3px 6px; font: 12px monospace; }
+.bench-info { font-size: .75em; margin-bottom: 8px; }
+.bench-log-row--error { color: #f44; }
+
+.example-num-wrap { margin-bottom: 6px; }
+.example-num-label { font-size: .7em; margin-bottom: 1px; }
+.example-num-input { width: 100%; background: #1a1a1a; border: 1px solid #444; color: #ccc; padding: 2px 4px; font: 12px monospace; border-radius: 2px; }
+.example-placeholder { padding: 40px; text-align: center; font-size: .85em; }
