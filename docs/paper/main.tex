@@ -17,7 +17,7 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, Circuitscape solves 1000x1000 raster networks 2-3x faster, but accounting for total program runtime, our web implementation is significantly quicker for the execution context.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, Circuitscape solves 1000x1000 raster networks 1-2x faster, but requires further file writes. Accounting for total program runtime, our web implementation can be faster for the given context.
 \end{abstract}
 
 \section{Introduction}
@@ -58,23 +58,23 @@ such as geospatial analysis software. We demonstrate reasonable
 
 \section{Methodology}
 
-\subsection{Code}
-
-All code can be found at \url{github.com/asouthgate/wasm-connectivity}.
-
-\subsection{Vector rasterisation}
-
-In order to keep the WASM toolset lightweight, we avoid heavy geospatial dependencies. For vector rasterisation, we use
-the \texttt{geojson} and \texttt{geo} crates, which are lightweight and have no external dependencies. Handling vector inputs allows
-applications with vector data to use the WASM toolset directly, and interface cleanly with vector tile
-data such as MVT derived from mbtiles.
-
-\subsection{Example datasets}
+\subsection{Example datasets and resistance map calculation}
 
 In order to demonstrate the functionality of our WASM toolset, a test region corresponding to a 1~$\text{km}^2$ region centered at
 286600E, 79050N (EPSG:27700) was selected. The region includes buildings, roads, and a river. Vector data was obtained from
 the UK Ordnance Survey open data \cite{os_data}. 
 DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
+
+For the test resistance map, we use constant resistance parameters for rasterised vector features: 50 for roads (3 pixel buffer), 500 for buildings, 
+and 0.5 for rivers (4 pixel buffer).
+For raster landscape feature resistance, we took the feature height as resistance. 
+These parameters were arbitrary and chosen to introduce variation into the test resistance map inputted into current calculation.
+In practice, these parameters can be set freely.
+
+In order to keep the WASM toolset lightweight, we avoid heavy geospatial dependencies. For vector rasterisation, we use
+the \texttt{geojson} and \texttt{geo} crates, which are lightweight and have no external dependencies. Handling vector inputs allows
+applications with vector data to use the WASM toolset directly, and interface cleanly with vector tile
+data such as MVT derived from mbtiles.
 
 \subsection{Benchmarking}
 
@@ -83,11 +83,12 @@ Benchmarking code was wrapped in a React applet which can be run locally and acc
 In the first case, a resistance map was generated at 1000$\times$1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
 It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/WASM JIT compilation engine warm-up (`warm start').
 
-For comparison with Circuitscape, a configuation file was created with \texttt{scenario=advanced}, \texttt{write\_as\_tif=True} and run with 4 threads.
+For comparison with Circuitscape, a configuration file was created with \texttt{scenario=advanced}, \texttt{write\_as\_tif=True} and run with 4 threads.
+Although this allows Circuitscape to multithread, which our implementation does not exploit, it is conventional to run with multiple threads. 
 
 \subsection{Connectivity model}
 
-We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} is \eqref{eq:ohm}:
+We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} is \eqref{eq:ohm} specifies the relationship between voltage $V$, current $I$, and resistance $R$ as $V=IR$. Or, using conductance $C = 1/R$:
 
 \begin{equation}
 \label{eq:ohm}
@@ -182,7 +183,6 @@ We compare several preconditioners: a simple diagonal preconditioner with $\math
 which can be useful for some data \cite{wathen2015preconditioning}; a geometric multigrid (GMG) preconditioner, which is more complex but converges faster \cite{tatebe1993multigrid};
 an Alcouffe preconditioner \cite{alcouffe1981multi}, which is better for sharply contrasting features.
 We implement these methods directly to reduce WASM dependencies and binary footprint. 
-such as in Circuitscape, where the algebraic multigrid (AMG) preconditioner is offered \cite{hall2021circuitscape}.
 
 The GMG preconditioner is more complex than the Jacobi preconditioner, which smoothes high-frequency features. It requires computing a correction $\mathbf{e}$ using a sequence of coarse-grained matrices and passing them up. At the lowest resolution, the system is solved using Cholesky decomposition. The algorithm proceeds as follows.
 The finest grid is smoothed with a few iterations of a Jacobi smoother. The residual is calculated:
@@ -266,7 +266,7 @@ the CG MG preconditioners were much faster than Jacobi preconditioning, while ta
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/resistance_current_react.png}
-\caption{Example dataset 1000x1000 log resistance and log current maps rendered using a React frontend with WASM connectivity library in 6 minutes.}
+\caption{Example dataset 1000x1000 log resistance and log current maps rendered using a React frontend with WASM connectivity library, computed in 6.52 seconds.}
 \label{fig:wasm-connectivity}
 \end{figure}
 
@@ -274,7 +274,7 @@ the CG MG preconditioners were much faster than Jacobi preconditioning, while ta
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/benchmarking.png}
-\caption{Time and memory comparison across resolutions for each solver. Both MG solvers converge much more quickly, while only taking marginally more memory.}
+\caption{Time and memory comparison across resolutions for each solver. Both MG solvers converge much more quickly, while only taking marginally more memory. Individual data points are shown as crosses, the mean as solid lines.}
 \label{fig:benchmarking}
 \end{figure}
 
@@ -284,23 +284,26 @@ the same resistance map input with a zero-volt ground, showing comparable result
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/cs_vs_wasm.png}
-\caption{Side-by-side compoarison showing log current maps produced by Circuitscape (left) and our implementation (right), to show consistency.}
-\label{fig:comparison}
+\label{fig:cs_runtime}
+\caption{Runtime comparison between Circuitscape and our WASM implementation for a 500x500 test raster. Circuitscape took 2.48 seconds ($\pm$0.12), versus 3.79 ($\pm$0.38) for WASM (Alcouffe). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. }
 \end{figure}
 
 As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape solvers are much quicker than the presented
 WASM browser solvers. The average time for WASM (Alcouffe) was 3.79 seconds, compared to 2.48 seconds for the 
 preconditioner building and solve step in Circuitscape.
 However, the total runtime of Circuitscape including post-solving steps was much slower, at 128.11s.
-As such, provided there is sufficient memory, these results show our implementation can out-preform
-circuitscape in a web-application context, especially if the solver does not dominate the time taken for a 
+In the web browser context which we utilise, we do not have to write the data to file, and presentation in 
+the browser is near-instantaneous.
+As such, provided there is sufficient memory, these results show our implementation can out-perform
+circuitscape in a web-application context, even though the circuitscape solver is faster,
+especially if the solver does not dominate the time taken for an
 analysis round trip from browser to server and back.
 
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/comparison_cs_alc.png}
-\caption{Side-by-side compoarison showing log current maps produced by Circuitscape (left) and our implementation (right), to show consistency.}
-\label{fig:cs_runtime}
+\caption{Side-by-side comparison showing log current maps produced by Circuitscape (left) and our implementation (right), to show consistency.}
+\label{fig:comparison}
 \end{figure}
 
 
