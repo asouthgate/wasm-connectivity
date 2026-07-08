@@ -262,28 +262,48 @@ Figure \ref{fig:wasm-connectivity} gives an example of a 1000x1000 resistance in
 rendered in a React frontend using raster source mode (`advanced mode') for the test region.
 Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. As shown,
 the CG MG preconditioners were much faster than Jacobi preconditioning, while taking modestly more memory.
-Figure \ref{fig:comparison} shows a side-by-side comparison of a Circuitscape current map produced from
-the same resistance map input with a zero-volt ground, showing comparable results.
 
-As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape solvers are much quicker than the presented
-WASM browser solvers. However, the total runtime of Circuitscape including post-solving steps is slower.
-As such, provided there is sufficient memory, these results show our implementation can out-preform
-circuitscape in a web-application context.
-
-\begin{figure}[h]
+\begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/resistance_current_react.png}
-\caption{Example dataset 1000x1000 resistance and current maps rendered using a React frontend with WASM connectivity library in 6 minutes.}
+\caption{Example dataset 1000x1000 log resistance and log current maps rendered using a React frontend with WASM connectivity library in 6 minutes.}
 \label{fig:wasm-connectivity}
 \end{figure}
 
 
-\begin{figure}[h]
+\begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/benchmarking.png}
-\caption{Benchmarking results. Point in grey is cold start run, expected to be slower.}
+\caption{Time and memory comparison across resolutions for each solver. Both MG solvers converge much more quickly, while only taking marginally more memory.}
 \label{fig:benchmarking}
 \end{figure}
+
+Figure \ref{fig:comparison} shows a side-by-side comparison of a Circuitscape current map produced from
+the same resistance map input with a zero-volt ground, showing comparable results.
+
+\begin{figure}[htb!]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/cs_vs_wasm.png}
+\caption{Side-by-side compoarison showing log current maps produced by Circuitscape (left) and our implementation (right), to show consistency.}
+\label{fig:comparison}
+\end{figure}
+
+As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape solvers are much quicker than the presented
+WASM browser solvers. The average time for WASM (Alcouffe) was 3.79 seconds, compared to 2.48 seconds for the 
+preconditioner building and solve step in Circuitscape.
+However, the total runtime of Circuitscape including post-solving steps was much slower, at 128.11s.
+As such, provided there is sufficient memory, these results show our implementation can out-preform
+circuitscape in a web-application context, especially if the solver does not dominate the time taken for a 
+analysis round trip from browser to server and back.
+
+\begin{figure}[htb!]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/comparison_cs_alc.png}
+\caption{Side-by-side compoarison showing log current maps produced by Circuitscape (left) and our implementation (right), to show consistency.}
+\label{fig:cs_runtime}
+\end{figure}
+
+
 
 \section{Discussion}
 
