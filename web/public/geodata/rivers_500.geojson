@@ -1,8 +1,0 @@
-{
-"type": "FeatureCollection",
-"name": "rivers",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:EPSG::27700" } },
-"features": [
-{ "type": "Feature", "properties": { "name1": "Kate Brook", "identifier": "54CD7EC6-7C05-4A49-B203-9D13CBC52113", "startNode": "64129DD0-4101-4C11-B79B-16D8BCA50FB6", "endNode": "3D062F9D-12B7-4DF7-85B6-6F54DABF2D60", "form": "inlandRiver", "flow": "in direction", "fictitious": "false", "length": 1935, "name2": null }, "geometry": { "type": "LineString", "coordinates": [ [ 286850.0, 78973.098106923745945, 0.0 ], [ 286842.460000000020955, 78968.36, 0.0 ], [ 286835.840000000025611, 78921.680000000007567, 0.0 ], [ 286806.26, 78892.040000000008149, 0.0 ], [ 286791.299999999988358, 78854.009999999994761, 0.0 ], [ 286743.580000000016298, 78826.759999999994761, 0.0 ], [ 286737.918261103681289, 78800.0, 0.0 ] ] } }
-]
-}
