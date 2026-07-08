@@ -8,7 +8,7 @@
 \usepackage{graphicx}
 \usepackage{hyperref} 
 
-\title{A connectivity modelling toolset for ecological and geospatial edge computing}
+\title{Ecological connectivity modelling with WebAssembly}
 \author{
   Alex J. Southgate \\
   \small southgateJA@cardiff.ac.uk \\[1em]
@@ -293,8 +293,8 @@ the same resistance map input with a zero-volt ground, showing comparable result
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/cs_vs_wasm.png}
-\label{fig:cs_runtime}
 \caption{Runtime comparison between Circuitscape and our WASM implementation for a 500x500 test raster. On average, Circuitscape took 2.48 seconds, versus 3.79 for WASM (Alcouffe). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. }
+\label{fig:cs_runtime}
 \end{figure}
 
 As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape solvers are quicker than the presented
