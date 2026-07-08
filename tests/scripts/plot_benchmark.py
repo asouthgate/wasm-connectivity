@@ -105,7 +105,7 @@ def plot(csv_path, out_path):
             for y in pts or []:
                 xs.append(res)
                 ys.append(y)
-        ax2.scatter(xs, ys, c=RUN_COLORS[run], marker='o', alpha=0.4, zorder=2)
+        ax2.scatter(xs, ys, c=RUN_COLORS[run], marker='x', alpha=0.4, zorder=2)
         
         # Plot mean trendlines
         ax2.plot(res_all, mean_m[run], RUN_LINESTYLES[run], color=RUN_COLORS[run], 
