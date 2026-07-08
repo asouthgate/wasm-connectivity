@@ -1,11 +1,5 @@
-//! Geometric multigrid preconditioner for the Laplacian system.
-//!
-//! Fills nodata cells with a high resistance so the domain is a perfect
-//! rectangle, then builds a hierarchy of coarsened Laplacians. The
-//! preconditioner applies one V-cycle per CG iteration.
-
 use sprs::CsMat;
-use crate::solver::{self, Preconditioner, mat_vec_mul_slice};
+use crate::pcg::{self, Preconditioner, mat_vec_mul_slice};
 use crate::cholesky;
 use std::cell::RefCell;
 
@@ -506,7 +500,7 @@ impl MgPreconditioner {
                 workspaces.borrow_mut()[level].z.copy_from_slice(&x);
             } else {
                 let mut ws = workspaces.borrow_mut();
-                let res = crate::solver::cg_solve(&lvl.laplacian, b, 50, 1e-3, Some(&ws[level].z));
+                let res = crate::pcg::cg_solve(&lvl.laplacian, b, 50, 1e-3, Some(&ws[level].z));
                 ws[level].z.copy_from_slice(&res.x);
             }
             return;
@@ -655,7 +649,7 @@ fn symmetric_gauss_seidel_smooth(
 
 #[allow(dead_code)]
 fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
-    solver::mat_vec_mul_into(a, v, out);
+    pcg::mat_vec_mul_into(a, v, out);
 }
 
 #[cfg(test)]

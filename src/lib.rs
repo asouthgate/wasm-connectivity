@@ -2,7 +2,7 @@ pub mod grid;
 pub mod graph;
 pub mod laplacian;
 pub mod components;
-pub mod solver;
+pub mod pcg;
 pub mod current;
 pub mod solve;
 pub mod cache;

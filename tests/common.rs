@@ -83,18 +83,6 @@ pub fn write_asc<P: AsRef<Path>>(
     }
 }
 
-pub fn make_building_geojson(
-    asc: &AscGrid, col_start: usize, row_start: usize, side_px: usize,
-) -> String {
-    let x_left = asc.xllcorner + col_start as f64 * asc.cellsize;
-    let x_right = asc.xllcorner + (col_start + side_px) as f64 * asc.cellsize;
-    let y_top = asc.ymax - row_start as f64 * asc.cellsize;
-    let y_bottom = asc.ymax - (row_start + side_px) as f64 * asc.cellsize;
-    format!(
-        r#"{{"type":"FeatureCollection","features":[{{"type":"Feature","properties":{{"layer":"buildings"}},"geometry":{{"type":"Polygon","coordinates":[[[{x_left:.6},{y_top:.6}],[{x_right:.6},{y_top:.6}],[{x_right:.6},{y_bottom:.6}],[{x_left:.6},{y_bottom:.6}],[{x_left:.6},{y_top:.6}]]]}}}}]}}"#
-    )
-}
-
 pub fn asc_to_png<P: AsRef<Path>, Q: AsRef<Path>>(asc_path: P, png_path: Q) {
     let grid = parse_asc(&asc_path);
     let n = grid.data.len();

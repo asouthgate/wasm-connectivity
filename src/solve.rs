@@ -1,6 +1,6 @@
 use sprs::CsMat;
 use serde::Serialize;
-use crate::{components, solver, current, grid, cache};
+use crate::{components, pcg as solver, current, grid, cache};
 use crate::ConnectivityOutput;
 use crate::multigrid::{self, MgPreconditioner};
 
