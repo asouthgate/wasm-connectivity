@@ -9,7 +9,7 @@
 \usepackage{hyperref} 
 
 \title{A connectivity modelling toolset for ecological and geospatial edge computing}
-\author{Alex Southgate}
+\author{Alex J. Southgate \\ \small southgateJA@cardiff.ac.uk}
 \date{\today}
 
 \begin{document}
@@ -125,7 +125,7 @@ The simplest run mode is for a source and sink pair, equivalent to a conditional
 
 \subsection{Solver}
 
-Given an $N\times M$ image, the matrix $L$ takes $O(NM)$ space. In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised CHOLMOD libraries that are not available in a WASM context. In order to keep the WASM binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
+In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised libraries that are not available in a WASM context. In order to keep the WASM binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
 
 A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for WASM, a brief explanation follows. Solving the system:
 
@@ -139,34 +139,45 @@ is equivalent to solving the energy function:
 f(\mathbf{v}) = \frac{1}{2} \mathbf{v}^T \mathbf{L}\mathbf{v} - \mathbf{v}^T\mathbf{s}
 \]
 
-Since when taking the negative gradient and setting to zero, we get the residual error for our system:
+Since, when taking the negative gradient and setting to zero, we get the residual error for our system:
 
 \[
 -\nabla f(\mathbf{v}) = \mathbf{s} - \mathbf{L}\mathbf{v} = \mathbf{r}
 \]
 
-Stepping in the direction $r$ at step $k$ gives us a new guess.
+Stepping in the direction $\mathbf{r}_k$ at step $k$ gives us a new guess.
 
 \[
-\mathbf{v}_{k+1} = \mathbf{v}_{k} + \mathbf{\alpha} \mathbf{r}_k
+\mathbf{v}_{k+1} = \mathbf{v}_{k} + \alpha_k \mathbf{r}_k
 \]
 
 Taking the gradient and choosing an optimal step size $\alpha$ gets to the bottom of the hill for that slice. The next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. In steepest descent, to get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that:
 
 \[
-\mathbf{\alpha}_{k} = \frac{\mathbf{r}_{k}^T \mathbf{r}_k}{\mathbf{r}_k^T \mathbf{L}\mathbf{r}_k}
+\alpha_{k} = \frac{\mathbf{r}_{k}^T \mathbf{r}_k}{\mathbf{r}_k^T \mathbf{L}\mathbf{r}_k}
 \]
 
-However, stepping maximally in a sequence of orthogonal steps can be inefficient and lead to zig-zag steps. Instead, a kind of moving average or momentum can be applied to the steps. 
+However, stepping maximally in a sequence of orthogonal steps can be inefficient and lead to zig-zag steps. Instead, a kind of moving average or inertia can be applied to the steps. 
+For the CG method, conjugate directions are used. Contrary to steepest descent, each direction requires information from the previous direction and cannot be computed solely
+from the residual.
 
 \[
 \mathbf{p}_{k+1} = \mathbf{r}_{k+1} + \mathbf{\beta}_{k+1}\mathbf{p}_k
 \]
 
-In the case of CG, $\beta$ is:
+\[
+\mathbf{v}_{k+1} = \mathbf{v}_k + \alpha_{k+1}\mathbf{p}_{k+1}
+\]
+
+
+In the case of CG, $\alpha$ and $\beta$ are:
 
 \[
 \beta_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{r}_{k}^T\mathbf{r}_{k}}
+\]
+
+\[
+\alpha_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{p}^T_{k+1}\mathbf{L}\mathbf{p_{k+1}}}
 \]
 
 
@@ -184,15 +195,15 @@ which can be useful for some data \cite{wathen2015preconditioning}; a geometric 
 an Alcouffe preconditioner \cite{alcouffe1981multi}, which is better for sharply contrasting features.
 We implement these methods directly to reduce WASM dependencies and binary footprint. 
 
-The GMG preconditioner is more complex than the Jacobi preconditioner, which smoothes high-frequency features. It requires computing a correction $\mathbf{e}$ using a sequence of coarse-grained matrices and passing them up. At the lowest resolution, the system is solved using Cholesky decomposition. The algorithm proceeds as follows.
-The finest grid is smoothed with a few iterations of a Jacobi smoother. The residual is calculated:
+The GMG preconditioner is more complex than the Jacobi preconditioner. It requires computing a correction $\mathbf{e}$ using a sequence of coarse-grained matrices and passing them up. At the lowest resolution, the system is solved using Cholesky decomposition. The algorithm proceeds as follows.
+The finest grid is smoothed with a few iterations of a Gauss-Seidel smoother. The residual is calculated:
 
 \[
 r = \mathbf{s} - \mathbf{L}\mathbf{v}
 \]
 
 This residual is passed down to a coarser grid using a restriction operator $R$. 
-This will be balanced with a prolongation operator, which is a scaled transpose $P = cR^T$, on the way back up.
+This will be balanced with a prolongation operator on the way back up.
 These operators are comparable to downsampling and upsampling.
 This is applied repeatedly until the coarsest resolution is reached.
 Then, the system is solved directly to get the coarse error:
