@@ -260,7 +260,15 @@ Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. T
 
 Figure \ref{fig:wasm-connectivity} gives an example of a 1000x1000 resistance input and current map output
 rendered in a React frontend using raster source mode (`advanced mode') for the test region.
-Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. 
+Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. As shown,
+the CG MG preconditioners were much faster than Jacobi preconditioning, while taking modestly more memory.
+Figure \ref{fig:comparison} shows a side-by-side comparison of a Circuitscape current map produced from
+the same resistance map input with a zero-volt ground, showing comparable results.
+
+As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape solvers are much quicker than the presented
+WASM browser solvers. However, the total runtime of Circuitscape including post-solving steps is slower.
+As such, provided there is sufficient memory, these results show our implementation can out-preform
+circuitscape in a web-application context.
 
 \begin{figure}[h]
 \centering
@@ -283,6 +291,9 @@ We present a WASM/Rust connectivity library for interactive geospatial edge-comp
 a custom conjugate gradient solver with geometric multigrid preconditioning. This method can be integrated into geospatial web applications,
 allowing fast connectivity modelling in the resource-limited browser WASM context.
 
+Although Circuitscape solves the linear equations for this problem quicker than our implementation, the post-solve steps and total runtime exceeded
+that of our WASM implementation for the datasets examined. As such, our implementation is advantageous in a web context, 
+and removes the need for a backend server and data governance.
 Different solvers have different performance on different input matrices. While this implementation gives reasonable performance for the
 tested data, it is likely to vary with different rasters depending on the type of features they contain.
 
