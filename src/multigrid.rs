@@ -1,6 +1,7 @@
 use sprs::CsMat;
 use crate::pcg::{self, Preconditioner, mat_vec_mul_slice};
 use crate::cholesky;
+use crate::solve::apply_dirichlet_ground_lap;
 use std::cell::RefCell;
 
 /// Resistance value used to fill nodata cells. 1e9 Ω makes the edge
@@ -254,6 +255,7 @@ impl MgPreconditioner {
         ncols: usize,
         nodata: f64,
         max_levels: usize,
+        ground_nodes: Option<&[usize]>,
     ) -> Self {
         let filled = fill_nodata(resistance, nodata);
         let mut levels = Vec::new();
@@ -262,7 +264,7 @@ impl MgPreconditioner {
         // Build level 0 from the full resistance grid
         #[cfg(not(target_arch = "wasm32"))]
         let t1 = std::time::Instant::now();
-        let (_nodemap, num_nodes, _edges, laplacian, _components) =
+        let (_nodemap, num_nodes, _edges, mut laplacian, _components) =
             crate::build_circuit_model(&filled, nr, nc, nodata);
         #[cfg(not(target_arch = "wasm32"))]
         let build_ms = t1.elapsed().as_millis();
@@ -274,6 +276,15 @@ impl MgPreconditioner {
             "MG hierarchy expects all cells as nodes, got {} vs {}",
             num_nodes, nr * nc
         );
+
+        // Apply Dirichlet ground BCs to the fine-grid Laplacian if requested.
+        // This modifies the system to pin V=0 at ground nodes, matching
+        // Circuitscape's advanced mode behaviour.
+        if let Some(gns) = ground_nodes {
+            if !gns.is_empty() {
+                laplacian = apply_dirichlet_ground_lap(&laplacian, gns);
+            }
+        }
 
         levels.push(MgLevel {
             laplacian,
@@ -378,6 +389,7 @@ impl MgPreconditioner {
         ncols: usize,
         nodata: f64,
         max_levels: usize,
+        ground_nodes: Option<&[usize]>,
     ) -> Self {
         let filled = fill_nodata(resistance, nodata);
         let mut levels = Vec::new();
@@ -385,7 +397,7 @@ impl MgPreconditioner {
 
         #[cfg(not(target_arch = "wasm32"))]
         let t1 = std::time::Instant::now();
-        let (_nodemap, num_nodes, _edges, laplacian, _components) =
+        let (_nodemap, num_nodes, _edges, mut laplacian, _components) =
             crate::build_circuit_model(&filled, nr, nc, nodata);
         #[cfg(not(target_arch = "wasm32"))]
         let build_ms = t1.elapsed().as_millis();
@@ -397,6 +409,18 @@ impl MgPreconditioner {
             "MG hierarchy expects all cells as nodes, got {} vs {}",
             num_nodes, nr * nc
         );
+
+        // Keep a copy of the original Laplacian for building Alcouffe
+        // matrix-dependent prolongation weights. The Dirichlet-modified
+        // Laplacian has identity rows at ground nodes, which would give
+        // incorrect prolongation weights.
+        let lap_orig = laplacian.clone();
+
+        if let Some(gns) = ground_nodes {
+            if !gns.is_empty() {
+                laplacian = apply_dirichlet_ground_lap(&laplacian, gns);
+            }
+        }
 
         levels.push(MgLevel {
             laplacian,
@@ -420,8 +444,15 @@ impl MgPreconditioner {
             #[cfg(not(target_arch = "wasm32"))]
             let t1 = std::time::Instant::now();
             let fine_lap = &levels.last().unwrap().laplacian;
+            // For the first prolongation (level 0 → 1), use the original
+            // Laplacian for Alcouffe weights to avoid Dirichlet-identity rows.
+            let lap_for_prolong = if ground_nodes.is_some() && levels.len() == 1 {
+                &lap_orig
+            } else {
+                fine_lap
+            };
             let (p_rows, p_cols, p_vals) =
-                build_alcouffe_prolongation_triplets(fine_lap, fine_nr, fine_nc, next_nr, next_nc);
+                build_alcouffe_prolongation_triplets(lap_for_prolong, fine_nr, fine_nc, next_nr, next_nc);
             let fine_n = fine_nr * fine_nc;
             let coarse_n = next_nr * next_nc;
 
@@ -669,7 +700,7 @@ mod tests {
         
         // 1. Build using your actual `.build` method
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 3);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 3, None);
         
         // 2. Generate two distinct structural vectors using predictable trigonometric waves
         let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
@@ -707,7 +738,7 @@ mod tests {
         let n = nrows * ncols;
 
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 7);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 7, None);
 
         let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
@@ -764,7 +795,7 @@ mod tests {
         let nrows = 15;
         let ncols = 15;
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4, None);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
             let n = lvl.nrows * lvl.ncols;
@@ -796,7 +827,7 @@ mod tests {
         let ncols = 15;
         let n = nrows * ncols;
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4, None);
 
         let z: Vec<f64> = (0..n).map(|i| (i as f64 * 0.7 + 1.3).sin() * 0.5 + 0.3).collect();
         let mut mz = vec![0.0; n];
@@ -826,7 +857,7 @@ mod tests {
         let ncols = 15;
         let n = nrows * ncols;
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4, None);
 
         let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
@@ -848,7 +879,7 @@ mod tests {
         let nrows = 15;
         let ncols = 15;
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4, None);
 
         let coarsest = mg.levels.len() - 1;
         let lvl = &mg.levels[coarsest];
@@ -885,7 +916,7 @@ mod tests {
         let nrows = 15;
         let ncols = 15;
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4, None);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
             let n = lvl.nrows * lvl.ncols;
@@ -921,7 +952,7 @@ mod tests {
             crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
         assert_eq!(num_nodes, n);
 
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4, None);
 
         let comp = &components[0];
         let (a_local, _node_to_local) = crate::components::build_subgraph_laplacian(&full_lap, comp);
@@ -967,7 +998,7 @@ mod tests {
             crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
         assert_eq!(num_nodes, n);
 
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 4, None);
 
         let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
@@ -1052,7 +1083,7 @@ mod tests {
         let nrows = 32;
         let ncols = 32;
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6, None);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
             let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
@@ -1088,7 +1119,7 @@ mod tests {
         let nrows = 32;
         let ncols = 32;
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6, None);
 
         let coarsest = mg.levels.len() - 1;
         let lvl = &mg.levels[coarsest];
@@ -1139,7 +1170,7 @@ mod tests {
             }
         }
 
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6, None);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
             let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
@@ -1224,7 +1255,7 @@ mod tests {
             }
         }
 
-        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6);
+        let mg = MgPreconditioner::build(&resistance, nrows, ncols, -1.0, 6, None);
 
         let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
@@ -1281,7 +1312,7 @@ mod tests {
         let n = nrows * ncols;
         let resistance = vec![1.0; n];
 
-        let mg = MgPreconditioner::build_alcouffe(&resistance, nrows, ncols, -1.0, 4);
+        let mg = MgPreconditioner::build_alcouffe(&resistance, nrows, ncols, -1.0, 4, None);
         let ap = mg.levels[1].prolongation.as_ref().unwrap();
 
         let fine_n = nrows * ncols;
@@ -1325,8 +1356,8 @@ mod tests {
             }
         }
 
-        let mg_uni = MgPreconditioner::build_alcouffe(&uniform, nrows, ncols, -1.0, 4);
-        let mg_var = MgPreconditioner::build_alcouffe(&variable, nrows, ncols, -1.0, 4);
+        let mg_uni = MgPreconditioner::build_alcouffe(&uniform, nrows, ncols, -1.0, 4, None);
+        let mg_var = MgPreconditioner::build_alcouffe(&variable, nrows, ncols, -1.0, 4, None);
 
         let up = mg_uni.levels[1].prolongation.as_ref().unwrap();
         let vp = mg_var.levels[1].prolongation.as_ref().unwrap();
@@ -1367,7 +1398,7 @@ mod tests {
             }
         }
 
-        let mg = MgPreconditioner::build_alcouffe(&resistance, nrows, ncols, -1.0, 6);
+        let mg = MgPreconditioner::build_alcouffe(&resistance, nrows, ncols, -1.0, 6, None);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
             let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
@@ -1438,7 +1469,7 @@ mod tests {
         let n = nrows * ncols;
 
         let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = MgPreconditioner::build_alcouffe(&resistance, nrows, ncols, -1.0, 3);
+        let mg = MgPreconditioner::build_alcouffe(&resistance, nrows, ncols, -1.0, 3, None);
 
         let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
         let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.2).cos()).collect();

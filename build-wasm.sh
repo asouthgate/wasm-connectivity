@@ -23,7 +23,6 @@ export function __reset() {
     wasmModule = null;
     cachedDataViewMemory0 = null;
     cachedFloat64ArrayMemory0 = null;
-    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
 }
 PATCH

@@ -6,14 +6,10 @@ import {
   solve_raster_sources_mg_alcouffe as _rastMgAlcouffe,
   rasterize_geojson as _rasterize,
   reset_cache as _resetCache,
-  get_memory,
-  __reset,
 } from './wasm_connect.js';
 import wasmUrl from './wasm_connect_bg.wasm?url';
 
 let compiledModule = null;
-
-function mb() { return get_memory().buffer.byteLength / (1024 * 1024); }
 
 async function getCompiledModule() {
   if (!compiledModule) {
@@ -26,7 +22,6 @@ async function getCompiledModule() {
 function freshInstance() {
   const m = compiledModule;
   if (!m) throw new Error('no compiled wasm module');
-  __reset();
   initSync(m);
 }
 
@@ -45,8 +40,8 @@ self.onmessage = async (e) => {
     if (fn === 'run_geospatial_pipeline_cached_mg') {
       await getCompiledModule();
       freshInstance();
-      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol] = args;
-      const r = _geoCmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol);
+      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol, useDirichletGround] = args;
+      const r = _geoCmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol, !!useDirichletGround);
       self.postMessage({ id, result: r });
       return;
     }
@@ -54,22 +49,18 @@ self.onmessage = async (e) => {
     if (fn === 'benchmark_jacobi') {
       await getCompiledModule();
       freshInstance();
-      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData] = args;
+      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround] = args;
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
       const t1 = performance.now();
-      const prepMem = mb();
       const parsed = JSON.parse(resJson);
       const t2 = performance.now();
-      const out = _rastC(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6, false);
+      const out = _rastC(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6, false, !!useDirichletGround);
       const t3 = performance.now();
-      const connMem = mb();
       const parsed_out = JSON.parse(out);
       self.postMessage({ id, result: {
         prepTimeMs: t1 - t0,
         connTimeMs: t3 - t2,
-        prepMemMb: prepMem,
-        connMemMb: connMem,
         totalIters: parsed_out.total_iters || 0,
       }});
       return;
@@ -78,22 +69,18 @@ self.onmessage = async (e) => {
     if (fn === 'benchmark_gmg') {
       await getCompiledModule();
       freshInstance();
-      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData] = args;
+      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround] = args;
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
       const t1 = performance.now();
-      const prepMem = mb();
       const parsed = JSON.parse(resJson);
       const t2 = performance.now();
-      const out = _rastMg(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6);
+      const out = _rastMg(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6, !!useDirichletGround);
       const t3 = performance.now();
-      const connMem = mb();
       const parsed_out = JSON.parse(out);
       self.postMessage({ id, result: {
         prepTimeMs: t1 - t0,
         connTimeMs: t3 - t2,
-        prepMemMb: prepMem,
-        connMemMb: connMem,
         totalIters: parsed_out.total_iters || 0,
       }});
       return;
@@ -102,22 +89,18 @@ self.onmessage = async (e) => {
     if (fn === 'benchmark_alcouffe') {
       await getCompiledModule();
       freshInstance();
-      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData] = args;
+      const [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround] = args;
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
       const t1 = performance.now();
-      const prepMem = mb();
       const parsed = JSON.parse(resJson);
       const t2 = performance.now();
-      const out = _rastMgAlcouffe(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6);
+      const out = _rastMgAlcouffe(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6, !!useDirichletGround);
       const t3 = performance.now();
-      const connMem = mb();
       const parsed_out = JSON.parse(out);
       self.postMessage({ id, result: {
         prepTimeMs: t1 - t0,
         connTimeMs: t3 - t2,
-        prepMemMb: prepMem,
-        connMemMb: connMem,
         totalIters: parsed_out.total_iters || 0,
       }});
       return;

@@ -9,21 +9,13 @@ export function rasterize_geojson(base_raster: Float64Array, nrows: number, ncol
 
 export function reset_cache(): void;
 
-export function run_geospatial_pipeline(base_raster: Float64Array, nrows: number, ncols: number, nodata: number, geojson_str: string, layer_params_str: string, xmin: number, ymax: number, cellsize: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number): string;
+export function run_geospatial_pipeline_cached_mg(base_raster: Float64Array, nrows: number, ncols: number, nodata: number, geojson_str: string, layer_params_str: string, xmin: number, ymax: number, cellsize: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, use_dirichlet_ground: boolean): string;
 
-export function run_geospatial_pipeline_cached(base_raster: Float64Array, nrows: number, ncols: number, nodata: number, geojson_str: string, layer_params_str: string, xmin: number, ymax: number, cellsize: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, rebuild_laplacian: boolean): string;
+export function solve_raster_sources_cached(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, rebuild_laplacian: boolean, use_dirichlet_ground: boolean): string;
 
-export function run_geospatial_pipeline_cached_mg(base_raster: Float64Array, nrows: number, ncols: number, nodata: number, geojson_str: string, layer_params_str: string, xmin: number, ymax: number, cellsize: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number): string;
+export function solve_raster_sources_mg(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, use_dirichlet_ground: boolean): string;
 
-export function solve_point_sources(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, point_data: Int32Array, max_iter: number, tol: number): string;
-
-export function solve_point_sources_cached(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, point_data: Int32Array, max_iter: number, tol: number, rebuild_laplacian: boolean): string;
-
-export function solve_raster_sources(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number): string;
-
-export function solve_raster_sources_cached(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, rebuild_laplacian: boolean): string;
-
-export function solve_raster_sources_mg(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number): string;
+export function solve_raster_sources_mg_alcouffe(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, use_dirichlet_ground: boolean): string;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -31,14 +23,10 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly downsample_raster: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly rasterize_geojson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
-    readonly run_geospatial_pipeline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
-    readonly run_geospatial_pipeline_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => [number, number];
-    readonly run_geospatial_pipeline_cached_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
-    readonly solve_point_sources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
-    readonly solve_point_sources_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
-    readonly solve_raster_sources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
-    readonly solve_raster_sources_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
-    readonly solve_raster_sources_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
+    readonly run_geospatial_pipeline_cached_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => [number, number];
+    readonly solve_raster_sources_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number];
+    readonly solve_raster_sources_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
+    readonly solve_raster_sources_mg_alcouffe: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly init_panic_hook: () => void;
     readonly reset_cache: () => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

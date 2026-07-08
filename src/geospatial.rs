@@ -350,13 +350,14 @@ pub fn run_geospatial_pipeline(
     ground_data: &[f64],
     max_iter: usize,
     tol: f64,
+    ground_mode: crate::solve::GroundMode,
 ) -> GeospatialOutput {
     let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
     );
 
     let raster_output = crate::solve::compute_raster_sources(
-        &resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, true
+        &resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, true, ground_mode,
     );
 
     GeospatialOutput {
@@ -390,6 +391,7 @@ pub fn run_geospatial_pipeline_cached(
     max_iter: usize,
     tol: f64,
     rebuild_laplacian: bool,
+    ground_mode: crate::solve::GroundMode,
 ) -> GeospatialOutput {
     let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
@@ -398,7 +400,7 @@ pub fn run_geospatial_pipeline_cached(
     let annotated = crate::solve::solve_raster_cached(
         &resistance_data, nrows, ncols, nodata,
         source_data, ground_data, max_iter, tol, true,
-        rebuild_laplacian,
+        rebuild_laplacian, ground_mode,
     );
 
     GeospatialOutput {
@@ -427,6 +429,7 @@ pub fn run_geospatial_pipeline_cached_mg(
     ground_data: &[f64],
     max_iter: usize,
     tol: f64,
+    ground_mode: crate::solve::GroundMode,
 ) -> GeospatialOutput {
     let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
@@ -434,7 +437,7 @@ pub fn run_geospatial_pipeline_cached_mg(
 
     let annotated = crate::solve::solve_raster_sources_mg(
         &resistance_data, nrows, ncols, nodata,
-        source_data, ground_data, max_iter, tol, true,
+        source_data, ground_data, max_iter, tol, true, ground_mode,
     );
 
     GeospatialOutput {
@@ -463,6 +466,7 @@ pub fn run_geospatial_pipeline_cached_mg_alcouffe(
     ground_data: &[f64],
     max_iter: usize,
     tol: f64,
+    ground_mode: crate::solve::GroundMode,
 ) -> GeospatialOutput {
     let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
@@ -470,7 +474,7 @@ pub fn run_geospatial_pipeline_cached_mg_alcouffe(
 
     let annotated = crate::solve::solve_raster_sources_mg_alcouffe(
         &resistance_data, nrows, ncols, nodata,
-        source_data, ground_data, max_iter, tol, true,
+        source_data, ground_data, max_iter, tol, true, ground_mode,
     );
 
     GeospatialOutput {

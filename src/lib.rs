@@ -60,7 +60,9 @@ pub fn solve_raster_sources_cached(
     max_iter: usize,
     tol: f64,
     rebuild_laplacian: bool,
+    use_dirichlet_ground: bool,
 ) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
     let annotated = solve::solve_raster_cached(
         &resistance_data,
         nrows,
@@ -72,6 +74,7 @@ pub fn solve_raster_sources_cached(
         tol,
         true,
         rebuild_laplacian,
+        ground_mode,
     );
     json_response(&annotated)
 }
@@ -86,7 +89,9 @@ pub fn solve_raster_sources_mg(
     ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
+    use_dirichlet_ground: bool,
 ) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
     let annotated = solve::solve_raster_sources_mg(
         &resistance_data,
         nrows,
@@ -97,6 +102,7 @@ pub fn solve_raster_sources_mg(
         max_iter,
         tol,
         true,
+        ground_mode,
     );
     json_response(&annotated)
 }
@@ -111,7 +117,9 @@ pub fn solve_raster_sources_mg_alcouffe(
     ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
+    use_dirichlet_ground: bool,
 ) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
     let annotated = solve::solve_raster_sources_mg_alcouffe(
         &resistance_data,
         nrows,
@@ -122,6 +130,7 @@ pub fn solve_raster_sources_mg_alcouffe(
         max_iter,
         tol,
         true,
+        ground_mode,
     );
     json_response(&annotated)
 }
@@ -146,7 +155,9 @@ pub fn run_geospatial_pipeline_cached_mg(
     ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
+    use_dirichlet_ground: bool,
 ) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
     let output = geospatial::run_geospatial_pipeline_cached_mg(
         &base_raster,
         nrows,
@@ -161,6 +172,7 @@ pub fn run_geospatial_pipeline_cached_mg(
         &ground_data,
         max_iter,
         tol,
+        ground_mode,
     );
     json_response(&output)
 }
@@ -335,7 +347,7 @@ mod tests {
         }
         let output = solve::compute_raster_sources(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Neumann,
         );
         assert_eq!(output.voltages.len(), n);
         assert_eq!(output.current_map.len(), n);
@@ -362,7 +374,7 @@ mod tests {
         }
         let output = solve::compute_raster_sources(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Neumann,
         );
         let center_voltage = output.voltages[5 * size + 5];
         assert!(

@@ -77,9 +77,10 @@ export function reset_cache() {
  * @param {Float64Array} ground_data
  * @param {number} max_iter
  * @param {number} tol
+ * @param {boolean} use_dirichlet_ground
  * @returns {string}
  */
-export function run_geospatial_pipeline_cached_mg(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol) {
+export function run_geospatial_pipeline_cached_mg(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol, use_dirichlet_ground) {
     let deferred6_0;
     let deferred6_1;
     try {
@@ -93,7 +94,7 @@ export function run_geospatial_pipeline_cached_mg(base_raster, nrows, ncols, nod
         const len3 = WASM_VECTOR_LEN;
         const ptr4 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
         const len4 = WASM_VECTOR_LEN;
-        const ret = wasm.run_geospatial_pipeline_cached_mg(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize, ptr3, len3, ptr4, len4, max_iter, tol);
+        const ret = wasm.run_geospatial_pipeline_cached_mg(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, xmin, ymax, cellsize, ptr3, len3, ptr4, len4, max_iter, tol, use_dirichlet_ground);
         deferred6_0 = ret[0];
         deferred6_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
@@ -112,9 +113,10 @@ export function run_geospatial_pipeline_cached_mg(base_raster, nrows, ncols, nod
  * @param {number} max_iter
  * @param {number} tol
  * @param {boolean} rebuild_laplacian
+ * @param {boolean} use_dirichlet_ground
  * @returns {string}
  */
-export function solve_raster_sources_cached(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, rebuild_laplacian) {
+export function solve_raster_sources_cached(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, rebuild_laplacian, use_dirichlet_ground) {
     let deferred4_0;
     let deferred4_1;
     try {
@@ -124,7 +126,7 @@ export function solve_raster_sources_cached(resistance_data, nrows, ncols, nodat
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.solve_raster_sources_cached(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol, rebuild_laplacian);
+        const ret = wasm.solve_raster_sources_cached(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol, rebuild_laplacian, use_dirichlet_ground);
         deferred4_0 = ret[0];
         deferred4_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
@@ -142,9 +144,10 @@ export function solve_raster_sources_cached(resistance_data, nrows, ncols, nodat
  * @param {Float64Array} ground_data
  * @param {number} max_iter
  * @param {number} tol
+ * @param {boolean} use_dirichlet_ground
  * @returns {string}
  */
-export function solve_raster_sources_mg(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol) {
+export function solve_raster_sources_mg(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) {
     let deferred4_0;
     let deferred4_1;
     try {
@@ -154,7 +157,7 @@ export function solve_raster_sources_mg(resistance_data, nrows, ncols, nodata, s
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.solve_raster_sources_mg(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol);
+        const ret = wasm.solve_raster_sources_mg(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol, use_dirichlet_ground);
         deferred4_0 = ret[0];
         deferred4_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
@@ -172,9 +175,10 @@ export function solve_raster_sources_mg(resistance_data, nrows, ncols, nodata, s
  * @param {Float64Array} ground_data
  * @param {number} max_iter
  * @param {number} tol
+ * @param {boolean} use_dirichlet_ground
  * @returns {string}
  */
-export function solve_raster_sources_mg_alcouffe(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol) {
+export function solve_raster_sources_mg_alcouffe(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) {
     let deferred4_0;
     let deferred4_1;
     try {
@@ -184,7 +188,7 @@ export function solve_raster_sources_mg_alcouffe(resistance_data, nrows, ncols, 
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passArrayF64ToWasm0(ground_data, wasm.__wbindgen_malloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.solve_raster_sources_mg_alcouffe(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol);
+        const ret = wasm.solve_raster_sources_mg_alcouffe(ptr0, len0, nrows, ncols, nodata, ptr1, len1, ptr2, len2, max_iter, tol, use_dirichlet_ground);
         deferred4_0 = ret[0];
         deferred4_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);

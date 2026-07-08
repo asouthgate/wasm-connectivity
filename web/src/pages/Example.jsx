@@ -40,6 +40,7 @@ export default function Example() {
   const [riverRes, setRiverRes] = useState(0.5);
   const [riverWidth, setRiverWidth] = useState(4);
   const [buildRes, setBuildRes] = useState(500);
+  const [dirichlet, setDirichlet] = useState(true);
 
   const loadData = useCallback(async (res) => {
     setResolution(res);
@@ -90,7 +91,7 @@ export default function Example() {
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(params),
         baseMeta.xllcorner, ymax, baseMeta.cellsize,
-        srcData, gd, 100_000, 1e-6,
+        srcData, gd, 100_000, 1e-6, dirichlet,
       );
       const r = JSON.parse(json);
       setResult(r);
@@ -105,7 +106,7 @@ export default function Example() {
       setLoading(false);
       setComputing(false);
     }
-  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes]);
+  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes, dirichlet]);
 
   const hasData = !!(baseData && srcData && geojsonStr);
 
@@ -151,6 +152,17 @@ export default function Example() {
               <h3>Line Widths</h3>
               {numInput('Road Width', roadWidth, setRoadWidth, 0, 20, 0.5)}
               {numInput('River Width', riverWidth, setRiverWidth, 0, 20, 0.5)}
+              <h3>Solver</h3>
+              <div style={{display:'flex', gap:8}}>
+                <div className={'preset' + (!dirichlet ? ' sel' : '') + (loading ? ' loading' : '')}
+                  onClick={() => !loading && setDirichlet(false)}>
+                  Neumann ground
+                </div>
+                <div className={'preset' + (dirichlet ? ' sel' : '') + (loading ? ' loading' : '')}
+                  onClick={() => !loading && setDirichlet(true)}>
+                  Dirichlet ground (V=0)
+                </div>
+              </div>
             </div>
           )}
         </div>

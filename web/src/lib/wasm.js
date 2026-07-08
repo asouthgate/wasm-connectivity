@@ -32,20 +32,20 @@ function _callWorker(fn, args) {
   });
 }
 
-export async function run_geospatial_pipeline_cached_mg_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 50_000, tol = 1e-6) {
-  return _callWorker('run_geospatial_pipeline_cached_mg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol]);
+export async function run_geospatial_pipeline_cached_mg_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 50_000, tol = 1e-6, useDirichletGround = false) {
+  return _callWorker('run_geospatial_pipeline_cached_mg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol, useDirichletGround]);
 }
 
 export async function reset_cache_async() {
   return _callWorker('reset_cache', []);
 }
 
-export function benchmarkJacobi(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
-  return _callWorker('benchmark_jacobi', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
+export function benchmarkJacobi(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
+  return _callWorker('benchmark_jacobi', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
 }
-export function benchmarkGmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
-  return _callWorker('benchmark_gmg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
+export function benchmarkGmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
+  return _callWorker('benchmark_gmg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
 }
-export function benchmarkAlcouffe(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData) {
-  return _callWorker('benchmark_alcouffe', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData]);
+export function benchmarkAlcouffe(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
+  return _callWorker('benchmark_alcouffe', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
 }
