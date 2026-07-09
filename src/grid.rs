@@ -27,34 +27,34 @@ impl Grid {
     }
 }
 
-pub fn build_nodemap(conductance: &Grid) -> (Vec<i32>, usize) {
-    let mut nodemap = vec![0i32; conductance.nrows * conductance.ncols];
+pub fn build_cell_to_node(conductance: &Grid) -> (Vec<i32>, usize) {
+    let mut cell_to_node = vec![0i32; conductance.nrows * conductance.ncols];
     let mut node_id = 1i32;
     for row in 0..conductance.nrows {
         for col in 0..conductance.ncols {
             if conductance.is_conductive(row, col) {
-                nodemap[row * conductance.ncols + col] = node_id;
+                cell_to_node[row * conductance.ncols + col] = node_id;
                 node_id += 1;
             }
         }
     }
     let num_nodes = (node_id - 1) as usize;
-    (nodemap, num_nodes)
+    (cell_to_node, num_nodes)
 }
 
 pub fn extract_focal_points(
     point_data: &[i32],
     nrows: usize,
     ncols: usize,
-    nodemap: &[i32],
+    cell_to_node: &[i32],
 ) -> Vec<(i32, usize)> {
     let expected_len = nrows * ncols;
     assert!(point_data.len() >= expected_len, "point_data slice is too small ({} < {})", point_data.len(), expected_len);
-    assert!(nodemap.len() >= expected_len, "nodemap slice is too small ({} < {})", nodemap.len(), expected_len);
+    assert!(cell_to_node.len() >= expected_len, "cell_to_node slice is too small ({} < {})", cell_to_node.len(), expected_len);
 
     let mut points: Vec<(i32, usize)> = Vec::new();
 
-    for (&pid, &node) in point_data[..expected_len].iter().zip(&nodemap[..expected_len]) {
+    for (&pid, &node) in point_data[..expected_len].iter().zip(&cell_to_node[..expected_len]) {
         if pid > 0 && node > 0 {
             points.push((pid, (node - 1) as usize));
         }
@@ -79,21 +79,21 @@ mod tests {
     }
 
     #[test]
-    fn test_build_nodemap() {
+    fn test_build_cell_to_node() {
         let cond = Grid::to_conductance(&[1.0, 0.0, 1.0, 0.0], 2, 2, 0.0);
-        let (nodemap, num_nodes) = build_nodemap(&cond);
+        let (cell_to_node, num_nodes) = build_cell_to_node(&cond);
         assert_eq!(num_nodes, 2);
-        assert_eq!(nodemap, vec![1, 0, 2, 0]);
+        assert_eq!(cell_to_node, vec![1, 0, 2, 0]);
     }
 
     #[test]
     fn test_extract_focal_points() {
         let cond = Grid::to_conductance(&[1.0; 9], 3, 3, crate::NODATA_SENTINEL);
-        let (nodemap, _) = build_nodemap(&cond);
+        let (cell_to_node, _) = build_cell_to_node(&cond);
         let mut point_data = vec![0i32; 9];
         point_data[0] = 2;
         point_data[4] = 1;
-        let points = extract_focal_points(&point_data, 3, 3, &nodemap);
+        let points = extract_focal_points(&point_data, 3, 3, &cell_to_node);
         assert_eq!(points.len(), 2);
         assert_eq!(points[0].0, 1);
         assert_eq!(points[1].0, 2);

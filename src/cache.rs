@@ -6,7 +6,7 @@
 //! source/ground rasters between solves, while the resistance raster stays
 //! fixed; or it makes small edits to the resistance raster that should not
 //! require a fully cold PCG restart. This module caches the expensive
-//! artifacts of `build_circuit_model` (nodemap, laplacian, connected
+//! artifacts of `build_circuit_model` (cell_to_node, laplacian, connected
 //! components) plus the most recent per-node voltage vector, so a re-solve
 //! can either:
 //!   * skip the Laplacian rebuild entirely (resistance unchanged), or
@@ -24,7 +24,7 @@ use sprs::CsMat;
 /// most recent computed voltage field.
 pub struct BuildCache {
     pub laplacian: CsMat<f64>,
-    pub nodemap: Vec<i32>,
+    pub cell_to_node: Vec<i32>,
     pub num_nodes: usize,
     pub components: Vec<Vec<usize>>,
     pub nrows: usize,
@@ -51,7 +51,7 @@ thread_local! {
 /// dropped (which is also what happens on a first-ever `store`).
 pub fn store(
     laplacian: CsMat<f64>,
-    nodemap: Vec<i32>,
+    cell_to_node: Vec<i32>,
     num_nodes: usize,
     components: Vec<Vec<usize>>,
     nrows: usize,
@@ -68,7 +68,7 @@ pub fn store(
         });
         *c.borrow_mut() = Some(BuildCache {
             laplacian,
-            nodemap,
+            cell_to_node,
             num_nodes,
             components,
             nrows,
@@ -127,7 +127,7 @@ mod tests {
         reset();
         assert!(take().is_none());
 
-        let (_nodemap, _num_nodes, _edges, lap, comps) =
+        let (_cell_to_node, _num_nodes, _edges, lap, comps) =
             crate::build_circuit_model(&[1.0; 9], 3, 3, crate::NODATA_SENTINEL);
         store(lap.clone(), vec![1, 2, 3, 0], 3, comps.clone(), 3, 3, -9999.0);
         assert_eq!(peek_meta(), Some((3, 3, -9999.0)));
@@ -135,7 +135,7 @@ mod tests {
         let taken = take().expect("cache should be populated");
         assert_eq!(taken.nrows, 3);
         assert_eq!(taken.ncols, 3);
-        assert_eq!(taken.nodemap, vec![1, 2, 3, 0]);
+        assert_eq!(taken.cell_to_node, vec![1, 2, 3, 0]);
         assert!(take().is_none(), "take should drain the slot");
         reset();
     }
@@ -146,7 +146,7 @@ mod tests {
         store_last_voltages(&[1.0, 2.0, 3.0]);
         assert!(last_voltages().is_empty(), "no circuit stored -> no voltages");
 
-        let (_nodemap, _n, _e, lap, comps) =
+        let (_cell_to_node, _n, _e, lap, comps) =
             crate::build_circuit_model(&[1.0; 4], 2, 2, crate::NODATA_SENTINEL);
         store(lap, vec![1, 2, 3, 4], 4, comps, 2, 2, -9999.0);
         store_last_voltages(&[10.0, 20.0, 30.0, 40.0]);

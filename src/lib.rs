@@ -28,11 +28,11 @@ fn json_response<T: Serialize>(output: &T) -> String {
 
 pub fn build_circuit_model(resistance_data: &[f64], nrows: usize, ncols: usize, nodata: f64) -> (Vec<i32>, usize, graph::EdgeTriplets, sprs::CsMat<f64>, Vec<Vec<usize>>) {
     let conductance = grid::Grid::to_conductance(resistance_data, nrows, ncols, nodata);
-    let (nodemap, num_nodes) = grid::build_nodemap(&conductance);
-    let edges = graph::build_conductance_edges(&conductance, &nodemap);
+    let (cell_to_node, num_nodes) = grid::build_cell_to_node(&conductance);
+    let edges = graph::build_conductance_edges(&conductance, &cell_to_node);
     let laplacian = laplacian::build_laplacian(&edges, num_nodes);
     let components = components::find_connected_components(&laplacian, num_nodes);
-    (nodemap, num_nodes, edges, laplacian, components)
+    (cell_to_node, num_nodes, edges, laplacian, components)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -228,15 +228,15 @@ fn compute_points(
     max_iter: usize,
     tol: f64,
 ) -> ConnectivityOutput {
-    let (nodemap, _num_nodes, _edges, laplacian, components) = build_circuit_model(resistance_data, nrows, ncols, nodata);
+    let (cell_to_node, _num_nodes, _edges, laplacian, components) = build_circuit_model(resistance_data, nrows, ncols, nodata);
 
-    let focal_points = grid::extract_focal_points(&point_data, nrows, ncols, &nodemap);
+    let focal_points = grid::extract_focal_points(&point_data, nrows, ncols, &cell_to_node);
 
     let result = solve::compute_point_sources(
         &laplacian,
         &components,
         &focal_points,
-        &nodemap,
+        &cell_to_node,
         nrows,
         ncols,
         max_iter,

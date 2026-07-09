@@ -52,25 +52,25 @@ pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec
     out
 }
 
-// Retrieve dense 2D grid map from sparse node values and nodemap
+// Retrieve dense 2D grid map from sparse node values and cell_to_node
 //
 // # Arguments
 // * `node_values` - A slice containing the values for each node.
-// * `nodemap` - A slice containing the mapping from grid indices to node indices (1-based).
+// * `cell_to_node` - A slice containing the mapping from grid indices to node indices (1-based).
 // * `n` - The total number of grid points (size of the output vector).
 // # Returns
 // A vector containing the reconstructed grid values
 pub fn reconstruct_grid_map(
     node_values: &[f64],
-    nodemap: &[i32],
+    cell_to_node: &[i32],
     n: usize,
 ) -> Vec<f64> {
-    debug_assert!(n <= nodemap.len(), "Requested grid size `n` exceeds nodemap length");
+    debug_assert!(n <= cell_to_node.len(), "Requested grid size `n` exceeds cell_to_node length");
     let mut grid = vec![0.0f64; n];
     for aj in 0..n {
-        let node = nodemap[aj];
-        debug_assert!(node >= 0, "Invalid nodemap data: node ID cannot be negative (found {})", node);
-        if node != 0 {  // node indices are 1-based in nodemap
+        let node = cell_to_node[aj];
+        debug_assert!(node >= 0, "Invalid cell_to_node data: node ID cannot be negative (found {})", node);
+        if node != 0 {  // node indices are 1-based in cell_to_node
             grid[aj] = node_values[(node - 1) as usize];
         }
     }
@@ -85,26 +85,26 @@ mod tests {
 
     #[test]
     fn test_reconstruct_grid_map() {
-        let nodemap = vec![0, 1, 2, 0, 0, 3];
+        let cell_to_node = vec![0, 1, 2, 0, 0, 3];
         let node_values = vec![10.0, 20.0, 30.0];
-        let grid = reconstruct_grid_map(&node_values, &nodemap, 2 * 3);
+        let grid = reconstruct_grid_map(&node_values, &cell_to_node, 2 * 3);
         assert_eq!(grid, vec![0.0, 10.0, 20.0, 0.0, 0.0, 30.0]);
     }
 
     #[test]
     fn test_reconstruct_grid_map_basic_sparse() {
-        let nodemap = vec![0, 1, 2, 0, 0, 3];
+        let cell_to_node = vec![0, 1, 2, 0, 0, 3];
         let node_values = vec![10.0, 20.0, 30.0];
-        let grid = reconstruct_grid_map(&node_values, &nodemap, 6);
+        let grid = reconstruct_grid_map(&node_values, &cell_to_node, 6);
         assert_eq!(grid, vec![0.0, 10.0, 20.0, 0.0, 0.0, 30.0]);
     }
 
     #[test]
     fn test_reconstruct_grid_map_shuffled_order() {
         // Nodes don't have to be sequential
-        let nodemap = vec![3, 0, 1, 0, 2];
+        let cell_to_node = vec![3, 0, 1, 0, 2];
         let node_values = vec![100.0, 200.0, 300.0]; // Node 1=100, Node 2=200, Node 3=300
-        let grid = reconstruct_grid_map(&node_values, &nodemap, 5);
+        let grid = reconstruct_grid_map(&node_values, &cell_to_node, 5);
         assert_eq!(grid, vec![300.0, 0.0, 100.0, 0.0, 200.0]);
     }
 

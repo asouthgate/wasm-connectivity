@@ -264,7 +264,7 @@ impl MgPreconditioner {
         // Build level 0 from the full resistance grid
         #[cfg(not(target_arch = "wasm32"))]
         let t1 = std::time::Instant::now();
-        let (_nodemap, num_nodes, _edges, mut laplacian, _components) =
+        let (_cell_to_node, num_nodes, _edges, mut laplacian, _components) =
             crate::build_circuit_model(&filled, nr, nc, nodata);
         #[cfg(not(target_arch = "wasm32"))]
         let build_ms = t1.elapsed().as_millis();
@@ -397,7 +397,7 @@ impl MgPreconditioner {
 
         #[cfg(not(target_arch = "wasm32"))]
         let t1 = std::time::Instant::now();
-        let (_nodemap, num_nodes, _edges, mut laplacian, _components) =
+        let (_cell_to_node, num_nodes, _edges, mut laplacian, _components) =
             crate::build_circuit_model(&filled, nr, nc, nodata);
         #[cfg(not(target_arch = "wasm32"))]
         let build_ms = t1.elapsed().as_millis();
@@ -948,7 +948,7 @@ mod tests {
         let n = nrows * ncols;
 
         let resistance = generate_mock_resistance(nrows, ncols);
-        let (_nodemap, num_nodes, _edges, full_lap, components) =
+        let (_cell_to_node, num_nodes, _edges, full_lap, components) =
             crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
         assert_eq!(num_nodes, n);
 
@@ -994,7 +994,7 @@ mod tests {
         let n = nrows * ncols;
 
         let resistance = generate_mock_resistance(nrows, ncols);
-        let (_nodemap, num_nodes, _edges, _full_lap, _components) =
+        let (_cell_to_node, num_nodes, _edges, _full_lap, _components) =
             crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
         assert_eq!(num_nodes, n);
 
@@ -1035,7 +1035,7 @@ mod tests {
         let n = nrows * ncols;
 
         let resistance = generate_mock_resistance(nrows, ncols);
-        let (_nodemap, _num_nodes, _edges, full_lap, components) =
+        let (_cell_to_node, _num_nodes, _edges, full_lap, components) =
             crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
 
         assert_eq!(components.len(), 1, "Uniform grid should have exactly 1 component");

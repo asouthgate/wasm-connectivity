@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_connected_components_single() {
-        let (_nodemap, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&[1.0; 9], 3, 3, crate::NODATA_SENTINEL);
+        let (_cell_to_node, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&[1.0; 9], 3, 3, crate::NODATA_SENTINEL);
         assert_eq!(comps.len(), 1);
         assert_eq!(comps[0].len(), 9);
     }
@@ -122,7 +122,7 @@ mod tests {
             0.0, 0.0, 0.0,
             1.0, 0.0, 1.0,
         ];
-        let (_nodemap, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&res_data, 3, 3, 0.0);
+        let (_cell_to_node, _num_nodes, _edges, _lap, comps) = crate::build_circuit_model(&res_data, 3, 3, 0.0);
         assert_eq!(comps.len(), 4);
     }
 }

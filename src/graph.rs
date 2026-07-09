@@ -52,14 +52,14 @@ impl Default for EdgeTriplets {
     }
 }
 
-// Builds the edge triplets for a grid based on the conductance values and the nodemap.
+// Builds the edge triplets for a grid based on the conductance values and the cell_to_node.
 //
 // # Arguments
 // * `conductance` - A reference to the Grid containing conductance values.
-// * `nodemap` - A slice containing the mapping from grid indices to node indices (1-based).
+// * `cell_to_node` - A slice containing the mapping from grid indices to node indices (1-based).
 // # Returns
 // An EdgeTriplets struct containing the edges and their corresponding conductance values.
-pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTriplets {
+pub fn build_conductance_edges(conductance: &Grid, cell_to_node: &[i32]) -> EdgeTriplets {
     let nrows = conductance.nrows;
     let ncols = conductance.ncols;
 
@@ -76,7 +76,7 @@ pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTripl
         };
 
         for col in 0..ncols {
-            let node_i = nodemap[row_offset + col];
+            let node_i = cell_to_node[row_offset + col];
             if node_i <= 0 { // Catch 0 and negative values
                 continue;
             }
@@ -85,7 +85,7 @@ pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTripl
 
             // Check Right Neighbor
             if col + 1 < ncols {
-                let node_j = nodemap[row_offset + col + 1];
+                let node_j = cell_to_node[row_offset + col + 1];
                 if node_j > 0 {
                     let j = (node_j - 1) as usize;
                     let g_j = conductance.get(row, col + 1);
@@ -97,7 +97,7 @@ pub fn build_conductance_edges(conductance: &Grid, nodemap: &[i32]) -> EdgeTripl
 
             // Check Down Neighbor
             if row + 1 < nrows {
-                let node_j = nodemap[next_row_offset + col];
+                let node_j = cell_to_node[next_row_offset + col];
                 if node_j > 0 {
                     let j = (node_j - 1) as usize;
                     let g_j = conductance.get(row + 1, col);
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_conductance_edges_uniform() {
-        let (_nodemap, _num_nodes, edges, _lap, _comps) = crate::build_circuit_model(&[1.0; 4], 2, 2, crate::NODATA_SENTINEL);
+        let (_cell_to_node, _num_nodes, edges, _lap, _comps) = crate::build_circuit_model(&[1.0; 4], 2, 2, crate::NODATA_SENTINEL);
         assert!(edges.len() > 0);
     }
 }
