@@ -10,9 +10,10 @@
 
 \title{Ecological connectivity modelling with WebAssembly}
 \author{
-  Alex J. Southgate \\
-  \small southgateJA@cardiff.ac.uk \\[1em]
-  Joanna Redihough \\
+  Alex J. Southgate$^{1,*}$ \and Joanna Redihough$^{2}$ \\[1em]
+  \small $^{1}$Cardiff University, Cardiff, United Kingdom \\
+  \small $^{2}$Independent Researcher, Cardiff, United Kingdom \\[1em]
+  \small $^{*}$Corresponding author: southgateJA@cardiff.ac.uk
 }
 \date{\today}
 
@@ -43,7 +44,7 @@ An additional advantage to this paradigm is simplified data governance, as stora
 computation occurs directly in the user's browser.
 The problem with performing complex calculations in the browser is that browser code 
 (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction.
-To resolve this problem, WebAssembly was recently introduced,
+To resolve this problem, WebAssembly \cite{haas2017bringing} was introduced in 2017,
 allowing fast C++ or Rust code to be run in a sandboxed browser environment. 
 It has previously been argued that WebAssembly is poised to transform scientific computing \cite{perkel2024no}.
 In addition, web applications may integrate complex user controls
@@ -83,11 +84,11 @@ data such as MVT derived from mbtiles.
 \subsection{Benchmarking}
 
 Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
-Benchmarking code was wrapped in a React applet which can be run locally and accessed via the code repository. Two benchmarks were run. 
+Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be run locally and accessed via the code repository. Two benchmarks were run. 
 In the first case, a resistance map was generated at 1000$\times$1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
 It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/WASM JIT compilation engine warm-up (`warm start').
 
-For comparison with Circuitscape, a configuration file was created with \texttt{scenario=advanced}, \texttt{write\_as\_tif=True} and run with 4 threads.
+For comparison with Circuitscape version 5.11.2, a configuration file was created with \texttt{scenario=advanced}, \texttt{write\_as\_tif=True} and run with 4 threads.
 Although this allows Circuitscape to multithread, which our implementation does not exploit, it is conventional to run with multiple threads. 
 
 \subsection{Connectivity model}
@@ -263,26 +264,29 @@ Algorithm \ref{alg:gmg_vcycle} shows one cycle. Overall, one cycle performs the 
 
 \subsection{Code}
 
-Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. This code contains several simple examples. All results can be easily reproduced by running the React development server, clicking to the benchmark panel, running the benchmarks, and downloading the results.
+Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. Optimisation codes were written in Rust and compiled to WASM using 
+\texttt{wasm-pack} \cite{wasm_pack_2024} and \texttt{wasm-bindgen} \cite{wasm_bindgen_2024}.
+This code contains several simple examples. All results can be easily reproduced by running the ReactJS \cite{reactjs} development server, clicking to the benchmark panel, running the benchmarks, and downloading the results.
 
 \section{Results}
 
 Figure \ref{fig:wasm-connectivity} gives an example of a 1000x1000 resistance input and current map output
-rendered in a React frontend using raster source mode (referred to as advanced mode in Circuitscape) for the test region.
+rendered in a frontend using raster source mode (referred to as advanced mode in Circuitscape) for the test region.
 Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. As shown,
 the CG MG preconditioners were much faster than Jacobi preconditioning, while taking modestly more memory.
 
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/resistance_current_react.png}
-\caption{Example dataset 1000x1000 log resistance and log current maps rendered using a React frontend with WASM connectivity library, computed in 6.52 seconds.}
+\caption{Example dataset 1000x1000 log resistance and log current maps rendered using a frontend with WASM connectivity library, computed in 6.52 seconds.}
 \label{fig:wasm-connectivity}
 \end{figure}
 
-
 \begin{figure}[htb!]
 \centering
-\includegraphics[width=0.8\textwidth]{figures/benchmarking.png}
+\makebox[\textwidth][c]{%
+    \includegraphics[width=1.2\textwidth]{figures/benchmarking.png}%
+}
 \caption{Time and memory comparison across resolutions for each solver. Both MG solvers converge much more quickly, while only taking marginally more memory. Individual data points are shown as crosses, the mean as solid lines.}
 \label{fig:benchmarking}
 \end{figure}
