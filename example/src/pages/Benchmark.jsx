@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect } from 'react';
-import { downsampleRaster, parseAsc } from '@wasm-connect/lib';
+import { downsampleRaster } from '@wasm-connect/lib';
 import { Spinner } from '../components/Spinner';
 import { StatusBar } from '../components/StatusBar';
 import { downloadCSV } from '../stats';
+import { loadExampleData } from '../data';
 
-const GEO_BASE = '/geodata';
 const RESOLUTIONS = [1000, 800, 600, 400, 200];
 
 const DEFAULT_PARAMS = {
@@ -15,8 +15,19 @@ const DEFAULT_PARAMS = {
 
 const RUNS = ['jacobi', 'gmg', 'alcouffe'];
 
+export const BENCHMARK_HEADERS = [
+  'resolution',
+  'repeat',
+  'run',
+  'prep_time_s',
+  'prep_mem_mb',
+  'conn_time_s',
+  'conn_mem_mb',
+  'total_iters'  
+];
+
 function buildBenchmarkCSV(runs) {
-  const h = 'resolution,repeat,run,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb,total_iters\n';
+  const h = BENCHMARK_HEADERS.join(',') + '\n';
   const rows = runs.map(r =>
     `${r.resolution},${r.repeat},${r.run},${(r.prepTimeMs/1000).toFixed(4)},${r.prepMemMb.toFixed(2)},${(r.connTimeMs/1000).toFixed(4)},${r.connMemMb.toFixed(2)},${r.totalIters||0}`
   ).join('\n');
@@ -63,21 +74,15 @@ export default function Benchmark() {
   const [status, setStatus] = useState('Loading Chudleigh data...');
 
   useEffect(() => {
-    (async () => {
-      const [baseText, srcText, gndText, geoResp] = await Promise.all([
-        fetch(`${GEO_BASE}/base_resistance_1000.asc`).then(r => r.text()),
-        fetch(`${GEO_BASE}/source_1000.asc`).then(r => r.text()),
-        fetch(`${GEO_BASE}/ground_1000.asc`).then(r => r.text()),
-        fetch(`${GEO_BASE}/all_features_1000.geojson`).then(r => r.text()),
-      ]);
-      const bp = parseAsc(baseText);
-      setBaseData(bp.data); setBaseMeta(bp.meta);
-      setSrcData(parseAsc(srcText).data);
-      setGndData(parseAsc(gndText).data);
-      setGeojsonStr(geoResp);
-      const nc = bp.data.reduce((c, v) => v !== bp.meta.nodata && v > 0 ? c + 1 : c, 0);
-      setStatus(`loaded Chudleigh 1000×1000 — ${nc.toLocaleString()} conductive cells`);
-    })();
+    loadExampleData(1000).then(({baseData, baseMeta, srcData, gndData, geojsonStr}) => {
+      setBaseData(baseData); 
+      setBaseMeta(baseMeta);
+      setSrcData(srcData);
+      setGndData(gndData);
+      setGeojsonStr(geojsonStr);
+      const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
+      setStatus(`loaded Chudleigh 1000×1000: ${nc.toLocaleString()} conductive cells`);
+    });
   }, []);
 
   const start = useCallback(async () => {
@@ -159,9 +164,13 @@ export default function Benchmark() {
 
       <div className="log log--bench">
         <table>
-          <thead><tr>
-            <th>res</th><th>rep</th><th>run</th><th>prep time</th><th>prep mem</th><th>conn time</th><th>conn mem</th><th>iters</th>
-          </tr></thead>
+          <thead>
+            <tr>
+              {BENCHMARK_HEADERS.map((header) => (
+                <th key={header}>{header}</th>
+              ))}
+            </tr>
+          </thead>
           <tbody>
             {runs.map((r, i) => (
               <tr key={i} className={r.error ? 'bench-log-row--error' : ''}>

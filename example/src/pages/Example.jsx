@@ -1,11 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runGeospatialPipelineCachedMgAsync, resetCacheAsync, parseAsc } from '@wasm-connect/lib';
+import { runGeospatialPipelineCachedMgAsync, resetCacheAsync } from '@wasm-connect/lib';
 import { renderMap } from '../render';
 import MapView from '../components/MapView';
 import { StatusBar } from '../components/StatusBar';
 import { ComputeModal } from '../components/ComputeModal';
-
-const GEO_BASE = '/geodata';
+import { loadExampleData } from '../data';
 
 function LayerMaskCanvas({ data, nrows, ncols }) {
   const canvasRef = useRef(null);
@@ -46,20 +45,15 @@ export default function Example() {
     setResult(null); setTimer(''); setLoading(true); setError(false);
     setStatus(`loading Chudleigh ${res}x${res} data...`);
 
-    const [baseText, srcText, gndText, geoResp] = await Promise.all([
-      fetch(`${GEO_BASE}/base_resistance_${res}.asc`).then(r => r.text()),
-      fetch(`${GEO_BASE}/source_${res}.asc`).then(r => r.text()),
-      fetch(`${GEO_BASE}/ground_${res}.asc`).then(r => r.text()),
-      fetch(`${GEO_BASE}/all_features_${res}.geojson`).then(r => r.text()),
-    ]);
+    const {baseData, baseMeta, srcData, gndData, geojsonStr} = await loadExampleData(res)
 
-    const bp = parseAsc(baseText);
-    setBaseData(bp.data); setBaseMeta(bp.meta);
-    setSrcData(parseAsc(srcText).data);
-    setGndData(parseAsc(gndText).data);
-    setGeojsonStr(geoResp);
-
-    const nc = bp.data.reduce((c, v) => v !== bp.meta.nodata && v > 0 ? c + 1 : c, 0);
+    setBaseData(baseData); 
+    setBaseMeta(baseMeta);
+    setSrcData(srcData);
+    setGndData(gndData);
+    setGeojsonStr(geojsonStr);
+    
+    const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
     setStatus(`loaded Chudleigh ${res}x${res} — ${nc.toLocaleString()} conductive cells`);
     setLoading(false);
   }, []);
