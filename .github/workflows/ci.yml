@@ -18,7 +18,9 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        uses: bytecodealliance/actions/wasm-pack@main
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
