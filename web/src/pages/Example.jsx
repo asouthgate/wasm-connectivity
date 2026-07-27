@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { run_geospatial_pipeline_cached_mg_async, reset_cache_async } from '../lib/wasm';
+import { runGeospatialPipelineCachedMgAsync, resetCacheAsync } from '../lib/wasm';
 import { parseAsc } from '../lib/parseAsc';
 import { renderMap } from '../lib/render';
 import MapView from '../components/MapView';
@@ -68,7 +68,7 @@ export default function Example() {
   useEffect(() => { loadData('500'); }, []);
 
   useEffect(() => {
-    reset_cache_async().catch(() => {});
+    resetCacheAsync().catch(() => {});
   }, [resolution, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes]);
 
   const run = useCallback(async () => {
@@ -87,7 +87,7 @@ export default function Example() {
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
       const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
 
-      const json = await run_geospatial_pipeline_cached_mg_async(
+      const json = await runGeospatialPipelineCachedMgAsync(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(params),
         baseMeta.xllcorner, ymax, baseMeta.cellsize,

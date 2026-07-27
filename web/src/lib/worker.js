@@ -13,7 +13,7 @@ import wasmUrl from './wasm_connect_bg.wasm?url';
 
 let compiledModule = null;
 
-function mb() { return _getMemory().buffer.byteLength / (1024 * 1024); }
+function getWasmAllocatedMB() { return _getMemory().buffer.byteLength / (1024 * 1024); }
 
 async function getCompiledModule() {
   if (!compiledModule) {
@@ -58,12 +58,12 @@ self.onmessage = async (e) => {
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
       const t1 = performance.now();
-      const prepMem = mb();
+      const prepMem = getWasmAllocatedMB();
       const parsed = JSON.parse(resJson);
       const t2 = performance.now();
       const out = _rastC(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6, false, !!useDirichletGround);
       const t3 = performance.now();
-      const connMem = mb();
+      const connMem = getWasmAllocatedMB();
       const parsed_out = JSON.parse(out);
       self.postMessage({ id, result: {
         prepTimeMs: t1 - t0,
@@ -82,12 +82,12 @@ self.onmessage = async (e) => {
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
       const t1 = performance.now();
-      const prepMem = mb();
+      const prepMem = getWasmAllocatedMB();
       const parsed = JSON.parse(resJson);
       const t2 = performance.now();
       const out = _rastMg(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6, !!useDirichletGround);
       const t3 = performance.now();
-      const connMem = mb();
+      const connMem = getWasmAllocatedMB();
       const parsed_out = JSON.parse(out);
       self.postMessage({ id, result: {
         prepTimeMs: t1 - t0,
@@ -106,12 +106,12 @@ self.onmessage = async (e) => {
       const t0 = performance.now();
       const resJson = _rasterize(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
       const t1 = performance.now();
-      const prepMem = mb();
+      const prepMem = getWasmAllocatedMB();
       const parsed = JSON.parse(resJson);
       const t2 = performance.now();
       const out = _rastMgAlcouffe(new Float64Array(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, srcData, gndData, 100_000, 1e-6, !!useDirichletGround);
       const t3 = performance.now();
-      const connMem = mb();
+      const connMem = getWasmAllocatedMB();
       const parsed_out = JSON.parse(out);
       self.postMessage({ id, result: {
         prepTimeMs: t1 - t0,

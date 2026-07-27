@@ -1,7 +1,7 @@
 import { Spinner } from './Spinner';
 
 export function ComputeModal({ visible }) {
-  if (!visible) return null;
+  if (!visible) return false;
   return (
     <div className="modal-overlay" onClick={e => e.stopPropagation()}>
       <div className="modal-box">

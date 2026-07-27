@@ -27,7 +27,7 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
               const isActive = logScale === (s === 'log');
               return (
                 <span key={s} onClick={() => onToggleScale(s)}
-                  className={`map-scale-btn${isActive ? ' map-scale-btn--active' : ''}`}>
+                  className={`map-scale-btn ${isActive ? 'map-scale-btn--active' : ''}`}>
                   {s}
                 </span>
               );

@@ -1,4 +1,4 @@
-import initModule, { downsample_raster as _downsample } from './wasm_connect.js';
+import {initModule, downsample_raster} from './wasm_connect.js';
 import wasmUrl from './wasm_connect_bg.wasm?url';
 
 let ready = false;
@@ -10,9 +10,8 @@ export async function load() {
   }
 }
 
-export function downsample_raster(data, nrows, ncols, nodata, targetRows, targetCols) {
-  return _downsample(data, nrows, ncols, nodata, targetRows, targetCols);
-}
+// export for consistent interface
+export { downsample_raster as downsampleRaster } from './wasm_connect.js';
 
 const _worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 let _reqId = 0;
@@ -32,11 +31,11 @@ function _callWorker(fn, args) {
   });
 }
 
-export async function run_geospatial_pipeline_cached_mg_async(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 50_000, tol = 1e-6, useDirichletGround = false) {
+export async function runGeospatialPipelineCachedMgAsync(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter = 50_000, tol = 1e-6, useDirichletGround = false) {
   return _callWorker('run_geospatial_pipeline_cached_mg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, maxIter, tol, useDirichletGround]);
 }
 
-export async function reset_cache_async() {
+export async function resetCacheAsync() {
   return _callWorker('reset_cache', []);
 }
 
