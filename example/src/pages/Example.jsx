@@ -174,15 +174,24 @@ export default function Example() {
           {result && (
             <>
               <div className="maps">
-                <MapView type="res" data={result.resistance_map}
-                  meta={{ nrows: result.nrows, ncols: result.ncols, nodata: baseMeta.nodata }}
-                  logScale={resScale === 'log'} onToggleScale={setResScale} />
-                <MapView type="cur" data={result.current_map}
-                  meta={{ nrows: result.nrows, ncols: result.ncols, nodata: 0 }}
-                  logScale={curScale === 'log'} onToggleScale={setCurScale} />
-                <MapView type="volt" data={result.voltage_map}
-                  meta={{ nrows: result.nrows, ncols: result.ncols, nodata: 0 }}
-                  logScale={voltScale === 'log'} onToggleScale={setVoltScale} />
+                {[
+                  { type: 'res',  data: result.resistance_map, nodata: baseMeta.nodata, logScale: resScale === 'log', onToggleScale: setResScale },
+                  { type: 'cur',  data: result.current_map,    nodata: 0,               logScale: curScale === 'log', onToggleScale: setCurScale },
+                  { type: 'volt', data: result.voltage_map,    nodata: 0,               logScale: voltScale === 'log', onToggleScale: setVoltScale },
+                ].map((map) => (
+                  <MapView
+                    key={map.type}
+                    type={map.type}
+                    data={map.data}
+                    meta={{
+                      nrows: result.nrows,
+                      ncols: result.ncols,
+                      nodata: map.nodata,
+                    }}
+                    logScale={map.logScale}
+                    onToggleScale={map.onToggleScale}
+                  />
+                ))}
               </div>
               {layerMasks.length > 0 && (
                 <div className="maps maps--auto" style={{ '--grid-cols': Math.min(layerMasks.length, 3) }}>
