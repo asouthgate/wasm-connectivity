@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { renderMap, VIRIDIS_GRADIENT, PLASMA_GRADIENT } from '../lib/render';
+import { renderMap, VIRIDIS_GRADIENT, PLASMA_GRADIENT } from '../render';
 
 export default function MapView({ type, data, meta, logScale, onToggleScale }) {
   const canvasRef = useRef(null);

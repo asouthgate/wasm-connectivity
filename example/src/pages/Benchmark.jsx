@@ -1,9 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
-import { benchmarkJacobi, benchmarkGmg, benchmarkAlcouffe, downsample_raster } from '../lib/wasm';
-import { parseAsc } from '../lib/parseAsc';
+import { downsampleRaster, parseAsc } from '@wasm-connect/lib';
 import { Spinner } from '../components/Spinner';
 import { StatusBar } from '../components/StatusBar';
-import { downloadCSV } from '../lib/stats';
+import { downloadCSV } from '../stats';
 
 const GEO_BASE = '/geodata';
 const RESOLUTIONS = [1000, 800, 600, 400, 200];
@@ -22,6 +21,34 @@ function buildBenchmarkCSV(runs) {
     `${r.resolution},${r.repeat},${r.run},${(r.prepTimeMs/1000).toFixed(4)},${r.prepMemMb.toFixed(2)},${(r.connTimeMs/1000).toFixed(4)},${r.connMemMb.toFixed(2)},${r.totalIters||0}`
   ).join('\n');
   downloadCSV('benchmark.csv', h, rows);
+}
+
+const _benchWorker = new Worker(new URL('../workers/benchmark.js', import.meta.url), { type: 'module' });
+let _reqId = 0;
+const _pending = new Map();
+
+_benchWorker.onmessage = (e) => {
+  const { id, result, error } = e.data;
+  const cb = _pending.get(id);
+  if (cb) { _pending.delete(id); if (error) cb.reject(error); else cb.resolve(result); }
+};
+
+function callBenchWorker(fn, args) {
+  return new Promise((resolve, reject) => {
+    const id = ++_reqId;
+    _pending.set(id, { resolve, reject });
+    _benchWorker.postMessage({ id, fn, args });
+  });
+}
+
+function benchmarkJacobi(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
+  return callBenchWorker('benchmark_jacobi', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
+}
+function benchmarkGmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
+  return callBenchWorker('benchmark_gmg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
+}
+function benchmarkAlcouffe(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
+  return callBenchWorker('benchmark_alcouffe', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
 }
 
 export default function Benchmark() {
@@ -71,7 +98,7 @@ export default function Benchmark() {
 
       if (res !== 1000) {
         const ds = (r, nr, nc) => {
-          const json = JSON.parse(downsample_raster(r, 1000, 1000, nd, nr, nc));
+          const json = JSON.parse(downsampleRaster(r, 1000, 1000, nd, nr, nc));
           return new Float64Array(json.data);
         };
         rsData = ds(baseData, res, res);

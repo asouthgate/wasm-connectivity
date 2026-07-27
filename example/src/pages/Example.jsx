@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runGeospatialPipelineCachedMgAsync, resetCacheAsync } from '../lib/wasm';
-import { parseAsc } from '../lib/parseAsc';
-import { renderMap } from '../lib/render';
+import { runGeospatialPipelineCachedMgAsync, resetCacheAsync, parseAsc } from '@wasm-connect/lib';
+import { renderMap } from '../render';
 import MapView from '../components/MapView';
 import { StatusBar } from '../components/StatusBar';
 import { ComputeModal } from '../components/ComputeModal';

@@ -50,7 +50,7 @@ pub fn init_panic_hook() {
 }
 
 #[wasm_bindgen]
-pub fn solve_raster_sources_cached(
+pub fn solve_raster_sources_jacobi_cached(
     resistance_data: Vec<f64>,
     nrows: usize,
     ncols: usize,
