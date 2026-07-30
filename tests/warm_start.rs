@@ -6,7 +6,7 @@ mod common;
 use wasm_connect::solve;
 use wasm_connect::solve::GroundMode;
 
-const DATA_DIR: &str = "web/public/geodata";
+const DATA_DIR: &str = "example/public/geodata";
 const OUT_DIR: &str = "tests/output";
 
 #[test]
@@ -32,6 +32,12 @@ fn compute_all_current_maps() {
     }
 
     let out_nodata = -9999.0;
+
+    common::write_asc(
+        &format!("{OUT_DIR}/resistance_with_building.asc"),
+        &resistance, base.nrows, base.ncols,
+        base.xllcorner, base.yllcorner, base.cellsize, out_nodata,
+    );
 
     let modes = [(GroundMode::Neumann, "neumann"), (GroundMode::Dirichlet, "dirichlet")];
 
@@ -85,6 +91,11 @@ fn compute_all_current_maps() {
         common::asc_to_png(
             &format!("{OUT_DIR}/current_map_mg_alcouffe_{suffix}.asc"),
             &format!("{OUT_DIR}/current_map_mg_alcouffe_{suffix}.png"),
+        );
+        common::write_asc(
+            &format!("{OUT_DIR}/voltage_map_mg_alcouffe_{suffix}.asc"),
+            &mg_alc.output.voltages, base.nrows, base.ncols,
+            base.xllcorner, base.yllcorner, base.cellsize, out_nodata,
         );
 
         // MG bilinear and Alcouffe share the same filled Laplacian — they must agree
