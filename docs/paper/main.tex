@@ -4,14 +4,18 @@
 \usepackage{amsmath, amssymb}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
-\DeclareMathOperator{\diag}{diag} 
 \usepackage{graphicx}
 \usepackage{hyperref} 
+\usepackage{relsize}
+\usepackage{color, soul}
+\DeclareMathOperator{\diag}{diag} 
+
+\newcommand{\Cpp}{C\nolinebreak[4]\hspace{-.05em}\raisebox{.4ex}{\relsize{-3}{\textbf{++}}}}
 
 \title{Ecological connectivity modelling with WebAssembly}
 \author{
-  Alex J. Southgate$^{1,*}$ \and Joanna Redihough$^{2}$ \\[1em]
-  \small $^{1}$Cardiff University, Cardiff, United Kingdom \\
+  Alex J. Southgate$^{1,*}$, Joanna Redihough$^{2}$ and Thomas Woolley$^{1}$\\[1em]
+  \small $^{1}$School of Mathematics, Cardiff University, Cardiff, United Kingdom \\
   \small $^{2}$Independent Researcher, Cardiff, United Kingdom \\[1em]
   \small $^{*}$Corresponding author: southgateJA@cardiff.ac.uk
 }
@@ -22,26 +26,33 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast C++ or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, Circuitscape solves 1000x1000 raster networks 1-2x faster, but requires further file writes. Accounting for total program runtime, our web implementation can be faster for the given context.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, Circuitscape solves $1000 \times 1000$ raster networks 1--2$\times$ faster, \hl{but requires further file writes}. Accounting for total program runtime, our web implementation is faster in a small raster web application context, with potential to reduce backend operational complexity and resource requirements.
 \end{abstract}
 
 \section{Introduction}
 
 The theory of linear circuits has found useful application in ecological connectivity modelling, 
 population genetics, and conservation \cite{mcrae2008using, mcrae2006isolation, mcrae2007circuit}, 
-especially through the Circuitscape \cite{mcrae2016circuitscape} software. 
-Circuit theory offers advantages beyond methods such as least-cost paths (see \cite{mcrae2007circuit}).
+including software such as Circuitscape \cite{mcrae2016circuitscape}, Omniscape \cite{landau2021omniscape}
+and R packages using alternative formulations such as \texttt{gdistance} \cite{van2017r}.
+Circuit theory offers advantages beyond least-cost methods (see \cite{mcrae2007circuit}),
+which is available in a range of software and packages across different languages
+(e.g. Linkage Mapper \cite{mcrae2011linkagemapper}, \texttt{pycda} \cite{koehl2024pycda}, ArcGIS \cite{esri2026arcgis}).
 At the same time, these modelling approaches can require large compute resources, cloud instances or servers,
-and technical expertise for maintenance.
+and technical expertise for maintenance; the Julia implementation of Circuitscape was previously benchmarked 
+using 384 GB of RAM using a 437 million pixel input \cite{hall2021circuitscape}.
 
 In modern web applications, 
 a front-end browser application is often paired with a backend server which performs more computationally expensive jobs. 
-When scientific code is deployed into production web applications for practical use by customers (e.g. analysts) 
-outside of academia, a backend is required. However, for many applications, maintaining this infrastructure is costly. 
+When scientific code is deployed into production web applications for practical use by customers (e.g. analysts),
+a backend is required. However, for many applications, maintaining this infrastructure is costly. 
+
 Edge computing means making use of compute close to the `edge' of the cloud, 
 which is either close to the user's computer, or the user's computer itself. 
-An additional advantage to this paradigm is simplified data governance, as storage of personal data can be avoided if
+One of the advantages of offloading computation browser-side is simplified data governance,
+as storage of personal data can be avoided if
 computation occurs directly in the user's browser.
+
 The problem with performing complex calculations in the browser is that browser code 
 (i.e. JavaScript) execution is strictly controlled for security purposes, which has poor performance and filesystem interaction.
 To resolve this problem, WebAssembly \cite{haas2017bringing} was introduced in 2017,
@@ -65,9 +76,9 @@ such as geospatial analysis software. We demonstrate reasonable
 
 \subsection{Example datasets and resistance map calculation}
 
-In order to demonstrate the functionality of our WASM toolset, a test region corresponding to a 1~$\text{km}^2$ region centered at
+To demonstrate the functionality of our WASM toolset, a test region corresponding to a 1~$\text{km}^2$ region centered at
 286600E, 79050N (EPSG:27700) was selected. The region includes buildings, roads, and a river. Vector data was obtained from
-the UK Ordnance Survey open data \cite{os_data}. 
+the UK Ordnance Survey open data \cite{os_data}. \hl{Expand explainer}
 DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
 
 For the test resistance map, we use constant resistance parameters for rasterised vector features: 50 for roads (3 pixel buffer), 500 for buildings, 
@@ -76,7 +87,7 @@ For raster landscape feature resistance, we took the feature height as resistanc
 These parameters were arbitrary and chosen to introduce variation into the test resistance map inputted into current calculation.
 In practice, these parameters can be set freely.
 
-In order to keep the WASM toolset lightweight, we avoid heavy geospatial dependencies. For vector rasterisation, we use
+To keep the WASM toolset lightweight, we avoid heavy geospatial dependencies. For vector rasterisation, we use
 the \texttt{geojson} and \texttt{geo} crates, which are lightweight and have no external dependencies. Handling vector inputs allows
 applications with vector data to use the WASM toolset directly, and interface cleanly with vector tile
 data such as MVT derived from mbtiles.
@@ -84,45 +95,53 @@ data such as MVT derived from mbtiles.
 \subsection{Benchmarking}
 
 Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
-Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be run locally and accessed via the code repository. Two benchmarks were run. 
-In the first case, a resistance map was generated at 1000$\times$1000 resolution, then downsampled to lower resolutions, and the analysis code run with 5 repeats each.
+Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be run locally and accessed via the code repository
+ \url{https://github.com/asouthgate/wasm-connectivity}. 
+
+Two benchmarks were run. 
+In the first case, a resistance map was generated at 1000$\times$1000 resolution, then downsampled to lower resolutions, and the analysis code was run with 5 repeats each.
 It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/WASM JIT compilation engine warm-up (`warm start').
 
 For comparison with Circuitscape version 5.11.2, a configuration file was created with \texttt{scenario=advanced}, \texttt{write\_as\_tif=True} and run with 4 threads.
-Although this allows Circuitscape to multithread, which our implementation does not exploit, it is conventional to run with multiple threads. 
+Although this allows Circuitscape to multithread, which our implementation does not exploit, it is conventional to run with multiple threads. \hl{Expand explanation}
 
 \subsection{Connectivity model}
 
-We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} is \eqref{eq:ohm} specifies the relationship between voltage $V$, current $I$, and resistance $R$ as $V=IR$. Or, using conductance $C = 1/R$:
+We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} is \eqref{eq:ohm} specifies the relationship between voltage $V$, current $I$, and resistance $R$ as $V=IR$. In the case of ecological connectivity, $I$ is the movement of the migrating population instead of electrical current, and resistance analogously describes how hard it is for the species to move (consider movement over a rocky beach versus flat grassland). Or, using conductance $C = 1/R$,
 
 \begin{equation}
 \label{eq:ohm}
-I = CV
+I = CV.
 \end{equation}
 
-Secondly, for a given node (pixel), the conservation equation (Kirchhoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) \eqref{eq:conservation} just means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$:
+Secondly, for a given node (pixel), the conservation equation (Kirchhoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$ (a point at which the organism emerges, such as a roost):
 
 \begin{equation}
 \label{eq:conservation}
-I_i = \sum_{j \in N(i)} C_{ij}V_{ij} - S_i = 0
+I_i = \sum_{j \in N(i)} C_{ij}V_{ij} - S_i = 0,
 \end{equation}
 
-Given these two equations, only voltage differences $V_{ij}$ are unknown. Voltage, as a potential can be assumed to be a scalar quantity for a single node up to some constant, which leads to a system of equations \eqref{eq:system}:
-
-\begin{equation}
-\sum_{j \in N(i)} C_{ij}(V_i - V_j) = S_i
-\end{equation}
+Given these two equations, only voltage differences, $V_{ij}$, are unknown. Voltage, as a potential can be assumed to be a scalar quantity for a single node up to some constant, which leads to a system of equations,
 
 \begin{equation}
-\Big(\sum_{j \in N(i)} C_{ij}\Big)V_i - \sum_{j \in N(i)} C_{ij}V_j = S_i
+\label{eq:balance1}
+\sum_{j \in N(i)} C_{ij}(V_i - V_j) = S_i,
 \end{equation}
+
+\begin{equation}
+\label{eq:balance2}
+\Big(\sum_{j \in N(i)} C_{ij}\Big)V_i - \sum_{j \in N(i)} C_{ij}V_j = S_i.
+\end{equation}
+
+\eqref{eq:balance1} and \eqref{eq:balance2} can be written in the form
 
 \begin{equation}
 \label{eq:system}
-\rightarrow \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s}
+\rightarrow \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s},
 \end{equation}
 
-Which is a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. The matrix $\mathbf{L}$ is the Laplacian. The diagonal elements of $\mathbf{L}$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $\mathbf{L}$ is sparse, since only neighboring nodes are connected in the simplest case.
+where the matrix $\mathbf{L}$ is the Laplacian. The diagonal elements of $\mathbf{L}$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $\mathbf{L}$ is sparse, since only neighboring nodes are connected in the simplest case.
+which is a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}.
 
 \subsection{Modes}
 
@@ -270,7 +289,7 @@ This code contains several simple examples. All results can be easily reproduced
 
 \section{Results}
 
-Figure \ref{fig:wasm-connectivity} gives an example of a 1000x1000 resistance input and current map output
+Figure \ref{fig:wasm-connectivity} gives an example of a 1000$\times$ 1000 resistance input and current map output
 rendered in a frontend using raster source mode (referred to as advanced mode in Circuitscape) for the test region.
 Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. As shown,
 the CG MG preconditioners were much faster than Jacobi preconditioning, while taking modestly more memory.
@@ -353,7 +372,7 @@ This paper was written by hand without LLM generation. Code and research was dev
 Alex Southgate: conceptualization; problem formulation; solver and geospatial pipeline implementation; paper writing; testing. Joanna Redihough: conceptualization, especially
 with respect to utility of frontend integration; front-end code; paper editing.
 
-\bibliographystyle{plain} 
+\bibliographystyle{unsrt}
 \bibliography{refs} 
 
 \end{document}
