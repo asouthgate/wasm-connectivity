@@ -82,6 +82,45 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     lap
 }
 
+/// Add a per-node diagonal to a matrix: returns `lap` with `A[i,i] += diag[i]`.
+///
+/// Used to declare the full system matrix up front — e.g. `L + G` where `G`
+/// holds finite ground (shunt) conductances on the diagonal.
+pub fn add_diagonal(lap: &CsMat<f64>, diag: &[f64]) -> CsMat<f64> {
+    let n = lap.rows();
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut vals = Vec::new();
+    for row in 0..n {
+        let boost = if row < diag.len() { diag[row] } else { 0.0 };
+        if let Some(rv) = lap.outer_view(row) {
+            let mut found_diag = false;
+            for (col, &val) in rv.iter() {
+                if col == row {
+                    rows.push(row);
+                    cols.push(col);
+                    vals.push(val + boost);
+                    found_diag = true;
+                } else {
+                    rows.push(row);
+                    cols.push(col);
+                    vals.push(val);
+                }
+            }
+            if !found_diag && boost != 0.0 {
+                rows.push(row);
+                cols.push(row);
+                vals.push(boost);
+            }
+        } else if boost != 0.0 {
+            rows.push(row);
+            cols.push(row);
+            vals.push(boost);
+        }
+    }
+    sprs::TriMat::from_triplets((n, n), rows, cols, vals).to_csr()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
