@@ -2,8 +2,15 @@ use sprs::CsMat;
 
 /// Compute the current map for each node in the graph given the Laplacian matrix and the node voltages.
 ///
+/// The matrix may be a pure graph Laplacian `L`, or a full system matrix
+/// `L + G` where `G` is a diagonal of finite ground (shunt) conductances.
+/// In the latter case the shunt conductance at each node is recovered as
+/// `A[i,i] - Σ_j≠i |A[i,j]|` (exactly zero for a pure graph Laplacian), and
+/// the resulting ground current `G[i]·V[i]` is counted like any other branch
+/// current. No separate ground vector is required.
+///
 /// # Arguments
-/// * `laplacian` - A reference to the Laplacian matrix of the graph.
+/// * `laplacian` - A reference to the Laplacian (or system) matrix of the graph.
 /// * `voltages` - A slice containing the voltage values for each node.
 /// * `out` - A mutable reference to a vector where the computed current values will be stored.
 /// # Panics
@@ -22,8 +29,11 @@ pub fn compute_node_current_map_into(
         let mut neg_sum = 0.0f64;
         let vn = voltages[node];
         let rv = laplacian.outer_view(node).unwrap(); // panic if out of bounds, should not happen
+        let mut diag_val = 0.0f64;
+        let mut offdiag_conductance_sum = 0.0f64;
         for (neighbor, &val) in rv.iter() {
             if neighbor == node {
+                diag_val = val;
                 continue;
             }
             // conductance is positive, and the laplacian off-diagonals
@@ -31,6 +41,7 @@ pub fn compute_node_current_map_into(
             // or negative.
             debug_assert!(val <= 0.0);
             let conductance = -val;
+            offdiag_conductance_sum += conductance;
             let dv = vn - voltages[neighbor];
             let branch_current = conductance * dv;
             // KCL means current in and out is balanced
@@ -40,7 +51,20 @@ pub fn compute_node_current_map_into(
                 neg_sum -= branch_current;
             }
         }
-        // KCL does not hold for boundary   
+        // Shunt (ground) conductance: the part of the diagonal not explained
+        // by the edge conductances. Zero for a pure graph Laplacian; equal to
+        // G[i] for a system matrix declared as L + G. The tiny Laplacian
+        // regularization bump at node 0 also surfaces here but is negligible.
+        let shunt_g = (diag_val - offdiag_conductance_sum).max(0.0);
+        if shunt_g > 0.0 {
+            // Current to/from the 0V reference, by Ohm's law.
+            if vn > 0.0 {
+                pos_sum += shunt_g * vn;
+            } else if vn < 0.0 {
+                neg_sum += shunt_g * -vn;
+            }
+        }
+        // KCL does not hold for boundary
         out[node] = pos_sum.max(neg_sum);
     }
 }

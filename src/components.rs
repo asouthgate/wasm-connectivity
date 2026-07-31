@@ -69,7 +69,37 @@ pub fn build_subgraph_laplacian(
     }
 
     let mut local_tri = TriMat::new((comp_size, comp_size));
+    let mut local_diags = vec![0.0f64; comp_size];
     let mut local_row_sums = vec![0.0f64; comp_size];
+
+    // The parent's diagonal may include this crate's regularization bump at
+    // global node 0 (see regularize_laplacian). Recover the exact bump so the
+    // preserved diagonal can exclude it; the subgraph is re-regularized
+    // below, leaving precisely one bump. The bump was computed on the
+    // *unbumped* matrix, so one fixed-point step is needed to recover that
+    // norm from the bumped matrix we see here.
+    let (s_bumped, pd00) = {
+        let mut s = 0.0f64;
+        let mut pd = 0.0f64;
+        for i in 0..parent_laplacian.rows() {
+            if let Some(rv) = parent_laplacian.outer_view(i) {
+                for (col, &v) in rv.iter() {
+                    s += v * v;
+                    if i == 0 && col == 0 {
+                        pd = v;
+                    }
+                }
+            }
+        }
+        (s, pd)
+    };
+    let parent_bump = if s_bumped.is_finite() && s_bumped > 0.0 && pd00 != 0.0 {
+        let cpb = 1e-5 * s_bumped.sqrt();
+        let s_pre = s_bumped - pd00 * pd00 + (pd00 - cpb) * (pd00 - cpb);
+        1e-5 * s_pre.max(0.0).sqrt()
+    } else {
+        0.0
+    };
 
     for &global_u in comp {
         let local_u = match node_to_local.get(&global_u) {
@@ -80,8 +110,10 @@ pub fn build_subgraph_laplacian(
             Some(rv) => rv,
             None => continue,
         };
+        let mut parent_diag: Option<f64> = None;
         for (global_v, &parent_val) in row_view.indices().iter().zip(row_view.data()) {
             if global_u == *global_v {
+                parent_diag = Some(parent_val);
                 continue;
             }
             let local_v = match node_to_local.get(global_v) {
@@ -92,11 +124,20 @@ pub fn build_subgraph_laplacian(
             local_tri.add_triplet(local_u, local_v, parent_val);
             local_row_sums[local_u] += parent_val.abs();
         }
+        // Preserve the parent's diagonal entry as-is. Besides the edge
+        // conductance sum it may carry terms that are not representable by
+        // within-component edges e.g. finite ground (shunt) conductances
+        // declared on the parent diagonal, which must survive extraction.
+        local_diags[local_u] = match parent_diag {
+            Some(pd) if global_u == 0 && parent_bump != 0.0 => pd - parent_bump,
+            Some(pd) => pd,
+            None => local_row_sums[local_u],
+        };
     }
 
     // Add diagonal elements
-    for (local_u, row_sum) in local_row_sums.iter().enumerate() {
-        local_tri.add_triplet(local_u, local_u, *row_sum);
+    for (local_u, &diag) in local_diags.iter().enumerate() {
+        local_tri.add_triplet(local_u, local_u, diag);
     }
 
     // Convert/compress to csr format

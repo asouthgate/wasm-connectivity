@@ -245,8 +245,44 @@ pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
 // Hierarchy construction
 // ---------------------------------------------------------------------------
 
+/// Which prolongation operator to use during Galerkin coarsening.
+#[derive(Copy, Clone, PartialEq)]
+enum ProlongKind {
+    /// Fixed bilinear interpolation weights.
+    Bilinear,
+    /// Alcouffe operator-induced weights derived from the fine Laplacian.
+    Alcouffe,
+}
+
 impl MgPreconditioner {
-    /// Build a multigrid hierarchy from a filled resistance raster.
+    /// Build a multigrid hierarchy directly from a fine-grid system matrix.
+    ///
+    /// The matrix is used as-is for level 0 and Galerkin-coarsened
+    /// (`A_coarse = Pᵀ · A · P`) for deeper levels
+    pub fn build_from_laplacian(
+        a: &CsMat<f64>,
+        nrows: usize,
+        ncols: usize,
+        max_levels: usize,
+    ) -> Self {
+        Self::from_laplacian_impl(a, nrows, ncols, max_levels, ProlongKind::Bilinear, None)
+    }
+
+    /// Alcouffe variant of `build_from_laplacian`. `weights` optionally
+    /// supplies a separate matrix for deriving the first-level prolongation
+    /// weights (e.g. the un-pinned Laplacian when `a` has Dirichlet identity
+    /// rows); defaults to `a`.
+    pub fn build_alcouffe_from_laplacian(
+        a: &CsMat<f64>,
+        weights: Option<&CsMat<f64>>,
+        nrows: usize,
+        ncols: usize,
+        max_levels: usize,
+    ) -> Self {
+        Self::from_laplacian_impl(a, nrows, ncols, max_levels, ProlongKind::Alcouffe, weights)
+    }
+
+    /// Build a multigrid hierarchy from a resistance raster.
     /// Uses Galerkin coarsening (L_coarse = P^T * L_fine * P) for
     /// variable-coefficient robustness.
     pub fn build(
@@ -258,43 +294,76 @@ impl MgPreconditioner {
         ground_nodes: Option<&[usize]>,
     ) -> Self {
         let filled = fill_nodata(resistance, nodata);
-        let mut levels = Vec::new();
-        let (mut nr, mut nc) = (nrows, ncols);
-
-        // Build level 0 from the full resistance grid
-        #[cfg(not(target_arch = "wasm32"))]
-        let t1 = std::time::Instant::now();
-        let (_cell_to_node, num_nodes, _edges, mut laplacian, _components) =
-            crate::build_circuit_model(&filled, nr, nc, nodata);
-        #[cfg(not(target_arch = "wasm32"))]
-        let build_ms = t1.elapsed().as_millis();
-        #[cfg(target_arch = "wasm32")]
-        let build_ms: u128 = 0;
-
-        debug_assert_eq!(
-            num_nodes, nr * nc,
-            "MG hierarchy expects all cells as nodes, got {} vs {}",
-            num_nodes, nr * nc
-        );
-
-        // Apply Dirichlet ground BCs to the fine-grid Laplacian if requested.
-        // This modifies the system to pin V=0 at ground nodes, matching
-        // Circuitscape's advanced mode behaviour.
+        let (_cell_to_node, _num_nodes, _edges, mut laplacian, _components) =
+            crate::build_circuit_model(&filled, nrows, ncols, nodata);
         if let Some(gns) = ground_nodes {
             if !gns.is_empty() {
                 laplacian = apply_dirichlet_ground_lap(&laplacian, gns);
             }
         }
+        Self::build_from_laplacian(&laplacian, nrows, ncols, max_levels)
+    }
+
+    /// Build a multigrid hierarchy using Alcouffe matrix-dependent
+    /// prolongation. The method signature is identical to `build` but
+    /// the prolongation weights are derived from the fine-grid Laplacian
+    /// entries instead of fixed bilinear interpolation, which gives
+    /// better convergence for problems with strongly varying resistance
+    /// coefficients (e.g. land-use maps with roads, rivers, and buildings).
+    pub fn build_alcouffe(
+        resistance: &[f64],
+        nrows: usize,
+        ncols: usize,
+        nodata: f64,
+        max_levels: usize,
+        ground_nodes: Option<&[usize]>,
+    ) -> Self {
+        let filled = fill_nodata(resistance, nodata);
+        let (_cell_to_node, _num_nodes, _edges, mut laplacian, _components) =
+            crate::build_circuit_model(&filled, nrows, ncols, nodata);
+        // Keep a copy of the original Laplacian for building Alcouffe
+        // matrix-dependent prolongation weights. The Dirichlet-modified
+        // Laplacian has identity rows at ground nodes, which would give
+        // incorrect prolongation weights.
+        let weights = if ground_nodes.is_some() {
+            Some(laplacian.clone())
+        } else {
+            None
+        };
+        if let Some(gns) = ground_nodes {
+            if !gns.is_empty() {
+                laplacian = apply_dirichlet_ground_lap(&laplacian, gns);
+            }
+        }
+        Self::build_alcouffe_from_laplacian(&laplacian, weights.as_ref(), nrows, ncols, max_levels)
+    }
+
+    fn from_laplacian_impl(
+        a: &CsMat<f64>,
+        nrows: usize,
+        ncols: usize,
+        max_levels: usize,
+        prolong: ProlongKind,
+        weights_lap: Option<&CsMat<f64>>,
+    ) -> Self {
+        debug_assert_eq!(
+            a.rows(), nrows * ncols,
+            "MG hierarchy expects all cells as nodes, got {} vs {}",
+            a.rows(), nrows * ncols
+        );
+
+        let mut levels = Vec::new();
+        let (mut nr, mut nc) = (nrows, ncols);
+        let label = if prolong == ProlongKind::Alcouffe { "MG-Alcouffe" } else { "MG" };
 
         levels.push(MgLevel {
-            laplacian,
+            laplacian: a.clone(),
             nrows: nr,
             ncols: nc,
             cholesky_l: None,
             prolongation: None,
         });
-        eprintln!("  MG level {}: {}x{} ({} nodes) built in {}ms",
-            levels.len() - 1, nr, nc, num_nodes, build_ms);
+        eprintln!("  {} level {}: {}x{} ({} nodes)", label, levels.len() - 1, nr, nc, a.rows());
 
         // Build deeper levels using Galerkin coarsening
         while levels.len() < max_levels {
@@ -308,8 +377,22 @@ impl MgPreconditioner {
 
             #[cfg(not(target_arch = "wasm32"))]
             let t1 = std::time::Instant::now();
-            let (p_rows, p_cols, p_vals) = build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc);
             let fine_lap = &levels.last().unwrap().laplacian;
+            let (p_rows, p_cols, p_vals) = match prolong {
+                ProlongKind::Bilinear =>
+                    build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc),
+                ProlongKind::Alcouffe => {
+                    // For the first prolongation (level 0 -> 1), use the
+                    // weights matrix if supplied (avoids Dirichlet-identity
+                    // rows corrupting Alcouffe weights).
+                    let lap_for_prolong = if levels.len() == 1 {
+                        weights_lap.unwrap_or(fine_lap)
+                    } else {
+                        fine_lap
+                    };
+                    build_alcouffe_prolongation_triplets(lap_for_prolong, fine_nr, fine_nc, next_nr, next_nc)
+                }
+            };
             let fine_n = fine_nr * fine_nc;
             let coarse_n = next_nr * next_nc;
 
@@ -334,8 +417,8 @@ impl MgPreconditioner {
             let galerkin_ms = t1.elapsed().as_millis();
             #[cfg(target_arch = "wasm32")]
             let galerkin_ms: u128 = 0;
-            eprintln!("  MG level {}: {}x{} ({} nodes) built in {}ms (Galerkin)",
-                levels.len() - 1, next_nr, next_nc, coarse_n, galerkin_ms);
+            eprintln!("  {} level {}: {}x{} ({} nodes) built in {}ms (Galerkin)",
+                label, levels.len() - 1, next_nr, next_nc, coarse_n, galerkin_ms);
 
             nr = next_nr;
             nc = next_nc;
@@ -351,155 +434,16 @@ impl MgPreconditioner {
         match cholesky::cholesky_decompose(&dense, cnodes) {
             Some(l) => {
                 levels[coarsest_idx].cholesky_l = Some(l);
-                eprintln!("  MG coarsest Cholesky factorized ({}x{}, {} nodes)",
-                    cnrows, cncols, cnodes);
+                eprintln!("  {} coarsest Cholesky factorized ({}x{}, {} nodes)",
+                    label, cnrows, cncols, cnodes);
             }
             None => {
-                eprintln!("  MG coarsest Cholesky FAILED ({}x{}, {} nodes) — falling back to CG",
-                    cnrows, cncols, cnodes);
+                eprintln!("  {} coarsest Cholesky FAILED ({}x{}, {} nodes) — falling back to CG",
+                    label, cnrows, cncols, cnodes);
             }
         }
 
         // Pre-allocate scratch workspaces
-        let workspaces = levels.iter().map(|lvl| {
-            let n = lvl.nrows * lvl.ncols;
-            LevelWorkspace {
-                z: vec![0.0; n],
-                r: vec![0.0; n],
-                rhs: vec![0.0; n],
-            }
-        }).collect();
-
-        Self {
-            levels,
-            nu: 2,
-            omega: 0.67,
-            workspaces: RefCell::new(workspaces),
-        }
-    }
-
-    /// Build a multigrid hierarchy using Alcouffe matrix-dependent
-    /// prolongation. The method signature is identical to `build` but
-    /// the prolongation weights are derived from the fine-grid Laplacian
-    /// entries instead of fixed bilinear interpolation, which gives
-    /// better convergence for problems with strongly varying coefficients.
-    pub fn build_alcouffe(
-        resistance: &[f64],
-        nrows: usize,
-        ncols: usize,
-        nodata: f64,
-        max_levels: usize,
-        ground_nodes: Option<&[usize]>,
-    ) -> Self {
-        let filled = fill_nodata(resistance, nodata);
-        let mut levels = Vec::new();
-        let (mut nr, mut nc) = (nrows, ncols);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let t1 = std::time::Instant::now();
-        let (_cell_to_node, num_nodes, _edges, mut laplacian, _components) =
-            crate::build_circuit_model(&filled, nr, nc, nodata);
-        #[cfg(not(target_arch = "wasm32"))]
-        let build_ms = t1.elapsed().as_millis();
-        #[cfg(target_arch = "wasm32")]
-        let build_ms: u128 = 0;
-
-        debug_assert_eq!(
-            num_nodes, nr * nc,
-            "MG hierarchy expects all cells as nodes, got {} vs {}",
-            num_nodes, nr * nc
-        );
-
-        // Keep a copy of the original Laplacian for building Alcouffe
-        // matrix-dependent prolongation weights. The Dirichlet-modified
-        // Laplacian has identity rows at ground nodes, which would give
-        // incorrect prolongation weights.
-        let lap_orig = laplacian.clone();
-
-        if let Some(gns) = ground_nodes {
-            if !gns.is_empty() {
-                laplacian = apply_dirichlet_ground_lap(&laplacian, gns);
-            }
-        }
-
-        levels.push(MgLevel {
-            laplacian,
-            nrows: nr,
-            ncols: nc,
-            cholesky_l: None,
-            prolongation: None,
-        });
-        eprintln!("  MG-Alcouffe level {}: {}x{} ({} nodes) built in {}ms",
-            levels.len() - 1, nr, nc, num_nodes, build_ms);
-
-        while levels.len() < max_levels {
-            let fine_nr = nr;
-            let fine_nc = nc;
-            let next_nr = fine_nr / 2;
-            let next_nc = fine_nc / 2;
-            if next_nr < 4 || next_nc < 4 {
-                break;
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            let t1 = std::time::Instant::now();
-            let fine_lap = &levels.last().unwrap().laplacian;
-            // For the first prolongation (level 0 → 1), use the original
-            // Laplacian for Alcouffe weights to avoid Dirichlet-identity rows.
-            let lap_for_prolong = if ground_nodes.is_some() && levels.len() == 1 {
-                &lap_orig
-            } else {
-                fine_lap
-            };
-            let (p_rows, p_cols, p_vals) =
-                build_alcouffe_prolongation_triplets(lap_for_prolong, fine_nr, fine_nc, next_nr, next_nc);
-            let fine_n = fine_nr * fine_nc;
-            let coarse_n = next_nr * next_nc;
-
-            let p_tri = sprs::TriMat::from_triplets((fine_n, coarse_n), p_rows.clone(), p_cols.clone(), p_vals.clone());
-            let p = p_tri.to_csr();
-
-            let pt = p.transpose_view().to_csr();
-            let pt_lap = sprs::smmp::mul_csr_csr::<f64, f64, f64, usize, usize>(pt.view(), fine_lap.view());
-            let mut laplacian = sprs::smmp::mul_csr_csr::<f64, f64, f64, usize, usize>(pt_lap.view(), p.view());
-            crate::laplacian::regularize_laplacian(&mut laplacian);
-
-            levels.push(MgLevel {
-                laplacian,
-                nrows: next_nr,
-                ncols: next_nc,
-                cholesky_l: None,
-                prolongation: Some((p_rows, p_cols, p_vals)),
-            });
-            #[cfg(not(target_arch = "wasm32"))]
-            let galerkin_ms = t1.elapsed().as_millis();
-            #[cfg(target_arch = "wasm32")]
-            let galerkin_ms: u128 = 0;
-            eprintln!("  MG-Alcouffe level {}: {}x{} ({} nodes) built in {}ms (Galerkin)",
-                levels.len() - 1, next_nr, next_nc, coarse_n, galerkin_ms);
-
-            nr = next_nr;
-            nc = next_nc;
-        }
-
-        let coarsest_idx = levels.len() - 1;
-        let (cnrows, cncols, cnodes) = {
-            let c = &levels[coarsest_idx];
-            (c.nrows, c.ncols, c.nrows * c.ncols)
-        };
-        let dense = cholesky::sparse_to_dense(&levels[coarsest_idx].laplacian, cnodes);
-        match cholesky::cholesky_decompose(&dense, cnodes) {
-            Some(l) => {
-                levels[coarsest_idx].cholesky_l = Some(l);
-                eprintln!("  MG-Alcouffe coarsest Cholesky factorized ({}x{}, {} nodes)",
-                    cnrows, cncols, cnodes);
-            }
-            None => {
-                eprintln!("  MG-Alcouffe coarsest Cholesky FAILED ({}x{}, {} nodes) — falling back to CG",
-                    cnrows, cncols, cnodes);
-            }
-        }
-
         let workspaces = levels.iter().map(|lvl| {
             let n = lvl.nrows * lvl.ncols;
             LevelWorkspace {

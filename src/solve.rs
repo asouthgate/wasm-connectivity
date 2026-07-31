@@ -7,7 +7,7 @@ use crate::multigrid::{self, MgPreconditioner};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum GroundMode {
-    /// Current-injection (Neumann): ground cells subtract current from b.
+    /// Conductance-to-ground (Neumann): ground cells add conductance to Laplacian diagonal.
     Neumann,
     /// Fixed-voltage (Dirichlet): ground cells are pinned at V=0.
     Dirichlet,
@@ -276,15 +276,32 @@ pub fn compute_raster_sources_annotated(
         crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
     let ground_nodes = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
     let ground_set: HashSet<usize> = ground_nodes.iter().copied().collect();
+
+    // Declare the system matrix up front. Neumann adds finite ground
+    // (shunt) conductances to the diagonal; the rest of the algorithm runs
+    // on that single matrix. Dirichlet pinning happens per-component inside
+    // solve_component_voltages_warm.
+    let (a, lap_current, pin_grounds) = match ground_mode {
+        GroundMode::Neumann => {
+            let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            let a = if g.iter().any(|&x| x > 0.0) {
+                crate::laplacian::add_diagonal(&laplacian, &g)
+            } else {
+                laplacian.clone()
+            };
+            (a.clone(), a, false)
+        }
+        GroundMode::Dirichlet => (laplacian.clone(), laplacian, true),
+    };
     let current_global = build_global_currents(
-        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data, ground_data, ground_mode,
+        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
     );
     let (voltages_global, iters) = solve_component_voltages_warm(
-        &components, &current_global, &laplacian,
+        &components, &current_global, &a,
         num_nodes, max_iter, tol, remove_average, None,
-        &ground_set,
+        &ground_set, pin_grounds,
     );
-    let output = build_raster_output(&voltages_global, &laplacian, &cell_to_node, nrows, ncols);
+    let output = build_raster_output(&voltages_global, &lap_current, &cell_to_node, nrows, ncols);
     AnnotatedOutput { output, total_iters: iters }
 }
 
@@ -343,19 +360,31 @@ pub fn solve_raster_cached(
     let ground_set: HashSet<usize> = ground_nodes.iter().copied().collect();
 
     let current_global = build_global_currents(
-        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data, ground_data, ground_mode,
+        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
     );
     let prior_slice = prior_voltages
         .as_ref()
         .map(|v| v.as_slice())
         .filter(|v| !v.is_empty());
+    let (a, lap_current, pin_grounds) = match ground_mode {
+        GroundMode::Neumann => {
+            let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            let a = if g.iter().any(|&x| x > 0.0) {
+                crate::laplacian::add_diagonal(&laplacian, &g)
+            } else {
+                laplacian.clone()
+            };
+            (a.clone(), a, false)
+        }
+        GroundMode::Dirichlet => (laplacian.clone(), laplacian, true),
+    };
     let (voltages_global, iters) = solve_component_voltages_warm(
-        &components, &current_global, &laplacian,
+        &components, &current_global, &a,
         num_nodes, max_iter, tol, remove_average, prior_slice,
-        &ground_set,
+        &ground_set, pin_grounds,
     );
 
-    let out = build_raster_output(&voltages_global, &laplacian, &cell_to_node, nrows, ncols);
+    let out = build_raster_output(&voltages_global, &lap_current, &cell_to_node, nrows, ncols);
 
     cache::store_last_voltages(&out.voltages);
 
@@ -456,6 +485,34 @@ fn obtain_circuit_points(
 // Shared solve kernel
 // ----------------------------------------------------------------------------
 
+/// Build the per-node ground (shunt) diagonal from the ground raster.
+/// Each ground cell contributes its value as a conductance to the 0V
+/// reference.
+fn build_ground_diagonal(
+    cell_to_node: &[i32],
+    num_nodes: usize,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    ground_data: &[f64],
+) -> Vec<f64> {
+    let mut conds = vec![0.0f64; num_nodes];
+    for row in 0..nrows {
+        for col in 0..ncols {
+            let idx = row * ncols + col;
+            let node = cell_to_node[idx];
+            if node > 0 {
+                let node_idx = (node - 1) as usize;
+                let gv = ground_data[idx];
+                if gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10 {
+                    conds[node_idx] += gv;
+                }
+            }
+        }
+    }
+    conds
+}
+
 fn build_global_currents(
     cell_to_node: &[i32],
     num_nodes: usize,
@@ -463,8 +520,6 @@ fn build_global_currents(
     ncols: usize,
     nodata: f64,
     source_data: &[f64],
-    ground_data: &[f64],
-    ground_mode: GroundMode,
 ) -> Vec<f64> {
     let mut current_global = vec![0.0f64; num_nodes];
     for row in 0..nrows {
@@ -474,14 +529,8 @@ fn build_global_currents(
             if node > 0 {
                 let node_idx = (node - 1) as usize;
                 let sv = source_data[idx];
-                let gv = ground_data[idx];
                 if sv.is_finite() && sv > 0.0 && (sv - nodata).abs() > 1e-10 {
                     current_global[node_idx] += sv;
-                }
-                if ground_mode == GroundMode::Neumann {
-                    if gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10 {
-                        current_global[node_idx] -= gv;
-                    }
                 }
             }
         }
@@ -517,31 +566,44 @@ pub fn solve_raster_sources_mg(
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
 
     let current_global = build_global_currents(
-        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data, ground_data, ground_mode,
+        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
     );
 
-    let ground_nodes: Option<Vec<usize>> = if ground_mode == GroundMode::Dirichlet {
-        Some(collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata))
-    } else {
-        None
+    // Declare the system matrix up front, then run the whole algorithm on
+    // it. Neumann adds finite ground conductances to the diagonal; Dirichlet
+    // pins ground nodes at V=0. The MG hierarchy is built from the same
+    // matrix, so Galerkin coarsening propagates ground effects to all levels.
+    let grounds_present;
+    let (a, lap_current, mut b) = match ground_mode {
+        GroundMode::Neumann => {
+            let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            grounds_present = g.iter().any(|&x| x > 0.0);
+            let a = if grounds_present {
+                crate::laplacian::add_diagonal(&laplacian, &g)
+            } else {
+                laplacian.clone()
+            };
+            (a.clone(), a, current_global)
+        }
+        GroundMode::Dirichlet => {
+            let gns = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
+            grounds_present = !gns.is_empty();
+            let a = if grounds_present {
+                apply_dirichlet_ground_lap(&laplacian, &gns)
+            } else {
+                laplacian.clone()
+            };
+            let mut b = current_global;
+            zero_ground_rhs(&mut b, &gns);
+            (a, laplacian, b)
+        }
     };
-    let ground_slice: Option<&[usize]> = ground_nodes.as_deref();
 
-    // Build MG hierarchy on the filled resistance
-    let mg = MgPreconditioner::build(&filled, nrows, ncols, nodata, 8, ground_slice);
+    let mg = MgPreconditioner::build_from_laplacian(&a, nrows, ncols, 8);
 
-    // When Dirichlet, solve with Laplacian modified for ground boundary conditions
-    let lap_solve = match ground_slice {
-        Some(gns) if !gns.is_empty() => apply_dirichlet_ground_lap(&laplacian, gns),
-        _ => laplacian.clone(),
-    };
-    let mut b = current_global.to_vec();
-    if let Some(gns) = ground_slice {
-        zero_ground_rhs(&mut b, gns);
-    }
-
-    // Solve the full-grid system directly (no subgraph extraction)
-    if remove_average && ground_mode != GroundMode::Dirichlet {
+    // Mean removal is only needed for singular (ground-free) systems; with
+    // grounds the system is anchored and Julia solves b as-is.
+    if remove_average && !grounds_present {
         let sum: f64 = b.iter().sum();
         if sum.abs() > 1e-15 {
             let mean = sum / num_nodes as f64;
@@ -550,9 +612,9 @@ pub fn solve_raster_sources_mg(
             }
         }
     }
-    let res = solver::cg_solve_precond(&lap_solve, &b, max_iter, tol, None, &mg);
+    let res = solver::cg_solve_precond(&a, &b, max_iter, tol, None, &mg);
 
-    let out = build_raster_output(&res.x, &laplacian, &cell_to_node, nrows, ncols);
+    let out = build_raster_output(&res.x, &lap_current, &cell_to_node, nrows, ncols);
 
     AnnotatedOutput { output: out, total_iters: res.iters }
 }
@@ -580,28 +642,41 @@ pub fn solve_raster_sources_mg_alcouffe(
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
 
     let current_global = build_global_currents(
-        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data, ground_data, ground_mode,
+        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
     );
 
-    let ground_nodes: Option<Vec<usize>> = if ground_mode == GroundMode::Dirichlet {
-        Some(collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata))
-    } else {
-        None
+    // Declare the system matrix up front (see solve_raster_sources_mg).
+    let grounds_present;
+    let (a, lap_current, mut b, mg_weights) = match ground_mode {
+        GroundMode::Neumann => {
+            let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            grounds_present = g.iter().any(|&x| x > 0.0);
+            let a = if grounds_present {
+                crate::laplacian::add_diagonal(&laplacian, &g)
+            } else {
+                laplacian.clone()
+            };
+            (a.clone(), a, current_global, None)
+        }
+        GroundMode::Dirichlet => {
+            let gns = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
+            grounds_present = !gns.is_empty();
+            // Alcouffe prolongation weights come from the un-pinned Laplacian;
+            // identity rows at ground nodes would corrupt them.
+            let a = if grounds_present {
+                apply_dirichlet_ground_lap(&laplacian, &gns)
+            } else {
+                laplacian.clone()
+            };
+            let mut b = current_global;
+            zero_ground_rhs(&mut b, &gns);
+            (a, laplacian.clone(), b, Some(laplacian))
+        }
     };
-    let ground_slice: Option<&[usize]> = ground_nodes.as_deref();
 
-    let mg = MgPreconditioner::build_alcouffe(&filled, nrows, ncols, nodata, 8, ground_slice);
+    let mg = MgPreconditioner::build_alcouffe_from_laplacian(&a, mg_weights.as_ref(), nrows, ncols, 8);
 
-    let lap_solve = match ground_slice {
-        Some(gns) if !gns.is_empty() => apply_dirichlet_ground_lap(&laplacian, gns),
-        _ => laplacian.clone(),
-    };
-    let mut b = current_global.to_vec();
-    if let Some(gns) = ground_slice {
-        zero_ground_rhs(&mut b, gns);
-    }
-
-    if remove_average && ground_mode != GroundMode::Dirichlet {
+    if remove_average && !grounds_present {
         let sum: f64 = b.iter().sum();
         if sum.abs() > 1e-15 {
             let mean = sum / num_nodes as f64;
@@ -610,9 +685,9 @@ pub fn solve_raster_sources_mg_alcouffe(
             }
         }
     }
-    let res = solver::cg_solve_precond(&lap_solve, &b, max_iter, tol, None, &mg);
+    let res = solver::cg_solve_precond(&a, &b, max_iter, tol, None, &mg);
 
-    let out = build_raster_output(&res.x, &laplacian, &cell_to_node, nrows, ncols);
+    let out = build_raster_output(&res.x, &lap_current, &cell_to_node, nrows, ncols);
 
     AnnotatedOutput { output: out, total_iters: res.iters }
 }
@@ -627,6 +702,7 @@ fn solve_component_voltages_warm(
     remove_average: bool,
     prior_voltages: Option<&[f64]>,
     ground_set: &HashSet<usize>,
+    pin_grounds: bool,
 ) -> (Vec<f64>, usize) {
     let mut voltages_global = vec![0.0f64; num_nodes];
     let mut current_local = Vec::with_capacity(num_nodes);
@@ -651,8 +727,9 @@ fn solve_component_voltages_warm(
         }
 
         // For Dirichlet ground: build a modified local Laplacian with
-        // identity rows at ground local nodes and zero RHS.
-        let a_local_mod = if has_comp_ground {
+        // identity rows at ground local nodes and zero RHS. (Neumann grounds
+        // are already declared on the diagonal of `laplacian` itself.)
+        let a_local_mod = if pin_grounds && has_comp_ground {
             let mut local_ground_indices = Vec::new();
             for (li, &gn) in comp.iter().enumerate() {
                 if ground_set.contains(&gn) {
@@ -666,6 +743,7 @@ fn solve_component_voltages_warm(
         };
         let a_solve = a_local_mod.as_ref().unwrap_or(&a_local);
 
+        // Mean removal is only needed for singular (ground-free) systems.
         let do_remove = remove_average && !has_comp_ground;
         if do_remove {
             let sum: f64 = current_local.iter().sum();
