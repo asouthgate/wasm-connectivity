@@ -31,7 +31,9 @@ plt.figure(figsize=(10, 8))
 plt.imshow(scaled_data, cmap='inferno', norm=colors.LogNorm(vmin=1, vmax=100))
 
 # 6. Add a colorbar legend to see the new 1-100 scale
-# plt.colorbar(label='Current Intensity (Rescaled 1-100)')
+if "--colorbar" in sys.argv:
+    cbar = plt.colorbar()
+    cbar.ax.tick_params(labelsize=16)
 plt.axis('off') 
 
 # 7. Save the colored image
