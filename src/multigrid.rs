@@ -258,9 +258,7 @@ impl MgPreconditioner {
     /// Build a multigrid hierarchy directly from a fine-grid system matrix.
     ///
     /// The matrix is used as-is for level 0 and Galerkin-coarsened
-    /// (`A_coarse = Pᵀ · A · P`) for deeper levels, so anything declared on
-    /// its diagonal up front — finite ground (shunt) conductances included —
-    /// propagates through the whole hierarchy automatically.
+    /// (`A_coarse = Pᵀ · A · P`) for deeper levels
     pub fn build_from_laplacian(
         a: &CsMat<f64>,
         nrows: usize,
@@ -384,7 +382,7 @@ impl MgPreconditioner {
                 ProlongKind::Bilinear =>
                     build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc),
                 ProlongKind::Alcouffe => {
-                    // For the first prolongation (level 0 → 1), use the
+                    // For the first prolongation (level 0 -> 1), use the
                     // weights matrix if supplied (avoids Dirichlet-identity
                     // rows corrupting Alcouffe weights).
                     let lap_for_prolong = if levels.len() == 1 {

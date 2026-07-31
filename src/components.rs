@@ -126,8 +126,8 @@ pub fn build_subgraph_laplacian(
         }
         // Preserve the parent's diagonal entry as-is. Besides the edge
         // conductance sum it may carry terms that are not representable by
-        // within-component edges — e.g. finite ground (shunt) conductances
-        // declared on the parent diagonal — which must survive extraction.
+        // within-component edges e.g. finite ground (shunt) conductances
+        // declared on the parent diagonal, which must survive extraction.
         local_diags[local_u] = match parent_diag {
             Some(pd) if global_u == 0 && parent_bump != 0.0 => pd - parent_bump,
             Some(pd) => pd,

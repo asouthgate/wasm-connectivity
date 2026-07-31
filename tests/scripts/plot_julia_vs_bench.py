@@ -96,7 +96,7 @@ def main():
     print(f"Best solver = {best}")
     print(f"  alcouffe 500x500 (interp) mean = {np.mean(alcouffe_500):.2f}s ± {np.std(alcouffe_500):.2f}")
 
-    # --- Build bar chart -------------------------------------------------
+    # Build bar chart
     labels = [
         "Circuitscape\n(precond + solve)",
         "Circuitscape\n(complete)",

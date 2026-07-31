@@ -487,8 +487,7 @@ fn obtain_circuit_points(
 
 /// Build the per-node ground (shunt) diagonal from the ground raster.
 /// Each ground cell contributes its value as a conductance to the 0V
-/// reference. Added to the Laplacian diagonal once, up front, so the rest
-/// of the algorithm sees a single system matrix `L + G`.
+/// reference.
 fn build_ground_diagonal(
     cell_to_node: &[i32],
     num_nodes: usize,

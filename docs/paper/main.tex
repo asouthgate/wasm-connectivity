@@ -215,7 +215,7 @@ The finest grid is smoothed with a few iterations of a Gauss-Seidel smoother. Th
 \mathbf{r} = \mathbf{s} - \mathbf{L}\mathbf{v}.
 \]
 
-This residual, $\mathbf{r}$, is passed down to a coarser grid using a restriction operator $R$ \hl{cite}. 
+This residual, $\mathbf{r}$, is passed down to a coarser grid using a restriction operator $R$ \hl{cite, explain the operators used}. 
 This will be balanced with a prolongation operator on the way back up.
 These operators are comparable to downsampling and upsampling.
 This is applied repeatedly until the coarsest resolution is reached.

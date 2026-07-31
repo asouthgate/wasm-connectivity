@@ -84,7 +84,7 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
 
 /// Add a per-node diagonal to a matrix: returns `lap` with `A[i,i] += diag[i]`.
 ///
-/// Used to declare the full system matrix up front — e.g. `L + G` where `G`
+/// Used to declare the full system matrix up front, e.g. `L + G` where `G`
 /// holds finite ground (shunt) conductances on the diagonal.
 pub fn add_diagonal(lap: &CsMat<f64>, diag: &[f64]) -> CsMat<f64> {
     let n = lap.rows();
