@@ -11,6 +11,7 @@
 \DeclareMathOperator{\diag}{diag} 
 
 \newcommand{\Cpp}{C\nolinebreak[4]\hspace{-.05em}\raisebox{.4ex}{\relsize{-3}{\textbf{++}}}}
+\counterwithout{algorithm}{section} 
 
 \title{Ecological connectivity modelling with WebAssembly}
 \author{
@@ -26,7 +27,7 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, Circuitscape solves $1000\times1000$ raster networks 1--2$\times$ faster, \hl{but requires further file writes}. Accounting for total program runtime, our web implementation is faster in a small raster web application context, with potential to reduce backend operational complexity and resource requirements.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
 \end{abstract}
 
 \section{Introduction}
@@ -114,13 +115,7 @@ Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch.
 
 \subsection{Modes}
 
-\hl{move earlier, make clearer}
-
-The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). If a raster image of source nodes is provided, then the resulting output is connectivity given inputs from the combined input sources, solved together, as in a conventional physical system like electrical circuits.
-
-Instead of the combined mode, where current will flow according to the global pressure gradient, some users may choose to intentionally superimpose $n \choose 2$ pairwise simulations from pairs of $n$ nodes, or $n \times m$ simulations between $n$ sources and $m$ sinks. Each approach has different assumptions and interpretation. 
-
-Each mode has the same underlying mathematical system and solver; in the case of a single pair, only two rows of the matrix $L$ are source/sink; in the case of a raster of currents, many rows are set to sources. Superposition of the different cases can be undertaken in a loop over the chosen sets of pairs.
+The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). Circuitscape offers an `advanced' mode, where a raster specifying sources and grounds can be provided, and a `pairwise' mode \cite{hall2021circuitscape}, for which users can specify $n \choose 2$ pairwise solves from pairs of $n$ nodes, or $n \times m$ simulations between $n$ sources and $m$ sinks. Each approach has different assumptions and interpretation. We implement an equivalent to the `advanced' mode only, with $0V$ grounds and fixed source injection. The former are specified as Dirichlet boundary conditions, and the latter as Neumann boundary conditions \cite{leveque2007finite}.
 
 \subsection{Solver}
 
@@ -173,7 +168,7 @@ As before, once the step direction is taken, the position is updated as
 \mathbf{v}_{k+1} = \mathbf{v}_k + \alpha_{k+1}\mathbf{p}_{k+1}.
 \]
 
-In the case of CG, $\alpha$ and $\beta$ are:
+In the case of CG, $\alpha$ and $\beta$ are \cite[Ch. 4.3]{leveque2007finite}:
 
 \[
 \beta_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{r}_{k}^T\mathbf{r}_{k}},
@@ -182,8 +177,6 @@ In the case of CG, $\alpha$ and $\beta$ are:
 \[
 \alpha_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{p}^T_{k+1}\mathbf{L}\mathbf{p_{k+1}}}.
 \]
-
-\hl{cite}
 
 
 \subsubsection{Preconditioning} 
@@ -202,12 +195,23 @@ We cannot compute $\mathbf{M}^{-1}$ directly, since this is computationally infe
 Instead, we choose an easily invertible $\mathbf{M}$ that approximates $\mathbf{L}$.
 
 We compare several preconditioners: a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, 
-which can be useful for some data \cite{wathen2015preconditioning}; a geometric multigrid (GMG) preconditioner,
-which is more complex but converges faster \cite{tatebe1993multigrid} \hl{always?};
+which can be useful for some data \cite{wathen2015preconditioning}, 
+smoothing high-frequency error components quickly, but low-frequency components slowly \cite[Ch. 4.6]{leveque2007finite}; a geometric multigrid (GMG) preconditioner,
+which is more complex but converges faster \cite{tatebe1993multigrid};
 an Alcouffe preconditioner \cite{alcouffe1981multi}, which is better for sharply contrasting features.
 We implement these methods directly to reduce WASM dependencies and binary footprint. 
 
-The GMG preconditioner is more complex than the Jacobi preconditioner. It requires computing a correction $\mathbf{e}$ using a sequence of coarse-grained matrices. At the lowest resolution, the system is solved using Cholesky decomposition. The algorithm proceeds as follows.
+Multigrid preconditioners are more complex than the Jacobi preconditioner. After smoothing high-frequency error features
+using a few Jacobi iterations, the remaining low-frequency components are then smoothed using a coarse grid.
+A system $\tilde{L}\tilde{e} = - \tilde{\mathbf{r}}$ is setup, with $\tilde{L}$ and $\tilde{r}$ coarse 
+approximations of $L$ and $r$, and $\tilde{e}$ an approximation for the error $e = v-v^* = v - A^{-1}f$ in $\mathbf{v}$ \cite[Ch. 4.6]{leveque2007finite}.
+Once this system is solved, interpolation is used to return to the fine grid,
+which works for low-frequency features with high-frequency features already having been smoothed out.
+Finally, smoothing is performed again to eliminate interpolation artifacts.
+If this process is applied recursively, one outer loop is known as a `V-cycle' \cite[Ch. 4.6]{leveque2007finite, alcouffe2000parallel};
+at the lowest resolution, the system is solved directly. 
+In our case, two developments are applied: Galerkin coarsening and Alcouffe interpolation \cite{alcouffe1981multi}.
+The algorithm proceeds as follows.
 
 The finest grid is smoothed with a few iterations of a Gauss-Seidel smoother. The residual is calculated,
 
@@ -215,10 +219,19 @@ The finest grid is smoothed with a few iterations of a Gauss-Seidel smoother. Th
 \mathbf{r} = \mathbf{s} - \mathbf{L}\mathbf{v}.
 \]
 
-This residual, $\mathbf{r}$, is passed down to a coarser grid using a restriction operator $R$ \hl{cite, explain the operators used}. 
-This will be balanced with a prolongation operator on the way back up.
-These operators are comparable to downsampling and upsampling.
+This residual, $\mathbf{r}$, is passed down to a coarser grid using a restriction operator $R$,
+and the coarse error passed back up to using the prolongation operator $P$. The coarse $A$ is obtained as $RAP$. 
+These operators are comparable to downsampling and upsampling. In Galerkin coarsening, $R=P^T$:
+
+\[
+A_c = P^TAP
+\]
+
 This is applied repeatedly until the coarsest resolution is reached.
+In the simplest case, $P$ could be bilinear interpolation. 
+For the Alcouffe preconditioner \cite{alcouffe1981multi, alcouffe2000parallel},
+the matrix $P$ is chosen with smoothing weights calculated from
+conductances.
 The coarse system is then solved directly to get the coarse error
 
 \[
@@ -264,7 +277,6 @@ Algorithm \ref{alg:gmg_vcycle} shows one cycle. Overall, one cycle performs the 
     
     \State \Return $\mathbf{v}_l$
 \EndFunction
-\label{alg:gmg_vcycle}
 
 \end{algorithmic}
 \end{algorithm}
@@ -273,9 +285,10 @@ Algorithm \ref{alg:gmg_vcycle} shows one cycle. Overall, one cycle performs the 
 \subsection{Example datasets and resistance map calculation}
 
 To demonstrate the functionality of our WASM toolset, a test region corresponding to a 1~$\text{km}^2$ region centered at
-286600E, 79050N (EPSG:27700) was selected. The region includes buildings, roads, and a river. Vector data was obtained from
-the UK Ordnance Survey open data \cite{os_data}. \hl{Expand explainer}
-DSM and DTM LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
+286600E, 79050N (EPSG:27700 easting \& northing coordinate system) was selected.
+The region includes buildings, roads, and a river. Vector data was obtained from
+the UK Ordnance Survey open data \cite{os_data}.
+Digital surface model (DSM) and digital terrain model (DTM) LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
 
 For the test resistance map, we use constant resistance parameters for rasterised vector features: 50 for roads (3 pixel buffer), 500 for buildings, 
 and 0.5 for rivers (4 pixel buffer).
@@ -298,8 +311,9 @@ Two benchmarks were run.
 In the first case, a resistance map was generated at $1000\times1000$ resolution, then downsampled to lower resolutions, and the analysis code was run with 5 repeats each.
 It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/WASM JIT compilation engine warm-up (`warm start').
 
-For comparison with Circuitscape version 5.11.2, a configuration file was created with \texttt{scenario=advanced}, \texttt{write\_as\_tif=True} and run with 4 threads.
-Although this allows Circuitscape to multithread, which our implementation does not exploit, it is conventional to run with multiple threads. \hl{Expand explanation}
+For comparison with Circuitscape version 5.17.1, a configuration file was created with advanced mode, `cg+amg` solver and and run with both 4 threads and single-threaded mode.
+We also performed an assessment with Circuitscape version 5.11.2, which reports preconditioner building solver timing in addition to overall time. Version 5.17.1 does not
+report this information, summarising only `complete job' time, which is less than wall clock time.
 
 
 \subsection{Code}
@@ -336,15 +350,19 @@ the same resistance map input with a zero-volt ground, showing comparable result
 
 \begin{figure}[htb!]
 \centering
-\includegraphics[width=0.8\textwidth]{figures/cs_vs_wasm.png}
-\caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape took 2.48 seconds, versus 3.79 for WASM (Alcouffe). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. }
+\includegraphics[width=1.0\textwidth]{figures/cs_vs_wasm.png}
+\caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape took 2.48 seconds, versus 3.79 for WASM (Alcouffe). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. Circuitscape was tested with both 1 thread and 4 threads. }
 \label{fig:cs_runtime}
 \end{figure}
 
-As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape solvers are quicker than the presented
-WASM browser solvers. The average time for WASM (Alcouffe) was 3.79 seconds, compared to 2.48 seconds for the 
-preconditioner building and solve step in Circuitscape.
-However, the total runtime of Circuitscape including post-solving steps was much slower, at 128.11s.
+As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape 5.11.2 solve step is quicker than the presented
+WASM browser solvers. Circuitscape 5.17.1 does not report these steps individually.
+The average time for WASM (Alcouffe) was 3.79 seconds, compared to 2.48 seconds for the 
+preconditioner building and solve step in Circuitscape 5.11.2.
+However, the total wall-clock runtime of both tested versions of Circuitscape, including post-solving steps was over $8\times$ slower.
+Although we did not undertake extensive profiling of Circuitscape to determine the reasons for this, it is possible that
+the majority of the runtime was taken by post-processing and file writing.
+For the test data, 4 threads did not offer much of a speed-up compared to the single-threaded case.
 In the web browser context which we use, we do not have to write the data to file, and presentation in 
 the browser is near-instantaneous.
 As such, provided there is sufficient memory, these results show our implementation can out-perform
@@ -380,6 +398,9 @@ Limitations of the WASM environment are primarily constraints in memory, CPU, an
 highly optimised libraries such as BLAS \cite{blackford2002updated}. In principle, this is possible for WASM, but it is not straightforward.
 Projects like Pyodide \cite{pyodide2026} demonstrate the work required for compiling existing packages into WASM executables. 
 In addition, for front-end web applications, it is often important that data transfer is minimised to enable responsive pages.
+
+It should be noted that Circuitscape offers more advanced functionality, in terms of pairwise mode and modelling connected regions, which may
+account for extra runtime in post-processing.
 
 Some of the methods applicable in this paper, as image processing codes, could be suitable for GPU acceleration, such as through WebGPU. Dedicated GPU
 cards offer acceleration for highly parallel workloads. While dedicated GPU cards can be expensive and in short supply, consumer hardware often includes

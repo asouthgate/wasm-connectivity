@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Compare Julia Circuitscape timings (juliabench.out) against the best
-solver from benchmark-2026-07-07.csv as a side-by-side bar chart.
+"""Compare Julia Circuitscape timings against the best WASM alcouffe solver.
+Usage: plot_julia_vs_bench.py <juliabench.out> <benchmark.csv> <new_4t.out> <new_1t.out> [out.png]
 """
 import sys
 import csv
@@ -12,12 +12,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, NullFormatter
 
-JULIA_PATH = sys.argv[1]
+JULIA_OLD_PATH = sys.argv[1]
 CSV_PATH = sys.argv[2]
-OUT_PATH = sys.argv[3] if len(sys.argv) > 3 else "julia_vs_bench.png"
+NEW_4T_PATH = sys.argv[3]
+NEW_1T_PATH = sys.argv[4]
+OUT_PATH = sys.argv[5] if len(sys.argv) > 5 else "julia_vs_bench.png"
 
 
-def parse_julia(path):
+def parse_julia_old(path):
     preconds = []
     solves = []
     completes = []
@@ -33,6 +35,24 @@ def parse_julia(path):
         "preconditioner": np.array(preconds),
         "solve": np.array(solves),
         "complete": np.array(completes),
+    }
+
+
+def parse_julia_new(path):
+    complete_jobs = []
+    wall_clocks = []
+    with open(path) as f:
+        text = f.read()
+    for m in re.finditer(r"complete job\s+\d+\s+([\d.]+)s", text):
+        complete_jobs.append(float(m.group(1)))
+    for m in re.finditer(
+        r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\): (\d+):([\d.]+)", text
+    ):
+        minutes, seconds = float(m.group(1)), float(m.group(2))
+        wall_clocks.append(minutes * 60 + seconds)
+    return {
+        "complete_job": np.array(complete_jobs),
+        "wall_clock": np.array(wall_clocks),
     }
 
 
@@ -80,46 +100,82 @@ def interp_500(data):
     return np.array(interp)
 
 
-def main():
+CB_COLORS = [
+    "#d1961f",  # grey
+    "#444444", 
+    "#444444",
+    "#e66101",
+    "#e66101", 
+    "#5e3c99",  
+    "#5e3c99",  
+]
 
-    julia = parse_julia(JULIA_PATH)
+
+def main():
+    julia_old = parse_julia_old(JULIA_OLD_PATH)
+    julia_4t = parse_julia_new(NEW_4T_PATH)
+    julia_1t = parse_julia_new(NEW_1T_PATH)
+
     rows = load_benchmark(CSV_PATH)
     best = find_best_solver(rows)
     bench_data = extract_solver_runs(rows, best)
     alcouffe_500 = interp_500(bench_data)
 
-    precond_solve = julia["preconditioner"] + julia["solve"]
+    precond_solve = julia_old["preconditioner"] + julia_old["solve"]
 
-    print(f"Julia  -- {len(julia['complete'])} runs")
-    print(f"  preconditioner+solve mean = {np.mean(precond_solve):.2f}s ± {np.std(precond_solve):.2f}")
-    print(f"  complete mean = {np.mean(julia['complete']):.2f}s ± {np.std(julia['complete']):.2f}")
+    print(f"Julia 5.11.2 -- {len(julia_old['complete'])} runs")
+    print(f"  precond+solve mean = {np.mean(precond_solve):.2f}s ± {np.std(precond_solve):.2f}")
+    print(f"  complete mean = {np.mean(julia_old['complete']):.2f}s ± {np.std(julia_old['complete']):.2f}")
+    print(f"Julia 5.17.1 (4t) -- {len(julia_4t['complete_job'])} runs")
+    print(f"  complete job mean = {np.mean(julia_4t['complete_job']):.2f}s ± {np.std(julia_4t['complete_job']):.2f}")
+    print(f"  wall clock mean = {np.mean(julia_4t['wall_clock']):.2f}s ± {np.std(julia_4t['wall_clock']):.2f}")
+    print(f"Julia 5.17.1 (1t) -- {len(julia_1t['complete_job'])} runs")
+    print(f"  complete job mean = {np.mean(julia_1t['complete_job']):.2f}s ± {np.std(julia_1t['complete_job']):.2f}")
+    print(f"  wall clock mean = {np.mean(julia_1t['wall_clock']):.2f}s ± {np.std(julia_1t['wall_clock']):.2f}")
     print(f"Best solver = {best}")
     print(f"  alcouffe 500x500 (interp) mean = {np.mean(alcouffe_500):.2f}s ± {np.std(alcouffe_500):.2f}")
 
-    # Build bar chart
     labels = [
-        "Circuitscape\n(precond + solve)",
-        "Circuitscape\n(complete)",
         "WASM\n(Alcouffe)",
+        "Circuitscape 5.11.2\nprecond + solve",
+        "Circuitscape 5.11.2\ncomplete job",
+        "Circuitscape 5.17.1 (4t)\ncomplete job",
+        "Circuitscape 5.17.1 (4t)\nwall clock",
+        "Circuitscape 5.17.1 (1t)\ncomplete job",
+        "Circuitscape 5.17.1 (1t)\nwall clock",
     ]
-    means = [np.mean(precond_solve),
-             np.mean(julia["complete"]),
-             np.mean(alcouffe_500)]
-    stds  = [np.std(precond_solve),
-             np.std(julia["complete"]),
-             np.std(alcouffe_500)]
+    means = [
+        np.mean(alcouffe_500),
+        np.mean(precond_solve),
+        np.mean(julia_old["complete"]),
+        np.mean(julia_4t["complete_job"]),
+        np.mean(julia_4t["wall_clock"]),
+        np.mean(julia_1t["complete_job"]),
+        np.mean(julia_1t["wall_clock"]),
+    ]
+    stds = [
+        np.std(alcouffe_500),
+        np.std(precond_solve),
+        np.std(julia_old["complete"]),
+        np.std(julia_4t["complete_job"]),
+        np.std(julia_4t["wall_clock"]),
+        np.std(julia_1t["complete_job"]),
+        np.std(julia_1t["wall_clock"]),
+    ]
 
-    hatches = ["//", "\\\\", "xx"]
+    colors = [CB_COLORS[i % len(CB_COLORS)] for i in range(len(labels))]
     x = np.arange(len(labels))
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    bars = ax.bar(x, means, yerr=stds, capsize=6, color="white", edgecolor="black")
-    for bar, hatch in zip(bars, hatches):
-        bar.set_hatch(hatch)
+    fig, ax = plt.subplots(figsize=(12, 7))
+    bars = ax.bar(x, means, yerr=stds, capsize=6, facecolor='white', edgecolor="black", linewidth=2.0, zorder=3)
+    for bar, col in zip(bars, CB_COLORS): 
+#        bar.set_hatch("xxx")
+        bar.set_edgecolor(col)   # Sets BOTH hatch line color and border color
     ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Time (s)")
+    ax.set_xticklabels(labels, fontsize=13, rotation=15, ha="right")
+    ax.set_ylabel("Time (s)", fontsize=14)
     ax.set_yscale("log")
+    ax.tick_params(axis='x', labelsize=13, labelrotation=45)
     ax.yaxis.set_major_locator(LogLocator(base=10, subs='all', numticks=10))
     ax.yaxis.set_minor_formatter(NullFormatter())
     ax.grid(axis="y", alpha=0.3, which="both")
