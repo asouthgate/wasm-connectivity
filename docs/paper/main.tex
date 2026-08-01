@@ -27,7 +27,7 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our results show that as expected, for $1000\times1000$ raster networks, Circuitscape's combined preconditioner build and solve are 1--2$\times$ faster, but accounting for total program runtime, our web implementation is $25\times$ faster, not accounting for the backend round-trip. In a small raster web application context, our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient edge-computing implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
 \end{abstract}
 
 \section{Introduction}
@@ -115,15 +115,7 @@ Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch.
 
 \subsection{Modes}
 
-\hl{move earlier, make clearer}
-
-The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). If a raster image of source nodes is provided, then the resulting output is connectivity given inputs from the combined input sources, solved together, as in a conventional physical system like electrical circuits.
-
-Instead of the combined mode, where current will flow according to the global pressure gradient, some users may choose to intentionally superimpose $n \choose 2$ pairwise simulations from pairs of $n$ nodes, or $n \times m$ simulations between $n$ sources and $m$ sinks. Each approach has different assumptions and interpretation. 
-
-Each mode has the same underlying mathematical system and solver; in the case of a single pair, only two rows of the matrix $L$ are source/sink; in the case of a raster of currents, many rows are set to sources. Superposition of the different cases can be undertaken in a loop over the chosen sets of pairs.
-
-\hl{citations}
+The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). Circuitscape offers an `advanced' mode, where a raster specifying sources and grounds can be provided, and a `pairwise' mode \cite{hall2021circuitscape}, for which users can specify $n \choose 2$ pairwise solves from pairs of $n$ nodes, or $n \times m$ simulations between $n$ sources and $m$ sinks. Each approach has different assumptions and interpretation. We implement an equivalent to the `advanced' mode only, with $0V$ grounds and fixed source injection. The former are specified as Dirichlet boundary conditions, and the latter as Neumann boundary conditions \cite{leveque2007finite}.
 
 \subsection{Solver}
 
@@ -406,6 +398,9 @@ Limitations of the WASM environment are primarily constraints in memory, CPU, an
 highly optimised libraries such as BLAS \cite{blackford2002updated}. In principle, this is possible for WASM, but it is not straightforward.
 Projects like Pyodide \cite{pyodide2026} demonstrate the work required for compiling existing packages into WASM executables. 
 In addition, for front-end web applications, it is often important that data transfer is minimised to enable responsive pages.
+
+It should be noted that Circuitscape offers more advanced functionality, in terms of pairwise mode and modelling connected regions, which may
+account for extra runtime in post-processing.
 
 Some of the methods applicable in this paper, as image processing codes, could be suitable for GPU acceleration, such as through WebGPU. Dedicated GPU
 cards offer acceleration for highly parallel workloads. While dedicated GPU cards can be expensive and in short supply, consumer hardware often includes
