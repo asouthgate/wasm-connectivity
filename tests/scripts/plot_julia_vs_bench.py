@@ -167,7 +167,10 @@ def main():
     x = np.arange(len(labels))
 
     fig, ax = plt.subplots(figsize=(12, 7))
-    ax.bar(x, means, yerr=stds, capsize=6, color=colors, edgecolor="black", linewidth=0.5)
+    bars = ax.bar(x, means, yerr=stds, capsize=6, facecolor='white', edgecolor="black", linewidth=2.0, zorder=3)
+    for bar, col in zip(bars, CB_COLORS): 
+#        bar.set_hatch("xxx")
+        bar.set_edgecolor(col)   # Sets BOTH hatch line color and border color
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=13, rotation=15, ha="right")
     ax.set_ylabel("Time (s)", fontsize=14)
