@@ -182,7 +182,7 @@ In the case of CG, $\alpha$ and $\beta$ are \cite[Ch. 4.3]{leveque2007finite}:
 \subsubsection{Preconditioning} 
 
 As described in \cite[Ch. 4.3.4]{leveque2007finite}, convergence rate depends on condition number. For nonsingular symmetric matrices,
-the $\kappa_2$ condition number is $\kappa_2(L) = ||L||_2||L^{-1}||_2 = \max_j |\lambda_j| / \min_j |\lambda_j|$, for eigenvalues $\lambda_j$.
+the $\kappa_2$ condition number is $\kappa_2(\mathbf{L}) = ||\mathbf{L}||_2||\mathbf{L}^{-1}||_2 = \max_j |\lambda_j| / \min_j |\lambda_j|$, for eigenvalues $\lambda_j$.
 For ill-conditioned matrices, where $\kappa_2 \gg 1$, steepest descent is slow.
 To reduce the condition number and speed up convergence, we solve a transformed system
 
