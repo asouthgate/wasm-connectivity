@@ -204,8 +204,8 @@ We implement these methods directly to reduce WASM dependencies and binary footp
 
 Multigrid preconditioners are more complex than the Jacobi preconditioner. After smoothing high-frequency error features
 using a few Jacobi iterations, the remaining low-frequency components are then smoothed using a coarse grid.
-A system $\tilde{L}\tilde{e} = - \tilde{\mathbf{r}}$ is setup, with $\tilde{L}$ and $\tilde{r}$ coarse 
-approximations of $L$ and $r$, and $\tilde{e}$ an approximation for the error $e = v-v^* = v - A^{-1}f$ in $\mathbf{v}$ \cite[Ch. 4.6]{leveque2007finite}.
+A system $\mathbf{L}_{coarse}\mathbf{e}_{coarse} = - \mathbf{r}_{coarse}$ is setup, with $\mathbf{L}_{coarse}$ and $\mathbf{r}_{coarse}$ coarse 
+approximations of $L$ and $r$, and $\mathbf{e}_{coarse}$ an approximation for the error $\mathbf{e} = \mathbf{v - A^{-1}s}$ in $\mathbf{v}$ \cite[Ch. 4.6]{leveque2007finite}.
 Once this system is solved, interpolation is used to return to the fine grid,
 which works for low-frequency features with high-frequency features already having been smoothed out.
 Finally, smoothing is performed again to eliminate interpolation artifacts.
@@ -225,7 +225,7 @@ and the coarse error passed back up to using the prolongation operator $\mathbf{
 These operators are comparable to downsampling and upsampling. In Galerkin coarsening, $\mathbf{R}=\mathbf{P}^T$:
 
 \[
-\mathbf{L}_c = \mathbf{P^TLP}
+\mathbf{L}_{coarse} = \mathbf{P^TLP}
 \]
 
 This is applied repeatedly until the coarsest resolution is reached.
