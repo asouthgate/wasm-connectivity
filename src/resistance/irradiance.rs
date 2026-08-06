@@ -44,11 +44,6 @@ fn raycast(
 
     for ri in mini..maxi {
         let pydist_base = ri_lamp as f64 - ri as f64;
-        let pxdist2_base = {
-            let d = ri_lamp as f64 - ri as f64;
-            d * d
-        };
-        let _ = pxdist2_base;
 
         for cj in minj..maxj {
             let pxdist_base = cj_lamp as f64 - cj as f64;

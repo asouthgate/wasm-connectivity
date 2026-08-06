@@ -1,4 +1,4 @@
-use super::distance::euclidean_distance_transform;
+use super::distance::distance_transform_with_buffer;
 
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
@@ -72,7 +72,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !mh_has_features {
         vec![f64::NAN; total]
     } else {
-        euclidean_distance_transform(&manhedge, nrows, ncols)
+        distance_transform_with_buffer(&manhedge, nrows, ncols, 10.0)
     };
 
     let umh_has_na = unmanhedge.iter().any(|&v| v == 0.0 || v.is_nan());
@@ -83,7 +83,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !umh_has_features {
         vec![f64::NAN; total]
     } else {
-        euclidean_distance_transform(&unmanhedge, nrows, ncols)
+        distance_transform_with_buffer(&unmanhedge, nrows, ncols, 10.0)
     };
 
     let t_has_na = tree.iter().any(|&v| v == 0.0 || v.is_nan());
@@ -94,7 +94,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !t_has_features {
         vec![f64::NAN; total]
     } else {
-        euclidean_distance_transform(&tree, nrows, ncols)
+        distance_transform_with_buffer(&tree, nrows, ncols, 10.0)
     };
 
     let distance_rasters = vec![

@@ -66,6 +66,62 @@ fn point_to_line_distance(pt: &Point<f64>, ls: &LineString<f64>) -> f64 {
     min_dist
 }
 
+fn rasterize_lines_bresenham(
+    raster: &mut [f64],
+    mask: &mut [f64],
+    nrows: usize,
+    ncols: usize,
+    lines: &[&LineString<f64>],
+    value: f64,
+    transform: &GeoTransform,
+) {
+    for ls in lines {
+        for segment in ls.lines() {
+            let (col_s, row_s) = transform.geo_to_pixel(segment.start.x, segment.start.y);
+            let (col_e, row_e) = transform.geo_to_pixel(segment.end.x, segment.end.y);
+
+            let mut c0 = col_s;
+            let mut r0 = row_s;
+            let c1 = col_e;
+            let r1 = row_e;
+
+            let dc = (c1 - c0).abs();
+            let dr = -(r1 - r0).abs();
+            let sc: isize = if c0 < c1 { 1 } else { -1 };
+            let sr: isize = if r0 < r1 { 1 } else { -1 };
+            let mut err = dc + dr;
+
+            loop {
+                if c0 >= 0 && c0 < ncols as isize && r0 >= 0 && r0 < nrows as isize {
+                    let idx = r0 as usize * ncols + c0 as usize;
+                    if value > raster[idx] {
+                        raster[idx] = value;
+                    }
+                    mask[idx] = 1.0;
+                }
+                if c0 == c1 && r0 == r1 {
+                    break;
+                }
+                let e2 = 2 * err;
+                if e2 >= dr {
+                    if c0 == c1 {
+                        break;
+                    }
+                    err += dr;
+                    c0 += sc;
+                }
+                if e2 <= dc {
+                    if r0 == r1 {
+                        break;
+                    }
+                    err += dc;
+                    r0 += sr;
+                }
+            }
+        }
+    }
+}
+
 /// Rasterizes a polygon into a raster grid, updating the raster values and mask.
 //
 // # Arguments
@@ -131,7 +187,11 @@ fn rasterize_lines(
     width: f64,
     transform: &GeoTransform,
 ) {
-    if width <= 0.0 || lines.is_empty() {
+    if lines.is_empty() {
+        return;
+    }
+    if width <= 0.0 {
+        rasterize_lines_bresenham(raster, mask, nrows, ncols, lines, value, transform);
         return;
     }
 
@@ -237,24 +297,29 @@ pub fn rasterize_features(
             Err(_) => continue,
         };
 
+        let feature_resistance = props
+            .get("resistanceValue")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(params.resistance);
+
         let mask = layer_masks.entry(layer_name.to_string()).or_insert_with(|| vec![0.0f64; n]);
 
         match geo_geom {
             Geometry::Polygon(poly) => {
-                rasterize_polygon(&mut res_map, mask, nrows, ncols, &poly, params.resistance, transform);
+                rasterize_polygon(&mut res_map, mask, nrows, ncols, &poly, feature_resistance, transform);
             }
             Geometry::MultiPolygon(mpoly) => {
                 for poly in &mpoly {
-                    rasterize_polygon(&mut res_map, mask, nrows, ncols, poly, params.resistance, transform);
+                    rasterize_polygon(&mut res_map, mask, nrows, ncols, poly, feature_resistance, transform);
                 }
             }
             Geometry::LineString(ls) => {
                 let lines = [&ls];
-                rasterize_lines(&mut res_map, mask, nrows, ncols, &lines, params.resistance, params.width, transform);
+                rasterize_lines(&mut res_map, mask, nrows, ncols, &lines, feature_resistance, params.width, transform);
             }
             Geometry::MultiLineString(mls) => {
                 let lines: Vec<&LineString<f64>> = mls.0.iter().collect();
-                rasterize_lines(&mut res_map, mask, nrows, ncols, &lines, params.resistance, params.width, transform);
+                rasterize_lines(&mut res_map, mask, nrows, ncols, &lines, feature_resistance, params.width, transform);
             }
             _ => {}
         }
