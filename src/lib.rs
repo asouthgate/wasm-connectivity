@@ -10,6 +10,7 @@ pub mod geospatial;
 pub mod resample;
 pub mod multigrid;
 pub mod cholesky;
+pub mod resistance;
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -215,6 +216,95 @@ pub fn rasterize_geojson(
         &base_raster, nrows, ncols, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
     );
     let output = RasterizeOutput { resistance_map: resistance_data, layer_masks, nrows, ncols, warnings };
+    json_response(&output)
+}
+
+#[wasm_bindgen]
+pub fn run_resistance_pipeline_wasm(
+    road_binary: Vec<f64>,
+    river_binary: Vec<f64>,
+    building_mask: Vec<f64>,
+    lcm: Vec<f64>,
+    dtm: Vec<f64>,
+    dsm: Vec<f64>,
+    generic_resistance: Vec<f64>,
+    lamps: Vec<f64>,
+    params_json: String,
+) -> String {
+    let params: resistance::pipeline::ResistanceParams = serde_json::from_str(&params_json).unwrap_or_else(|_| {
+        resistance::pipeline::ResistanceParams {
+            road_buffer: 200.0, road_resmax: 10.0, road_xmax: 5.0,
+            river_buffer: 10.0, river_resmax: 2000.0, river_xmax: 4.0,
+            landscape_rankmax: 8.0, landscape_resmax: 100.0, landscape_xmax: 5.0,
+            linear_buffer: 10.0, linear_rankmax: 4.0, linear_resmax: 22000.0, linear_xmax: 3.0,
+            lamp_resmax: 1e8, lamp_xmax: 1.0, lamp_ext: 100.0,
+            pixw: 1.0, nrows: 0, ncols: 0,
+        }
+    });
+    let output = resistance::pipeline::run_resistance_pipeline(
+        &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
+        &generic_resistance, &lamps, &params,
+    );
+    json_response(&output)
+}
+
+#[derive(serde::Serialize)]
+struct LampCombineOutput {
+    lamp_res: Vec<f64>,
+    total_res: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+}
+
+#[wasm_bindgen]
+pub fn compute_lamp_and_total(
+    lamps: Vec<f64>,
+    soft_surf: Vec<f64>,
+    hard_surf: Vec<f64>,
+    dtm: Vec<f64>,
+    road_res: Vec<f64>,
+    river_res: Vec<f64>,
+    landscape_res: Vec<f64>,
+    linear_res: Vec<f64>,
+    generic_res: Vec<f64>,
+    m: usize,
+    n: usize,
+    pixw: f64,
+    lamp_resmax: f64,
+    lamp_xmax: f64,
+    lamp_ext: f64,
+) -> String {
+    let total = m * n;
+
+    let mut lamp_res = if lamps.len() >= 3 {
+        let irradiance = resistance::irradiance::irradiance_run(
+            &lamps, &soft_surf, &hard_surf, &dtm, m, n, pixw, lamp_ext, 0.0, 0.5,
+        );
+        let mut lr = irradiance;
+        resistance::irradiance::irradiance_to_resistance(&mut lr, m, n, lamp_resmax, lamp_xmax);
+        lr
+    } else {
+        vec![0.0f64; total]
+    };
+
+    let dtm_na: Vec<bool> = dtm.iter().map(|&v| !v.is_finite()).collect();
+    for i in 0..total {
+        if dtm_na[i] {
+            lamp_res[i] = f64::NAN;
+        }
+    }
+
+    let total_res = resistance::irradiance::irradiance_combine(
+        &lamp_res, &road_res, &river_res, &landscape_res, &linear_res, &generic_res, m, n,
+    );
+
+    let output = LampCombineOutput {
+        lamp_res,
+        total_res,
+        nrows: m,
+        ncols: n,
+    };
+
     json_response(&output)
 }
 
