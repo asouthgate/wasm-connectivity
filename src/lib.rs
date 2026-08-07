@@ -27,6 +27,39 @@ fn json_response<T: Serialize>(output: &T) -> String {
     })
 }
 
+const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn encode_base64(data: &[u8]) -> String {
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(BASE64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(BASE64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            BASE64_CHARS[((triple >> 6) & 0x3F) as usize] as char
+        } else {
+            b'=' as char
+        });
+        out.push(if chunk.len() > 2 {
+            BASE64_CHARS[(triple & 0x3F) as usize] as char
+        } else {
+            b'=' as char
+        });
+    }
+    out
+}
+
+fn f64_to_base64(data: &[f64]) -> String {
+    let mut bytes = vec![0u8; data.len() * 4];
+    for (i, &v) in data.iter().enumerate() {
+        bytes[i * 4..(i + 1) * 4].copy_from_slice(&(v as f32).to_le_bytes());
+    }
+    encode_base64(&bytes)
+}
+
 pub fn build_circuit_model(resistance_data: &[f64], nrows: usize, ncols: usize, nodata: f64) -> (Vec<i32>, usize, graph::EdgeTriplets, sprs::CsMat<f64>, Vec<Vec<usize>>) {
     let conductance = grid::Grid::to_conductance(resistance_data, nrows, ncols, nodata);
     let (cell_to_node, num_nodes) = grid::build_cell_to_node(&conductance);
@@ -191,15 +224,6 @@ pub fn downsample_raster(
     json_response(&output)
 }
 
-#[derive(serde::Serialize)]
-struct RasterizeOutput {
-    resistance_map: Vec<f64>,
-    layer_masks: Vec<geospatial::LayerMask>,
-    nrows: usize,
-    ncols: usize,
-    warnings: Vec<String>,
-}
-
 #[wasm_bindgen]
 pub fn rasterize_geojson(
     base_raster: Vec<f64>,
@@ -215,8 +239,16 @@ pub fn rasterize_geojson(
     let (resistance_data, layer_masks, warnings) = geospatial::prepare_geospatial_layers(
         &base_raster, nrows, ncols, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
     );
-    let output = RasterizeOutput { resistance_map: resistance_data, layer_masks, nrows, ncols, warnings };
-    json_response(&output)
+    let mut map = serde_json::Map::new();
+    map.insert("resistance_map".to_string(), serde_json::Value::String(f64_to_base64(&resistance_data)));
+    let masks: Vec<serde_json::Value> = layer_masks.iter().map(|m| {
+        serde_json::json!({ "name": m.name, "data": f64_to_base64(&m.data) })
+    }).collect();
+    map.insert("layer_masks".to_string(), serde_json::Value::Array(masks));
+    map.insert("nrows".to_string(), serde_json::json!(nrows));
+    map.insert("ncols".to_string(), serde_json::json!(ncols));
+    map.insert("warnings".to_string(), serde_json::json!(warnings));
+    serde_json::to_string(&map).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
 }
 
 #[wasm_bindgen]
@@ -246,7 +278,20 @@ pub fn run_resistance_pipeline_browser(
 
         &generic_resistance, &lamps, &params, Some(&landscape_conductance),
     );
-    json_response(&output)
+
+    let mut map = serde_json::Map::new();
+    map.insert("total_res".to_string(),    serde_json::Value::String(f64_to_base64(&output.total_res)));
+    map.insert("lamp_res".to_string(),     serde_json::Value::String(f64_to_base64(&output.lamp_res)));
+    map.insert("road_res".to_string(),     serde_json::Value::String(f64_to_base64(&output.road_res)));
+    map.insert("river_res".to_string(),    serde_json::Value::String(f64_to_base64(&output.river_res)));
+    map.insert("landscape_res".to_string(),serde_json::Value::String(f64_to_base64(&output.landscape_res)));
+    map.insert("linear_res".to_string(),   serde_json::Value::String(f64_to_base64(&output.linear_res)));
+    map.insert("generic_res".to_string(),  serde_json::Value::String(f64_to_base64(&output.generic_res)));
+    map.insert("soft_surf".to_string(),    serde_json::Value::String(f64_to_base64(&output.soft_surf)));
+    map.insert("hard_surf".to_string(),    serde_json::Value::String(f64_to_base64(&output.hard_surf)));
+    map.insert("nrows".to_string(),        serde_json::json!(output.nrows));
+    map.insert("ncols".to_string(),        serde_json::json!(output.ncols));
+    serde_json::to_string(&map).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
 }
 
 #[allow(dead_code)]
