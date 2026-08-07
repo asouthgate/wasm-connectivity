@@ -10,6 +10,7 @@ pub mod geospatial;
 pub mod resample;
 pub mod multigrid;
 pub mod cholesky;
+pub mod resistance;
 
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -215,6 +216,36 @@ pub fn rasterize_geojson(
         &base_raster, nrows, ncols, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
     );
     let output = RasterizeOutput { resistance_map: resistance_data, layer_masks, nrows, ncols, warnings };
+    json_response(&output)
+}
+
+#[wasm_bindgen]
+pub fn run_resistance_pipeline_browser(
+    road_binary: Vec<f64>,
+    river_binary: Vec<f64>,
+    building_mask: Vec<f64>,
+    dtm: Vec<f64>,
+    dsm: Vec<f64>,
+    generic_resistance: Vec<f64>,
+    lamps: Vec<f64>,
+    landscape_conductance: Vec<f64>,
+    params_json: String,
+) -> String {
+    let params: resistance::pipeline::ResistanceParams = match serde_json::from_str(&params_json) {
+        Ok(p) => p,
+        Err(e) => {
+            return serde_json::to_string(&json!({ "error": format!("Invalid params JSON: {}", e) }))
+                .unwrap_or_else(|_| r#"{"error":"Invalid params JSON"}"#.to_string());
+        }
+    };
+    // Zero-filled LCM used only for the NaN-masking pass in run_resistance_pipeline;
+    // landscape conductance is supplied via the override so LCM conductance is not needed.
+    let lcm = vec![0.0f64; params.nrows * params.ncols];
+    let output = resistance::pipeline::run_resistance_pipeline(
+        &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
+
+        &generic_resistance, &lamps, &params, Some(&landscape_conductance),
+    );
     json_response(&output)
 }
 

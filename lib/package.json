@@ -1,27 +1,15 @@
 {
-  "name": "@wasm-connect/lib",
+  "name": "wasm-connect",
   "type": "module",
   "version": "0.1.0",
+  "files": [
+    "wasm_connect_bg.wasm",
+    "wasm_connect.js",
+    "wasm_connect.d.ts"
+  ],
   "main": "index.js",
   "types": "wasm_connect.d.ts",
-  "exports": {
-    ".": "./index.js",
-    "./wasm_connect.js": "./wasm_connect.js",
-    "./wasm_connect_bg.wasm": "./wasm_connect_bg.wasm"
-  },
-  "files": [
-    "index.js",
-    "wasm.js",
-    "worker.js",
-    "parseAsc.js",
-    "wasm_connect.js",
-    "wasm_connect_bg.wasm",
-    "wasm_connect.d.ts",
-    "wasm_connect_bg.wasm.d.ts"
-  ],
   "sideEffects": [
-    "./wasm.js",
-    "./worker.js",
     "./snippets/*"
   ]
 }
