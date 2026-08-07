@@ -1,6 +1,4 @@
 const LOG10: f64 = 2.302585092994046;
-const SQUASH_MIN: f64 = 1.0;
-const SQUASH_MAX: f64 = 10000.0;
 
 #[derive(Debug, Clone, Copy)]
 struct Lamp {
@@ -46,10 +44,12 @@ fn raycast(
     cutoff: f64,
     sensor_ht: f64,
 ) {
+    // ignore a lamp out of bounds
     if ri_lamp >= m || cj_lamp >= n {
         return;
     }
 
+    // compute the pixel cutoff distance and bounds
     let px_cutoff = (cutoff / pixw).ceil() as isize;
     let minj = if cj_lamp as isize - px_cutoff < 0 {
         0
@@ -64,28 +64,36 @@ fn raycast(
     } as usize;
     let maxi = ((ri_lamp as isize + px_cutoff) as usize).min(m);
 
+    // compute the lamp elevation above the terrain
     let lamp_elev = terr[ri_lamp * n + cj_lamp] + z;
 
     for ri in mini..maxi {
+
         let pydist_base = ri_lamp as f64 - ri as f64;
 
         for cj in minj..maxj {
+            // compute euclidean distance in xy plane
             let pxdist_base = cj_lamp as f64 - cj as f64;
             let pxdist2 = pxdist_base * pxdist_base;
             let pxydist = (pxdist2 + pydist_base * pydist_base).sqrt();
             let pdist = (pxydist + 0.5).floor() as isize;
-
+            // compute z distance from lamp to terrain at this pixel
             let zdist = lamp_elev - (terr[ri * n + cj] + sensor_ht);
             let xydist = pxydist * pixw;
             let xyzdist2 = xydist * xydist + zdist * zdist;
 
+            // skip if the pixel is out of range or below the lamp base
+            // NOTE: in principle, we could compute the irradiance for pixels below the lamp base,
+            // this could apply in some scenarios
             if xydist >= cutoff || zdist <= 0.0 || pdist <= 0 {
                 continue;
             }
 
+            // initialize shadow and shading values
             let mut shadow = 1.0f64;
             let mut shading = 0.0f64;
 
+            // now raycast from the lamp to the pixel, checking for hard and soft shadows
             let step_i = pydist_base / pdist as f64;
             let step_j = pxdist_base / pdist as f64;
             let step_h = zdist / pdist as f64;
@@ -110,7 +118,8 @@ fn raycast(
                 let hard_val = hard[dii * n + djj];
                 let terr_val = terr[dii * n + djj];
                 let soft_val = soft[dii * n + djj];
-
+                
+                // if the hard shadow is above the ray, then the pixel is in shadow and we can break early
                 if hard_val.is_finite() && terr_val.is_finite() && hard_val + terr_val >= hiijj {
                     shadow = 0.0;
                     break;
@@ -121,6 +130,8 @@ fn raycast(
             }
 
             let invd = 1.0 / xyzdist2;
+            // compute the irradiance at this pixel, taking into account the shadow and shading values
+            // this is exponential decay based on the distance and the absorption coefficient
             let occ = 1.0 / (absorb * shading * LOG10).exp();
             irr[ri * n + cj] += occ * shadow * invd;
         }
@@ -227,52 +238,6 @@ pub fn irradiance_to_resistance(
 // * river: a 2D array of f64 values representing the irradiance from rivers
 // * landscape: a 2D array of f64 values representing the irradiance from landscapes
 // * linear: a 2D array of f64 values representing the irradiance from linear features
-// * generic: a 2D array of f64 values representing the irradiance from generic features
-// * m: number of rows in the terrain
-// * n: number of columns in the terrain
-// # Returns
-// A 2D array of f64 values, where each value is the combined and squashed irradiance from all sources,
-// scaled to the range [SQUASH_MIN, SQUASH_MAX].
-pub fn combine_and_squash(
-    lamp: &[f64],
-    road: &[f64],
-    river: &[f64],
-    landscape: &[f64],
-    linear: &[f64],
-    generic: &[f64],
-    m: usize,
-    n: usize,
-) -> Vec<f64> {
-    let sz = m * n;
-    let mut total = vec![0.0f64; sz];
-
-    let mut tmin = f64::INFINITY;
-    let mut tmax = f64::NEG_INFINITY;
-
-    for i in 0..sz {
-        let v = lamp[i] + road[i] + river[i] + landscape[i] + linear[i] + generic[i] + 1.0;
-        total[i] = v;
-        if v < tmin {
-            tmin = v;
-        }
-        if v > tmax {
-            tmax = v;
-        }
-    }
-
-    let range = tmax - tmin;
-    if range <= 0.0 {
-        return total;
-    }
-
-    let squashed_range = SQUASH_MAX - SQUASH_MIN;
-    for val in total.iter_mut() {
-        *val = ((*val - tmin) * squashed_range) / range + SQUASH_MIN;
-    }
-
-    total
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,21 +273,6 @@ mod tests {
         let max_idx = result.iter().position(|&v| (v - max_irr).abs() < 1e-12).unwrap_or(0);
         assert!((raster[max_idx] - 100.0).abs() < 0.001, "cell with max irradiance should get resmax");
         assert!(raster.iter().all(|&v| v >= 0.0));
-    }
-
-    #[test]
-    fn test_irradiance_combine() {
-        let m = 2;
-        let n = 2;
-        let sz = m * n;
-        let a = vec![10.0, 20.0, 30.0, 40.0];
-        let z = vec![0.0f64; sz];
-        let result = combine_and_squash(&a, &z, &z, &z, &z, &z, m, n);
-        assert!(
-            result[0] >= 1.0 && result[0] <= 10000.0,
-            "squashed value should be in [1,10000]"
-        );
-        assert!((result[3] - 10000.0).abs() < 0.001);
     }
 
     #[test]

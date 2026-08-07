@@ -1,4 +1,4 @@
-use super::irradiance::{combine_and_squash, irradiance_run, irradiance_to_resistance};
+use super::irradiance::{irradiance_run, irradiance_to_resistance};
 use super::landscape::{get_landscape_resistance_from_conductance, get_landscape_resistance_lcm};
 use super::linear::get_linear_resistance;
 use super::road::cal_road_resistance;
@@ -45,6 +45,49 @@ pub struct ResistanceOutput {
     pub tree: Vec<f64>,
     pub nrows: usize,
     pub ncols: usize,
+}
+
+const SQUASH_MIN: f64 = 1.0;
+const SQUASH_MAX: f64 = 10000.0;
+
+pub fn combine_and_squash(
+    lamp: &[f64],
+    road: &[f64],
+    river: &[f64],
+    landscape: &[f64],
+    linear: &[f64],
+    generic: &[f64],
+    m: usize,
+    n: usize,
+) -> Vec<f64> {
+    let sz = m * n;
+    let mut total = vec![0.0f64; sz];
+
+    let mut tmin = f64::INFINITY;
+    let mut tmax = f64::NEG_INFINITY;
+
+    for i in 0..sz {
+        let v = lamp[i] + road[i] + river[i] + landscape[i] + linear[i] + generic[i] + 1.0;
+        total[i] = v;
+        if v < tmin {
+            tmin = v;
+        }
+        if v > tmax {
+            tmax = v;
+        }
+    }
+
+    let range = tmax - tmin;
+    if range <= 0.0 {
+        return total;
+    }
+
+    let squashed_range = SQUASH_MAX - SQUASH_MIN;
+    for val in total.iter_mut() {
+        *val = ((*val - tmin) * squashed_range) / range + SQUASH_MIN;
+    }
+
+    total
 }
 
 pub fn run_resistance_pipeline(
@@ -252,5 +295,20 @@ mod tests {
         );
 
         assert!(output.lamp_res.iter().any(|&v| v > 0.0), "lamp should produce non-zero resistance");
+    }
+
+    #[test]
+    fn test_combine_and_squash() {
+        let m = 2;
+        let n = 2;
+        let sz = m * n;
+        let a = vec![10.0, 20.0, 30.0, 40.0];
+        let z = vec![0.0f64; sz];
+        let result = combine_and_squash(&a, &z, &z, &z, &z, &z, m, n);
+        assert!(
+            result[0] >= 1.0 && result[0] <= 10000.0,
+            "squashed value should be in [1,10000]"
+        );
+        assert!((result[3] - 10000.0).abs() < 0.001);
     }
 }
