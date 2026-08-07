@@ -1,5 +1,16 @@
 use super::distance::euclidean_distance_transform;
 
+// Cal river resistance from a binary river raster,
+// a buffer distance, and resistance parameters
+// # Arguments
+// * river_binary: a 2D array of f64 values where non-zero values indicate the presence of a river
+// * nrows: the number of rows in the river raster
+// * ncols: the number of columns in the river raster
+// * buffer: the buffer distance to apply to the river distance values
+// * resmax: the maximum resistance value
+// * xmax: the exponent for the resistance calculation
+// # Returns
+// A 2D array of f64 values representing the river resistance for each pixel
 pub fn cal_river_resistance(
     river_binary: &[f64],
     nrows: usize,

@@ -50,6 +50,18 @@ pub struct ResistanceOutput {
 const SQUASH_MIN: f64 = 1.0;
 const SQUASH_MAX: f64 = 10000.0;
 
+// Combine the resistance rasters and squash the values to a specified range
+// # Arguments
+// * lamp: a 2D array of f64 values representing the lamp resistance
+// * road: a 2D array of f64 values representing the road resistance
+// * river: a 2D array of f64 values representing the river resistance
+// * landscape: a 2D array of f64 values representing the landscape resistance
+// * linear: a 2D array of f64 values representing the linear resistance
+// * generic: a 2D array of f64 values representing the generic resistance
+// * m: the number of rows in the rasters
+// * n: the number of columns in the rasters
+// # Returns
+// A 2D array of f64 values representing the combined and squashed resistance for each pixel
 pub fn combine_and_squash(
     lamp: &[f64],
     road: &[f64],
@@ -90,6 +102,29 @@ pub fn combine_and_squash(
     total
 }
 
+// Run the geospatial resistance pipeline used as input into Circuitscape. 
+// This pipeline was designed for Greater Horseshoe Bats (Rhinolophus ferrumequinum) in the UK,
+// but can be adapted for other species and regions.
+//
+// See Finch, D., Corbacho, D.P., Schofield, H., Davison,
+// S., Wright, P.G., Broughton, R.K. and Mathews, F., 2020.
+// Modelling the functional connectivity of landscapes for
+// greater horseshoe bats Rhinolophus ferrumequinum at a local scale.
+// Landscape Ecology, 35(3), pp.577-589.
+// 
+// # Arguments
+// * road_binary: a 2D array of f64 values where non-zero values indicate the presence of a road
+// * river_binary: a 2D array of f64 values where non-zero values indicate the presence of a river
+// * building_mask: a 2D array of f64 values where non-zero values indicate the presence of a building
+// * lcm: a 2D array of f64 values representing the land cover map
+// * dtm: a 2D array of f64 values representing the digital terrain model
+// * dsm: a 2D array of f64 values representing the digital surface model
+// * generic_resistance: a 2D array of f64 values representing the generic resistance
+// * lamps: a 2D array of f64 values representing the lamp locations and properties
+// * params: a ResistanceParams struct containing the parameters for the resistance calculations
+// * landscape_conductance_override: an optional 2D array of f64 values representing the landscape conductance to override the default calculation
+// # Returns
+// A ResistanceOutput struct containing the resistance rasters and other outputs from the pipeline
 pub fn run_resistance_pipeline(
     road_binary: &[f64],
     river_binary: &[f64],

@@ -1,3 +1,23 @@
+// Compute the linear resistance for each pixel based on the distance rasters and ranking values
+//
+// Linear resistance is computed as a function of the distance from features,
+// with a buffer applied to the distance values.
+// The resistance is also influenced by the ranking of the features,
+// with higher ranked features contributing more to the resistance.
+// The biological meaning of this resistance is that linear features
+// such as roads, rivers, or other barriers can impede movement or dispersal
+// of organisms across the landscape, and the resistance value quantifies
+// the degree of impedance based on distance and feature ranking.
+//
+// # Arguments
+// * distance_rasters: a vector of tuples
+// * ncols: the number of columns in the distance rasters
+// * buffer: the buffer distance to apply to the distance values
+// * rankmax: the maximum rank value for features
+// * resmax: the maximum resistance value
+// * xmax: the exponent for the resistance calculation
+// # Returns
+// A 2D array of f64 values representing the linear resistance for each pixel
 pub fn get_linear_resistance(
     distance_rasters: &[(Vec<f64>, f64)],
     nrows: usize,

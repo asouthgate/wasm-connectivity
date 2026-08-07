@@ -1,5 +1,15 @@
 use super::distance::euclidean_distance_transform;
 
+// Cal road resistance from binary road raster, a buffer distance, and resistance parameters
+// # Arguments
+// * road_binary: a 2D array of f64 values where non-zero values indicate the presence of a road
+// * nrows: the number of rows in the road raster
+// * ncols: the number of columns in the road raster
+// * buffer: the buffer distance to apply to the road distance values
+// * resmax: the maximum resistance value
+// * xmax: the exponent for the resistance calculation
+// # Returns
+// A 2D array of f64 values representing the road resistance for each pixel
 pub fn cal_road_resistance(
     road_binary: &[f64],
     nrows: usize,

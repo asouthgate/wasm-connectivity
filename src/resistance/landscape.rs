@@ -1,3 +1,10 @@
+// Compute the base conductance for each pixel based on the soft surface height and land cover map (lcm)
+// 
+// # Arguments
+// * soft_surf: a 2D array of f64 values representing the soft surface
+// * lcm: a 2D array of f64 values representing the land cover map
+// # Returns
+// A 2D array of f64 values representing the base conductance for each pixel
 pub fn compute_base_conductance(soft_surf: &[f64], lcm: &[f64]) -> Vec<f64> {
     let total = soft_surf.len();
     let mut conductance = vec![0.0f64; total];
@@ -17,6 +24,15 @@ pub fn compute_base_conductance(soft_surf: &[f64], lcm: &[f64]) -> Vec<f64> {
     conductance
 }
 
+// Compute the resistance for each pixel based on the conductance, rankmax, resmax, and xmax
+//
+// # Arguments
+// * conductance: a 2D array of f64 values representing the conductance for each pixel
+// * rankmax: the maximum rank value for conductance
+// * resmax: the maximum resistance value
+// * xmax: the exponent for the resistance calculation
+// # Returns
+// A 2D array of f64 values representing the resistance for each pixel
 fn ranked_resistance(conductance: &[f64], rankmax: f64, resmax: f64, xmax: f64) -> Vec<f64> {
     conductance
         .iter()
@@ -30,6 +46,11 @@ fn ranked_resistance(conductance: &[f64], rankmax: f64, resmax: f64, xmax: f64) 
         .collect()
 }
 
+// Apply a maximum resistance value to pixels that are classified as buildings
+//
+// # Arguments
+// * conductance: a mutable 2D array of f64 values representing the conductance for each pixel
+// * buildings: a 2D array of f64 values where non-zero values indicate the presence of a building
 fn apply_building_max(conductance: &mut [f64], buildings: &[f64]) {
     let max_value = conductance.iter().cloned().fold(0.0_f64, f64::max) + 1.0;
     for i in 0..conductance.len() {
@@ -39,6 +60,19 @@ fn apply_building_max(conductance: &mut [f64], buildings: &[f64]) {
     }
 }
 
+// Compute the landscape resistance based on the land cover map (lcm), buildings, and soft surface height
+//
+// # Arguments
+// * lcm: a 2D array of f64 values representing the land cover map
+// * buildings: a 2D array of f64 values where non-zero values indicate the presence of a building
+// * soft_surf: a 2D array of f64 values representing the soft surface
+// * nrows: the number of rows in the arrays
+// * ncols: the number of columns in the arrays
+// * rankmax: the maximum rank value for conductance
+// * resmax: the maximum resistance value
+// * xmax: the exponent for the resistance calculation
+// # Returns
+// A 2D array of f64 values representing the landscape resistance for each pixel
 pub fn get_landscape_resistance_lcm(
     lcm: &[f64],
     buildings: &[f64],
@@ -54,6 +88,16 @@ pub fn get_landscape_resistance_lcm(
     ranked_resistance(&conductance, rankmax, resmax, xmax)
 }
 
+// Compute the landscape resistance based on the base conductance, buildings, and resistance parameters
+//
+// # Arguments
+// * base_conductance: a 2D array of f64 values representing the base conductance for each pixel
+// * buildings: a 2D array of f64 values where non-zero values indicate the presence of a building
+// * rankmax: the maximum rank value for conductance
+// * resmax: the maximum resistance value
+// * xmax: the exponent for the resistance calculation
+// # Returns
+// A 2D array of f64 values representing the landscape resistance for each pixel
 pub fn get_landscape_resistance_from_conductance(
     base_conductance: &[f64],
     buildings: &[f64],
