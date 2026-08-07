@@ -21,9 +21,15 @@ pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, nco
     }
 
     for i in 0..total {
-        if buildings[i].is_finite() && buildings[i] != 0.0 {
+        if buildings[i].is_finite() && buildings[i] > 0.0 {
             soft_surf[i] = 0.0;
-            hard_surf[i] = buildings[i].min(1.0) * surf[i];
+            hard_surf[i] = if buildings[i] > 1.0 {
+                // Drawn building with explicit height in metres
+                buildings[i]
+            } else {
+                // Server building mask (value 1.0): height comes from DSM-DTM
+                surf[i]
+            };
         }
     }
 

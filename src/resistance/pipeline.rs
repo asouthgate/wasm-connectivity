@@ -1,5 +1,5 @@
 use super::irradiance::{irradiance_combine, irradiance_run, irradiance_to_resistance};
-use super::landscape::get_landscape_resistance_lcm;
+use super::landscape::{get_landscape_resistance_from_conductance, get_landscape_resistance_lcm};
 use super::linear::get_linear_resistance;
 use super::road::cal_road_resistance;
 use super::river::cal_river_resistance;
@@ -57,6 +57,7 @@ pub fn run_resistance_pipeline(
     generic_resistance: &[f64],
     lamps: &[f64],
     params: &ResistanceParams,
+    landscape_conductance_override: Option<&[f64]>,
 ) -> ResistanceOutput {
     let m = params.nrows;
     let n = params.ncols;
@@ -82,16 +83,26 @@ pub fn run_resistance_pipeline(
 
     let surfs = calc_surfs(dtm, dsm, building_mask, m, n);
 
-    let mut landscape_res = get_landscape_resistance_lcm(
-        lcm,
-        building_mask,
-        &surfs.soft_surf,
-        m,
-        n,
-        params.landscape_rankmax,
-        params.landscape_resmax,
-        params.landscape_xmax,
-    );
+    let mut landscape_res = if let Some(conductance) = landscape_conductance_override {
+        get_landscape_resistance_from_conductance(
+            conductance,
+            building_mask,
+            params.landscape_rankmax,
+            params.landscape_resmax,
+            params.landscape_xmax,
+        )
+    } else {
+        get_landscape_resistance_lcm(
+            lcm,
+            building_mask,
+            &surfs.soft_surf,
+            m,
+            n,
+            params.landscape_rankmax,
+            params.landscape_resmax,
+            params.landscape_xmax,
+        )
+    };
 
     let lidar = prep_lidar_rasters(&surfs.soft_surf, m, n);
     let mut linear_res = get_linear_resistance(
@@ -218,7 +229,7 @@ mod tests {
 
         let output = run_resistance_pipeline(
             &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &[],
-            &params,
+            &params, None,
         );
 
         assert_eq!(output.total_res.len(), total);
@@ -237,7 +248,7 @@ mod tests {
 
         let output = run_resistance_pipeline(
             &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &lamps,
-            &params,
+            &params, None,
         );
 
         assert!(output.lamp_res.iter().any(|&v| v > 0.0), "lamp should produce non-zero resistance");

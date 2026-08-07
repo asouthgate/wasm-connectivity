@@ -1,17 +1,6 @@
-pub fn get_landscape_resistance_lcm(
-    lcm: &[f64],
-    buildings: &[f64],
-    soft_surf: &[f64],
-    nrows: usize,
-    ncols: usize,
-    rankmax: f64,
-    resmax: f64,
-    xmax: f64,
-) -> Vec<f64> {
-    let total = nrows * ncols;
-
+pub fn compute_base_conductance(soft_surf: &[f64], lcm: &[f64]) -> Vec<f64> {
+    let total = soft_surf.len();
     let mut conductance = vec![0.0f64; total];
-    let mut max_value = f64::NEG_INFINITY;
 
     for i in 0..total {
         let h = if soft_surf[i].is_finite() {
@@ -27,17 +16,59 @@ pub fn get_landscape_resistance_lcm(
             3.0
         };
         let lcm_val = if lcm[i].is_finite() { lcm[i] } else { 0.0 };
-        let cond = lidar_rank + lcm_val;
-        conductance[i] = cond;
-        if cond > max_value {
-            max_value = cond;
-        }
+        conductance[i] = lidar_rank + lcm_val;
     }
 
-    max_value += 1.0;
+    conductance
+}
+
+pub fn get_landscape_resistance_lcm(
+    lcm: &[f64],
+    buildings: &[f64],
+    soft_surf: &[f64],
+    nrows: usize,
+    ncols: usize,
+    rankmax: f64,
+    resmax: f64,
+    xmax: f64,
+) -> Vec<f64> {
+    let total = nrows * ncols;
+
+    let mut conductance = compute_base_conductance(soft_surf, lcm);
+    let max_value = conductance.iter().cloned().fold(0.0_f64, f64::max) + 1.0;
 
     for i in 0..total {
         if buildings[i].is_finite() && buildings[i] != 0.0 {
+            conductance[i] = max_value;
+        }
+    }
+
+    let mut resistance = vec![0.0f64; total];
+    for i in 0..total {
+        if conductance[i] >= rankmax {
+            resistance[i] = resmax;
+        } else {
+            resistance[i] = (conductance[i] / rankmax).powf(xmax) * resmax;
+        }
+    }
+
+    resistance
+}
+
+pub fn get_landscape_resistance_from_conductance(
+    base_conductance: &[f64],
+    buildings: &[f64],
+    rankmax: f64,
+    resmax: f64,
+    xmax: f64,
+) -> Vec<f64> {
+    let total = base_conductance.len();
+
+    let mut conductance = base_conductance.to_vec();
+    let max_value = conductance.iter().cloned().fold(0.0_f64, f64::max) + 1.0;
+
+    for i in 0..total {
+        if buildings[i].is_finite() && buildings[i] > 0.0 {
             conductance[i] = max_value;
         }
     }

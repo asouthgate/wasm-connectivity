@@ -7,6 +7,8 @@ use tiff::decoder::{Decoder, DecodingResult};
 use tiff::encoder::{colortype, TiffEncoder};
 use wasm_connect::geospatial::{rasterize_features, GeoTransform, LayerParams};
 use wasm_connect::resistance::pipeline::{run_resistance_pipeline, ResistanceParams};
+use wasm_connect::resistance::surface::calc_surfs;
+use wasm_connect::resistance::landscape::{compute_base_conductance, get_landscape_resistance_lcm};
 
 fn read_tiff_f32(path: &Path) -> io::Result<(Vec<f64>, usize, usize)> {
     let file = fs::File::open(path)?;
@@ -184,14 +186,164 @@ fn create_circles_raster(
     circles
 }
 
+fn run_landscape(work_dir: &Path) -> io::Result<()> {
+    let input = read_json(&work_dir.join("inputs.json"))?;
+    let empty_map = serde_json::Map::new();
+    let params_json = input
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&empty_map);
+
+    let roost = input.get("roost").and_then(|r| r.as_object());
+    let resolution = params_json.get("resolution").and_then(|v| v.as_f64()).unwrap_or(10.0);
+    let radius = roost.and_then(|r| r.get("radius")).and_then(|v| v.as_f64()).unwrap_or(2500.0);
+    let n_circles = params_json.get("n_circles").and_then(|v| v.as_f64()).map(|v| v as usize).unwrap_or(5);
+
+    let grid_info_path = work_dir.join("grid_info.json");
+    let (xmin, ymax, pixw, nrows, ncols) = if grid_info_path.exists() {
+        let gi = read_json(&grid_info_path)?;
+        (
+            gi.get("xmin").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            gi.get("ymax").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            gi.get("pixw").and_then(|v| v.as_f64()).unwrap_or(resolution),
+            gi.get("nrows").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
+            gi.get("ncols").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
+        )
+    } else {
+        let e = roost.and_then(|r| r.get("easting")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let n = roost.and_then(|r| r.get("northing")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        (e - radius, n + radius, resolution, (2.0 * radius / resolution) as usize, (2.0 * radius / resolution) as usize)
+    };
+
+    emit_json_log("INFO", "Landscape resistance stage starting");
+    emit_json_log("INFO", &format!("Grid: {}x{}, pixw={}, xmin={}", ncols, nrows, pixw, xmin));
+
+    let (lcm, _, _) = read_tiff_f32(&work_dir.join("lcm.tif"))?;
+    let (dtm, nrows_dtm, ncols_dtm) = read_tiff_f32(&work_dir.join("dtm.tif"))?;
+    let (dsm, nrows_dsm, _ncols_dsm) = read_tiff_f32(&work_dir.join("dsm.tif"))?;
+    if nrows_dtm != nrows_dsm {
+        emit_json_log("ERROR", "DTM and DSM dimensions must match");
+        std::process::exit(1);
+    }
+    let (nrows, ncols) = (nrows_dtm, ncols_dtm);
+
+    let transform = GeoTransform { xmin, ymax, cellsize: pixw };
+    let buildings_path = work_dir.join("buildings.tif");
+    let buildings_geojson_path = work_dir.join("buildings.geojson");
+    let building_mask: Vec<f64> = if buildings_path.exists() {
+        read_tiff_f32(&buildings_path)?.0
+    } else if buildings_geojson_path.exists() {
+        emit_json_log("INFO", "Rasterizing buildings.geojson...");
+        let gj = fs::read_to_string(&buildings_geojson_path)?;
+        let gj_len = gj.len();
+        let base = vec![0.0f64; nrows * ncols];
+        let mut warnings = Vec::new();
+        let mut params_map = HashMap::new();
+        params_map.insert("buildings".to_string(), LayerParams { resistance: 1.0, width: 0.0 });
+        let (result, _masks) = rasterize_features(&gj, &params_map, &base, nrows, ncols, &transform, &mut warnings);
+        let nz = result.iter().filter(|&&v| v > 0.0 && v.is_finite()).count();
+        emit_json_log("INFO", &format!("rasterized buildings ({}) → {} non-zero cells", gj_len, nz));
+        for w in &warnings {
+            emit_json_log("WARN", &format!("rasterize buildings: {}", w));
+        }
+        result
+    } else {
+        vec![0.0; nrows * ncols]
+    };
+
+    let surfs = calc_surfs(&dtm, &dsm, &building_mask, nrows, ncols);
+
+    let rankmax = params_json.get("landscape_rankmax").and_then(|v| v.as_f64()).unwrap_or(8.0);
+    let resmax = params_json.get("landscape_resmax").and_then(|v| v.as_f64()).unwrap_or(100.0);
+    let xmax = params_json.get("landscape_xmax").and_then(|v| v.as_f64()).unwrap_or(5.0);
+
+    let base_soft_surf: Vec<f64> = dtm.iter().zip(dsm.iter())
+        .map(|(&t, &s)| if t.is_finite() && s.is_finite() { s - t } else { 0.0 })
+        .collect();
+    let landscape_conductance = compute_base_conductance(&base_soft_surf, &lcm);
+    emit_json_log("INFO", "Writing landscape_conductance.tif");
+    write_tiff_f32(&work_dir.join("landscape_conductance.tif"), &landscape_conductance, ncols, nrows)?;
+
+    let landscape_res = get_landscape_resistance_lcm(
+        &lcm, &building_mask, &surfs.soft_surf, nrows, ncols, rankmax, resmax, xmax,
+    );
+
+    emit_json_log("INFO", "Writing landscape_res.tif");
+    write_tiff_f32(&work_dir.join("landscape_res.tif"), &landscape_res, ncols, nrows)?;
+
+    write_grid_info(work_dir, xmin, ymax, pixw, nrows, ncols);
+
+    write_asc_files(work_dir, &landscape_res, ncols, nrows, xmin, ymax, pixw, roost, radius, n_circles)?;
+
+    emit_json_log("INFO", "Landscape resistance stage complete");
+    Ok(())
+}
+
+fn write_grid_info(work_dir: &Path, xmin: f64, ymax: f64, pixw: f64, nrows: usize, ncols: usize) {
+    let gi = serde_json::json!({
+        "xmin": xmin,
+        "ymax": ymax,
+        "pixw": pixw,
+        "nrows": nrows,
+        "ncols": ncols,
+    });
+    let path = work_dir.join("grid_info.json");
+    if let Ok(json_str) = serde_json::to_string(&gi) {
+        fs::write(path, json_str).ok();
+    }
+}
+
+fn write_asc_files(
+    work_dir: &Path,
+    total_res: &[f64],
+    ncols: usize, nrows: usize,
+    xmin: f64, ymax: f64, pixw: f64,
+    roost: Option<&serde_json::Map<String, serde_json::Value>>,
+    radius: f64, n_circles: usize,
+) -> io::Result<()> {
+    let cs_dir = work_dir.join("circuitscape");
+    fs::create_dir_all(&cs_dir).map_err(|e| io::Error::new(io::ErrorKind::Other, format!("create_dir: {}", e)))?;
+
+    let ymin = ymax - nrows as f64 * pixw;
+
+    write_asc(&cs_dir.join("resistance.asc"), total_res, ncols, nrows, xmin, ymin, pixw, -9999.0)?;
+
+    let roost_easting = roost.and_then(|r| r.get("easting")).and_then(|v| v.as_f64());
+    let roost_northing = roost.and_then(|r| r.get("northing")).and_then(|v| v.as_f64());
+    let roost_col = if let Some(e) = roost_easting { ((e - xmin) / pixw) as usize } else { ncols / 2 };
+    let roost_row = if let Some(n) = roost_northing { ((ymax - n) / pixw) as usize } else { nrows / 2 };
+
+    let circles = create_circles_raster(nrows, ncols, roost_row, roost_col, radius, pixw, n_circles);
+    write_asc(&cs_dir.join("source.asc"), &circles, ncols, nrows, xmin, ymin, pixw, -9999.0)?;
+
+    let mut ground = vec![0.0f64; nrows * ncols];
+    if roost_row < nrows && roost_col < ncols {
+        ground[roost_row * ncols + roost_col] = 1.0;
+    }
+    write_asc(&cs_dir.join("ground.asc"), &ground, ncols, nrows, xmin, ymin, pixw, -9999.0)?;
+
+    Ok(())
+}
+
 fn run() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: resistance-pipeline <work_dir>");
+        eprintln!("Usage: resistance-pipeline <work_dir> [--stage landscape|full]");
         std::process::exit(1);
     }
 
     let work_dir = PathBuf::from(&args[1]);
+    let stage = if args.len() >= 3 && args[2] == "--stage" {
+        args.get(3).map(|s| s.as_str()).unwrap_or("full")
+    } else {
+        "full"
+    };
+
+    if stage == "landscape" {
+        return run_landscape(&work_dir);
+    }
+
+    // --- full pipeline below (existing code) ---
     let input_path = work_dir.join("inputs.json");
 
     emit_json_log("INFO", "Resistance pipeline starting");
@@ -411,6 +563,7 @@ fn run() -> io::Result<()> {
         &generic_res,
         &lamps,
         &params,
+        None,
     );
 
     let count_non_zero = |label: &str, data: &[f64]| {
@@ -469,67 +622,7 @@ fn run() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    let circuitscape_dir = work_dir.join("circuitscape");
-    fs::create_dir_all(&circuitscape_dir).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to create circuitscape dir: {}", e),
-        )
-    })?;
-
-    let ymin = ymax - nrows as f64 * pixw;
-
-    write_asc(
-        &circuitscape_dir.join("resistance.asc"),
-        &output.total_res,
-        ncols,
-        nrows,
-        xmin,
-        ymin,
-        pixw,
-        -9999.0,
-    )?;
-
-    let roost_easting = roost.and_then(|r| r.get("easting")).and_then(|v| v.as_f64());
-    let roost_northing = roost.and_then(|r| r.get("northing")).and_then(|v| v.as_f64());
-
-    let roost_col = if let Some(e) = roost_easting {
-        ((e - xmin) / pixw) as usize
-    } else {
-        ncols / 2
-    };
-    let roost_row = if let Some(n) = roost_northing {
-        ((ymax - n) / pixw) as usize
-    } else {
-        nrows / 2
-    };
-
-    let circles = create_circles_raster(nrows, ncols, roost_row, roost_col, radius, pixw, n_circles);
-    write_asc(
-        &circuitscape_dir.join("source.asc"),
-        &circles,
-        ncols,
-        nrows,
-        xmin,
-        ymin,
-        pixw,
-        -9999.0,
-    )?;
-
-    let mut ground = vec![0.0f64; nrows * ncols];
-    if roost_row < nrows && roost_col < ncols {
-        ground[roost_row * ncols + roost_col] = 1.0;
-    }
-    write_asc(
-        &circuitscape_dir.join("ground.asc"),
-        &ground,
-        ncols,
-        nrows,
-        xmin,
-        ymin,
-        pixw,
-        -9999.0,
-    )?;
+    write_asc_files(&work_dir, &output.total_res, ncols, nrows, xmin, ymax, pixw, roost, radius, n_circles)?;
 
     emit_json_log("INFO", "Resistance pipeline complete");
 
