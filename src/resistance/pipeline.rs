@@ -1,4 +1,4 @@
-use super::irradiance::{irradiance_combine, irradiance_run, irradiance_to_resistance};
+use super::irradiance::{combine_and_squash, irradiance_run, irradiance_to_resistance};
 use super::landscape::{get_landscape_resistance_from_conductance, get_landscape_resistance_lcm};
 use super::linear::get_linear_resistance;
 use super::road::cal_road_resistance;
@@ -154,7 +154,7 @@ pub fn run_resistance_pipeline(
         }
     }
 
-    let total_res = irradiance_combine(
+    let total_res = combine_and_squash(
         &lamp_res,
         &road_res,
         &river_res,

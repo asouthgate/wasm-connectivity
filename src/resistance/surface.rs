@@ -1,5 +1,7 @@
 use super::distance::distance_transform_with_buffer;
 
+const LIDAR_BUFFER_CELLS: f64 = 10.0;
+
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
     pub soft_surf: Vec<f64>,
@@ -78,7 +80,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !mh_has_features {
         vec![f64::NAN; total]
     } else {
-        distance_transform_with_buffer(&manhedge, nrows, ncols, 10.0)
+        distance_transform_with_buffer(&manhedge, nrows, ncols, LIDAR_BUFFER_CELLS)
     };
 
     let umh_has_na = unmanhedge.iter().any(|&v| v == 0.0 || v.is_nan());
@@ -89,7 +91,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !umh_has_features {
         vec![f64::NAN; total]
     } else {
-        distance_transform_with_buffer(&unmanhedge, nrows, ncols, 10.0)
+        distance_transform_with_buffer(&unmanhedge, nrows, ncols, LIDAR_BUFFER_CELLS)
     };
 
     let t_has_na = tree.iter().any(|&v| v == 0.0 || v.is_nan());
@@ -100,7 +102,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !t_has_features {
         vec![f64::NAN; total]
     } else {
-        distance_transform_with_buffer(&tree, nrows, ncols, 10.0)
+        distance_transform_with_buffer(&tree, nrows, ncols, LIDAR_BUFFER_CELLS)
     };
 
     let distance_rasters = vec![

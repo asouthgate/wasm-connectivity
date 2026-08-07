@@ -186,6 +186,54 @@ fn create_circles_raster(
     circles
 }
 
+struct GridConfig {
+    xmin: f64,
+    ymax: f64,
+    pixw: f64,
+    nrows: usize,
+    ncols: usize,
+}
+
+fn parse_grid_config(work_dir: &Path, resolution: f64, roost_easting: f64, roost_northing: f64, radius: f64) -> io::Result<GridConfig> {
+    let grid_info_path = work_dir.join("grid_info.json");
+    if grid_info_path.exists() {
+        let gi = read_json(&grid_info_path)?;
+        Ok(GridConfig {
+            xmin: gi.get("xmin").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            ymax: gi.get("ymax").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            pixw: gi.get("pixw").and_then(|v| v.as_f64()).unwrap_or(resolution),
+            nrows: gi.get("nrows").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
+            ncols: gi.get("ncols").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
+        })
+    } else {
+        Ok(GridConfig {
+            xmin: roost_easting - radius,
+            ymax: roost_northing + radius,
+            pixw: resolution,
+            nrows: (2.0 * radius / resolution) as usize,
+            ncols: (2.0 * radius / resolution) as usize,
+        })
+    }
+}
+
+fn read_building_mask_from_disk(work_dir: &Path, nrows: usize, ncols: usize, transform: &GeoTransform) -> Vec<f64> {
+    let geojson_path = work_dir.join("buildings.geojson");
+    if geojson_path.exists() {
+        match fs::read_to_string(&geojson_path) {
+            Ok(gj) => return rasterize_geojson_to_binary(&gj, "buildings", nrows, ncols, transform),
+            Err(e) => emit_json_log("WARN", &format!("Failed to read buildings.geojson: {}", e)),
+        }
+    }
+    let path = work_dir.join("buildings.tif");
+    if path.exists() {
+        match read_tiff_f32(&path) {
+            Ok((data, _, _)) => return data,
+            Err(e) => emit_json_log("WARN", &format!("Failed to read buildings.tif: {}", e)),
+        }
+    }
+    vec![0.0; nrows * ncols]
+}
+
 fn run_landscape(work_dir: &Path) -> io::Result<()> {
     let input = read_json(&work_dir.join("inputs.json"))?;
     let empty_map = serde_json::Map::new();
@@ -199,24 +247,17 @@ fn run_landscape(work_dir: &Path) -> io::Result<()> {
     let radius = roost.and_then(|r| r.get("radius")).and_then(|v| v.as_f64()).unwrap_or(2500.0);
     let n_circles = params_json.get("n_circles").and_then(|v| v.as_f64()).map(|v| v as usize).unwrap_or(5);
 
-    let grid_info_path = work_dir.join("grid_info.json");
-    let (xmin, ymax, pixw, nrows, ncols) = if grid_info_path.exists() {
-        let gi = read_json(&grid_info_path)?;
-        (
-            gi.get("xmin").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            gi.get("ymax").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            gi.get("pixw").and_then(|v| v.as_f64()).unwrap_or(resolution),
-            gi.get("nrows").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
-            gi.get("ncols").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
-        )
-    } else {
-        let e = roost.and_then(|r| r.get("easting")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let n = roost.and_then(|r| r.get("northing")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-        (e - radius, n + radius, resolution, (2.0 * radius / resolution) as usize, (2.0 * radius / resolution) as usize)
-    };
+    let roost_easting = roost.and_then(|r| r.get("easting")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let roost_northing = roost.and_then(|r| r.get("northing")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    let grid = parse_grid_config(work_dir, resolution, roost_easting, roost_northing, radius)?;
+    let (xmin, ymax, pixw, ncols, nrows) = (grid.xmin, grid.ymax, grid.pixw, grid.ncols, grid.nrows);
 
     emit_json_log("INFO", "Landscape resistance stage starting");
     emit_json_log("INFO", &format!("Grid: {}x{}, pixw={}, xmin={}", ncols, nrows, pixw, xmin));
+
+    let transform = GeoTransform { xmin, ymax, cellsize: pixw };
+    let building_mask = read_building_mask_from_disk(work_dir, nrows, ncols, &transform);
 
     let (lcm, _, _) = read_tiff_f32(&work_dir.join("lcm.tif"))?;
     let (dtm, nrows_dtm, ncols_dtm) = read_tiff_f32(&work_dir.join("dtm.tif"))?;
@@ -227,40 +268,13 @@ fn run_landscape(work_dir: &Path) -> io::Result<()> {
     }
     let (nrows, ncols) = (nrows_dtm, ncols_dtm);
 
-    let transform = GeoTransform { xmin, ymax, cellsize: pixw };
-    let buildings_path = work_dir.join("buildings.tif");
-    let buildings_geojson_path = work_dir.join("buildings.geojson");
-    let building_mask: Vec<f64> = if buildings_path.exists() {
-        read_tiff_f32(&buildings_path)?.0
-    } else if buildings_geojson_path.exists() {
-        emit_json_log("INFO", "Rasterizing buildings.geojson...");
-        let gj = fs::read_to_string(&buildings_geojson_path)?;
-        let gj_len = gj.len();
-        let base = vec![0.0f64; nrows * ncols];
-        let mut warnings = Vec::new();
-        let mut params_map = HashMap::new();
-        params_map.insert("buildings".to_string(), LayerParams { resistance: 1.0, width: 0.0 });
-        let (result, _masks) = rasterize_features(&gj, &params_map, &base, nrows, ncols, &transform, &mut warnings);
-        let nz = result.iter().filter(|&&v| v > 0.0 && v.is_finite()).count();
-        emit_json_log("INFO", &format!("rasterized buildings ({}) → {} non-zero cells", gj_len, nz));
-        for w in &warnings {
-            emit_json_log("WARN", &format!("rasterize buildings: {}", w));
-        }
-        result
-    } else {
-        vec![0.0; nrows * ncols]
-    };
-
     let surfs = calc_surfs(&dtm, &dsm, &building_mask, nrows, ncols);
 
     let rankmax = params_json.get("landscape_rankmax").and_then(|v| v.as_f64()).unwrap_or(8.0);
     let resmax = params_json.get("landscape_resmax").and_then(|v| v.as_f64()).unwrap_or(100.0);
     let xmax = params_json.get("landscape_xmax").and_then(|v| v.as_f64()).unwrap_or(5.0);
 
-    let base_soft_surf: Vec<f64> = dtm.iter().zip(dsm.iter())
-        .map(|(&t, &s)| if t.is_finite() && s.is_finite() { s - t } else { 0.0 })
-        .collect();
-    let landscape_conductance = compute_base_conductance(&base_soft_surf, &lcm);
+    let landscape_conductance = compute_base_conductance(&surfs.soft_surf, &lcm);
     emit_json_log("INFO", "Writing landscape_conductance.tif");
     write_tiff_f32(&work_dir.join("landscape_conductance.tif"), &landscape_conductance, ncols, nrows)?;
 
@@ -370,17 +384,7 @@ fn run() -> io::Result<()> {
         .map(|v| v as usize)
         .unwrap_or(5);
 
-    let grid_info_path = work_dir.join("grid_info.json");
-    let (xmin, ymax, pixw, nrows, ncols) = if grid_info_path.exists() {
-        let gi = read_json(&grid_info_path)?;
-        (
-            gi.get("xmin").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            gi.get("ymax").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            gi.get("pixw").and_then(|v| v.as_f64()).unwrap_or(resolution),
-            gi.get("nrows").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
-            gi.get("ncols").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(0),
-        )
-    } else {
+    let (xmin, ymax, pixw, nrows, ncols) = {
         let e = roost
             .and_then(|r| r.get("easting"))
             .and_then(|v| v.as_f64())
@@ -389,14 +393,8 @@ fn run() -> io::Result<()> {
             .and_then(|r| r.get("northing"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
-        let p = resolution;
-        (
-            e - radius,
-            n + radius,
-            p,
-            (2.0 * radius / p) as usize,
-            (2.0 * radius / p) as usize,
-        )
+        let grid = parse_grid_config(&work_dir, resolution, e, n, radius)?;
+        (grid.xmin, grid.ymax, grid.pixw, grid.nrows, grid.ncols)
     };
 
     emit_json_log("INFO", &format!(
@@ -455,15 +453,7 @@ fn run() -> io::Result<()> {
             }),
     };
 
-    let building_mask = match read_optional_geojson(&work_dir, "buildings.geojson")? {
-        Some(gj) => {
-            emit_json_log("INFO", &format!("Found buildings.geojson ({} bytes), rasterizing...", gj.len()));
-            rasterize_geojson_to_binary(&gj, "buildings", nrows, ncols, &transform)
-        }
-        None => read_optional_tiff(&work_dir, "buildings.tif")?
-            .map(|(d, _, _)| d)
-            .unwrap_or_else(|| vec![0.0; nrows * ncols]),
-    };
+    let building_mask = read_building_mask_from_disk(&work_dir, nrows, ncols, &transform);
 
     let generic_res = match read_optional_geojson(&work_dir, "generic_resistance.geojson")? {
         Some(gj) => {

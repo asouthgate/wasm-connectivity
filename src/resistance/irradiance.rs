@@ -1,4 +1,6 @@
 const LOG10: f64 = 2.302585092994046;
+const SQUASH_MIN: f64 = 1.0;
+const SQUASH_MAX: f64 = 10000.0;
 
 #[derive(Debug, Clone, Copy)]
 struct Lamp {
@@ -115,6 +117,7 @@ pub fn irradiance_run(
     sensor_ht: f64,
     absorb: f64,
 ) -> Vec<f64> {
+    assert_eq!(lamps.len() % 3, 0, "lamps array length must be a multiple of 3");
     let nlamps = lamps.len() / 3;
     let total = m * n;
     assert_eq!(soft.len(), total);
@@ -177,7 +180,7 @@ pub fn irradiance_to_resistance(
     }
 }
 
-pub fn irradiance_combine(
+pub fn combine_and_squash(
     lamp: &[f64],
     road: &[f64],
     river: &[f64],
@@ -209,8 +212,9 @@ pub fn irradiance_combine(
         return total;
     }
 
+    let squashed_range = SQUASH_MAX - SQUASH_MIN;
     for val in total.iter_mut() {
-        *val = ((*val - tmin) * 9999.0) / range + 1.0;
+        *val = ((*val - tmin) * squashed_range) / range + SQUASH_MIN;
     }
 
     total
@@ -260,7 +264,7 @@ mod tests {
         let sz = m * n;
         let a = vec![10.0, 20.0, 30.0, 40.0];
         let z = vec![0.0f64; sz];
-        let result = irradiance_combine(&a, &z, &z, &z, &z, &z, m, n);
+        let result = combine_and_squash(&a, &z, &z, &z, &z, &z, m, n);
         assert!(
             result[0] >= 1.0 && result[0] <= 10000.0,
             "squashed value should be in [1,10000]"
