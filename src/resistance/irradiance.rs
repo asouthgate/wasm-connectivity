@@ -9,6 +9,28 @@ struct Lamp {
     z: f64,
 }
 
+// Compute the raycasted irradiance from a single lamp to the terrain, taking into account soft and hard shadows
+//
+// Works by iterating over the pixels in the terrain that are within the cutoff distance of the lamp, 
+// and for each pixel, computing the distance to the lamp,
+// checking if there are any hard or soft shadows in the way.
+// If there are no hard shadows, the irradiance is computed based on the inverse square law,
+// and if there are soft shadows, the irradiance is reduced based on the amount of shading. 
+//
+// # Arguments
+// * irr: a mutable 2D array of f64 values, where the computed irradiance values will be stored
+// * m: number of rows in the terrain
+// * n: number of columns in the terrain
+// * ri_lamp: row index of the lamp
+// * cj_lamp: column index of the lamp
+// * z: height of the lamp above the terrain
+// * soft: a 2D array of f64 values representing the soft shadow heights
+// * hard: a 2D array of f64 values representing the hard shadow heights
+// * terr: a 2D array of f64 values representing the terrain heights
+// * absorb: the absorption coefficient for the irradiance
+// * pixw: the width of a pixel in the terrain
+// * cutoff: the maximum distance for the raycast
+// * sensor_ht: the height of the sensor above the terrain
 fn raycast(
     irr: &mut [f64],
     m: usize,
@@ -105,6 +127,22 @@ fn raycast(
     }
 }
 
+// Compute the irradiance from multiple lamps, taking into account soft and hard shadows
+//
+// # Arguments
+// * lamps: a 1D array of f64 values, where each lamp is represented
+//   by three consecutive values: row index, column index, and height above the terrain
+// * soft: a 2D array of f64 values representing the soft shadow heights
+// * hard: a 2D array of f64 values representing the hard shadow heights
+// * terr: a 2D array of f64 values representing the terrain heights
+// * m: number of rows in the terrain
+// * n: number of columns in the terrain
+// * pixw: the width of a pixel in the terrain
+// * cutoff: the maximum distance for the raycast
+// * sensor_ht: the height of the sensor above the terrain
+// * absorb: the absorption coefficient for the irradiance
+// # Returns
+// A 2D array of f64 values, where each value is the computed irradiance
 pub fn irradiance_run(
     lamps: &[f64],
     soft: &[f64],
@@ -156,6 +194,7 @@ pub fn irradiance_run(
     output
 }
 
+// Convert irradiance values to resistance values using a power-law transformation
 pub fn irradiance_to_resistance(
     io_raster: &mut [f64],
     m: usize,
@@ -180,6 +219,20 @@ pub fn irradiance_to_resistance(
     }
 }
 
+// Compute the combined irradiance from multiple sources and squash the values to a specified range
+//
+// # Arguments
+// * lamp: a 2D array of f64 values representing the irradiance from lamps
+// * road: a 2D array of f64 values representing the irradiance from roads
+// * river: a 2D array of f64 values representing the irradiance from rivers
+// * landscape: a 2D array of f64 values representing the irradiance from landscapes
+// * linear: a 2D array of f64 values representing the irradiance from linear features
+// * generic: a 2D array of f64 values representing the irradiance from generic features
+// * m: number of rows in the terrain
+// * n: number of columns in the terrain
+// # Returns
+// A 2D array of f64 values, where each value is the combined and squashed irradiance from all sources,
+// scaled to the range [SQUASH_MIN, SQUASH_MAX].
 pub fn combine_and_squash(
     lamp: &[f64],
     road: &[f64],
