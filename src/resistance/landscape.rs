@@ -10,7 +10,7 @@ pub fn compute_base_conductance(soft_surf: &[f64], lcm: &[f64]) -> Vec<f64> {
     let mut conductance = vec![0.0f64; total];
 
     for i in 0..total {
-        let h_valid = soft_surf[i].is_finite() && soft_surf[i] >= 0.0;
+        let h_valid = soft_surf[i].is_finite();
         let lcm_valid = lcm[i].is_finite() && lcm[i] >= 0.0;
         if h_valid && lcm_valid {
             // R reference: grass [-Inf, 0.5) → 4; scrub [0.5, 2.5) → 3; trees [2.5, Inf] → 3

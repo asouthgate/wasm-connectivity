@@ -186,7 +186,7 @@ pub fn run_resistance_pipeline(
         )
     };
 
-    let lidar = prep_lidar_rasters(&surfs.soft_surf, m, n);
+    let lidar = prep_lidar_rasters(&surfs.soft_surf, m, n, params.pixw);
     let mut linear_res = get_linear_resistance(
         &lidar.distance_rasters,
         m,
