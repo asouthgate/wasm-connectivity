@@ -10,15 +10,15 @@ pub fn compute_base_conductance(soft_surf: &[f64], lcm: &[f64]) -> Vec<f64> {
     let mut conductance = vec![0.0f64; total];
 
     for i in 0..total {
-        let h = if soft_surf[i].is_finite() {
-            soft_surf[i]
+        let h_valid = soft_surf[i].is_finite() && soft_surf[i] >= 0.0;
+        let lcm_valid = lcm[i].is_finite() && lcm[i] >= 0.0;
+        if h_valid && lcm_valid {
+            // R reference: grass [-Inf, 0.5) → 4; scrub [0.5, 2.5) → 3; trees [2.5, Inf] → 3
+            let lidar_rank = if soft_surf[i] < 0.5 { 4.0 } else { 3.0 };
+            conductance[i] = lidar_rank + lcm[i];
         } else {
-            0.0
-        };
-        // R reference: grass [-Inf, 0.5) → 4; scrub [0.5, 2.5) → 3; trees [2.5, Inf] → 3
-        let lidar_rank = if h < 0.5 { 4.0 } else { 3.0 };
-        let lcm_val = if lcm[i].is_finite() { lcm[i] } else { 0.0 };
-        conductance[i] = lidar_rank + lcm_val;
+            conductance[i] = f64::NAN;
+        }
     }
 
     conductance
@@ -105,7 +105,10 @@ pub fn get_landscape_resistance_from_conductance(
     resmax: f64,
     xmax: f64,
 ) -> Vec<f64> {
-    let mut conductance = base_conductance.to_vec();
+    let mut conductance: Vec<f64> = base_conductance
+        .iter()
+        .map(|&c| if c.is_finite() && c >= 0.0 { c } else { f64::NAN })
+        .collect();
     apply_building_max(&mut conductance, buildings);
     ranked_resistance(&conductance, rankmax, resmax, xmax)
 }
