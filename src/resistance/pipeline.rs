@@ -81,22 +81,26 @@ pub fn combine_and_squash(
     for i in 0..sz {
         let v = lamp[i] + road[i] + river[i] + landscape[i] + linear[i] + generic[i] + 1.0;
         total[i] = v;
-        if v < tmin {
-            tmin = v;
-        }
-        if v > tmax {
-            tmax = v;
+        if v.is_finite() {
+            if v < tmin {
+                tmin = v;
+            }
+            if v > tmax {
+                tmax = v;
+            }
         }
     }
 
     let range = tmax - tmin;
-    if range <= 0.0 {
+    if range <= 0.0 || !range.is_finite() {
         return total;
     }
 
     let squashed_range = SQUASH_MAX - SQUASH_MIN;
     for val in total.iter_mut() {
-        *val = ((*val - tmin) * squashed_range) / range + SQUASH_MIN;
+        if val.is_finite() {
+            *val = ((*val - tmin) * squashed_range) / range + SQUASH_MIN;
+        }
     }
 
     total
