@@ -1,7 +1,5 @@
 use super::distance::distance_transform_with_buffer;
 
-const LIDAR_BUFFER_CELLS: f64 = 10.0;
-
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
     pub soft_surf: Vec<f64>,
@@ -49,8 +47,9 @@ pub struct LidarOutput {
     pub distance_rasters: Vec<(Vec<f64>, f64)>,
 }
 
-pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> LidarOutput {
+pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize, pixw: f64) -> LidarOutput {
     let total = nrows * ncols;
+    let buf_cells = (10.0 / pixw).max(1.0);
 
     let mut manhedge = vec![0.0f64; total];
     let mut unmanhedge = vec![0.0f64; total];
@@ -80,7 +79,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !mh_has_features {
         vec![f64::NAN; total]
     } else {
-        distance_transform_with_buffer(&manhedge, nrows, ncols, LIDAR_BUFFER_CELLS)
+        distance_transform_with_buffer(&manhedge, nrows, ncols, buf_cells)
     };
 
     let umh_has_na = unmanhedge.iter().any(|&v| v == 0.0 || v.is_nan());
@@ -91,7 +90,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !umh_has_features {
         vec![f64::NAN; total]
     } else {
-        distance_transform_with_buffer(&unmanhedge, nrows, ncols, LIDAR_BUFFER_CELLS)
+        distance_transform_with_buffer(&unmanhedge, nrows, ncols, buf_cells)
     };
 
     let t_has_na = tree.iter().any(|&v| v == 0.0 || v.is_nan());
@@ -102,7 +101,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> Lida
     } else if !t_has_features {
         vec![f64::NAN; total]
     } else {
-        distance_transform_with_buffer(&tree, nrows, ncols, LIDAR_BUFFER_CELLS)
+        distance_transform_with_buffer(&tree, nrows, ncols, buf_cells)
     };
 
     let distance_rasters = vec![
@@ -157,7 +156,7 @@ mod tests {
         soft[2] = 4.0;
         soft[3] = 7.0;
         soft[4] = f64::NAN;
-        let result = prep_lidar_rasters(&soft, nrows, ncols);
+        let result = prep_lidar_rasters(&soft, nrows, ncols, 10.0);
         assert!(result.manhedge[1] == 1.0, "2m → manhedge");
         assert!(result.unmanhedge[2] == 1.0, "4m → unmanhedge");
         assert!(result.tree[3] == 1.0, "7m → tree");
