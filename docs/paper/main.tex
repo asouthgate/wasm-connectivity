@@ -8,6 +8,7 @@
 \usepackage{hyperref} 
 \usepackage{relsize}
 \usepackage{color, soul}
+\usepackage[nocompress]{cite}
 \DeclareMathOperator{\diag}{diag} 
 
 \newcommand{\Cpp}{C\nolinebreak[4]\hspace{-.05em}\raisebox{.4ex}{\relsize{-3}{\textbf{++}}}}
@@ -15,7 +16,7 @@
 
 \title{Ecological connectivity modelling with WebAssembly}
 \author{
-  Alex J. Southgate$^{1,*}$, Joanna Redihough$^{2}$ and Thomas Woolley$^{1}$\\[1em]
+  Alex J. Southgate$^{1,*}$, Joanna Redihough$^{2}$ and Thomas E. Woolley$^{1}$\\[1em]
   \small $^{1}$School of Mathematics, Cardiff University, Cardiff, United Kingdom \\
   \small $^{2}$Independent Researcher, Cardiff, United Kingdom \\[1em]
   \small $^{*}$Corresponding author: southgateJA@cardiff.ac.uk
@@ -27,7 +28,7 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
+Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly (Wasm) now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
 \end{abstract}
 
 \section{Introduction}
@@ -40,7 +41,8 @@ Circuit theory offers advantages beyond least-cost methods (see \cite{mcrae2007c
 which is available in a range of software and packages across different languages
 (e.g. Linkage Mapper \cite{mcrae2011linkagemapper}, \texttt{pycda} \cite{koehl2024pycda}, ArcGIS \cite{esri2026arcgis}).
 At the same time, these modelling approaches can require large compute resources, cloud instances or servers,
-and technical expertise for maintenance; the Julia implementation of Circuitscape was previously benchmarked 
+and technical expertise for maintenance. As an example of scale, 
+the Julia implementation of Circuitscape was previously benchmarked 
 using 384 GB of RAM with a 437 million pixel input \cite{hall2021circuitscape}.
 
 In modern web applications, 
@@ -48,7 +50,7 @@ a front-end browser application is often paired with a backend server which perf
 When scientific code is deployed into production web applications for practical use by customers (e.g. analysts),
 a backend is required. However, for many applications, maintaining this infrastructure is costly. 
 
-Edge computing means making use of compute close to the `edge' of the cloud, 
+Edge computing means making use of computing close to the `edge' of the cloud, 
 which is either close to the user's computer, or the user's computer itself. 
 One of the advantages of offloading computation browser-side is simplified data governance,
 as storage of personal data can be avoided if
@@ -77,14 +79,14 @@ such as geospatial analysis software. We demonstrate reasonable
 
 \subsection{Connectivity model}
 
-We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} \eqref{eq:ohm} specifies the relationship between voltage $V$, current $I$, and resistance $R$ as $V=IR$. In the case of ecological connectivity, $I$ is the movement of the migrating population instead of electrical current, and resistance analogously describes how hard it is for the species to move (consider movement over a rocky beach versus flat grassland). Or, using conductance $C = 1/R$,
+We use the methodology introduced by \cite{mcrae2006isolation} to describe connectivity with circuit theory, and a brief summary follows. First, Ohm's law \cite[Ch. 2]{alexander2007fundamentals} \eqref{eq:ohm} specifies the relationship between voltage $V$, current $I$, and resistance $R$ as $V=IR$. In the case of ecological connectivity, $I$ is the movement of the migrating population instead of electrical current, resistance describes how hard it is for the population to move (consider movement over a rocky beach versus flat grassland), and voltage comparable to the pressure organisms experience to leave or enter a region (behaviorally or otherwise). Or, using conductance $C = 1/R$,
 
 \begin{equation}
 \label{eq:ohm}
 I = CV.
 \end{equation}
 
-Secondly, for a given node (pixel), the conservation equation (Kirchhoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) means that movement in is equal to movement out. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$ (a point at which the organism emerges, such as a roost):
+Secondly, for a given node (pixel), the conservation equation (Kirchhoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) means that movement in to a pixel is equal to movement out of the pixel. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$ (a point at which the organism emerges, such as a roost), with neighboring pixels $j \in N(i)$:
 
 \begin{equation}
 \label{eq:conservation}
@@ -102,37 +104,35 @@ Given these two equations, only voltage differences, $V_{ij}$, are unknown. Volt
 \label{eq:balance2}
 \Big(\sum_{j \in N(i)} C_{ij}\Big)V_i - \sum_{j \in N(i)} C_{ij}V_j = S_i.
 \end{equation}
-
 Equations \eqref{eq:balance1} and \eqref{eq:balance2} can be written in the form
 
 \begin{equation}
 \label{eq:system}
 \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s},
 \end{equation}
-
-where the matrix $\mathbf{L}$ is the Laplacian. The diagonal elements of $\mathbf{L}$ are precomputed. For ground (sink) nodes, either the corresponding rows can be ignored in calculation and set to zero, or the diagonal elements set to $1$ and off-diagonal to zero. $\mathbf{L}$ is sparse, since only neighboring nodes are connected in the simplest case.
+where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by either setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation, or by setting $\mathbf{L}_{jj}$ to $1$, off-diagonals to zero, and current $\mathbf{s}_j$ to zero for ground pixels. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected.
 Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}.
 
 \subsection{Modes}
 
-The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). Circuitscape offers an `advanced' mode, where a raster specifying sources and grounds can be provided, and a `pairwise' mode \cite{hall2021circuitscape}, for which users can specify $n \choose 2$ pairwise solves from pairs of $n$ nodes, or $n \times m$ simulations between $n$ sources and $m$ sinks. Each approach has different assumptions and interpretation. We implement an equivalent to the `advanced' mode only, with $0V$ grounds and fixed source injection. The former are specified as Dirichlet boundary conditions, and the latter as Neumann boundary conditions \cite{leveque2007finite}.
+The simplest run mode is for a source and sink pair, equivalent to a conditional random walk (paths of those that travel from source to sink). Circuitscape offers an `advanced' mode, where a raster specifying sources and grounds can be provided, and a `pairwise' mode \cite{hall2021circuitscape}, for which users can specify $n \choose 2$ pairwise solves from pairs of $n$ nodes, or $n \times m$ simulations between $n$ sources and $m$ sinks. In Omniscape, a circular moving window is used with a central ground, computed across the entire landscape, and combined \cite{landau2021omniscape}.
+
+Each approach has different assumptions and interpretation. We implement an equivalent to the `advanced' mode, with $0V$ grounds and fixed source injection. The former are specified as Dirichlet boundary conditions, and the latter as Neumann boundary conditions \cite{leveque2007finite}.
 
 \subsection{Solver}
 
-In Circuitscape, conjugate gradient with algebraic multigrid (CG+AMG) or a Cholesky solver is used via optimised libraries that are not available in a WASM context. In order to keep the WASM binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
+In Circuitscape, conjugate gradient with algebraic multigrid (`cg+amg') or a Cholesky solver is used via optimised libraries that are not available in a Wasm context. In order to keep the Wasm binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
 
-A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for WASM, a brief explanation follows. We solve the system
+A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for Wasm, a brief explanation follows. We solve the system
 
 \[
 \mathbf{L}\mathbf{v} = \mathbf{s},
 \]
-
 which is equivalent to solving the energy function
 
 \[
 f(\mathbf{v}) = \frac{1}{2} \mathbf{v}^T \mathbf{L}\mathbf{v} - \mathbf{v}^T\mathbf{s},
 \]
-
 since, when taking the negative gradient and setting to zero, we get the residual error for our system,
 
 \[
@@ -151,9 +151,10 @@ Taking the gradient and choosing an optimal step size $\alpha_k$ gets to the bot
 \alpha_{k} = \frac{\mathbf{r}_{k}^T \mathbf{r}_k}{\mathbf{r}_k^T \mathbf{L}\mathbf{r}_k}.
 \]
 
-However, stepping maximally in a sequence of orthogonal steps can be inefficient and lead to zig-zag steps. Instead, a kind of moving average or inertia can be applied to the steps. 
-For the CG method, conjugate directions are used. Contrary to steepest descent, each direction requires information from the previous direction and cannot be computed solely
-from the residual.
+However, stepping maximally in a sequence of steps can be inefficient and lead to zig-zag steps, because each step is only orthogonal to the last step, not
+necessarily to all previous steps.
+Instead, the CG method guarantees orthogonality of residuals for all previous steps by enforcing conjugacy of step directions.
+Contrary to steepest descent, each direction requires information from the previous direction.
 
 For CG, the conjugate direction $\mathbf{p}_{k+1}$ is taken to be
 
@@ -162,6 +163,7 @@ For CG, the conjugate direction $\mathbf{p}_{k+1}$ is taken to be
 \]
 
 This is similar to steepest descent but has an additional term depending on the previous direction.
+$\mathbf{p}_{0}$ is initialized to $\mathbf{r}_0$.
 As before, once the step direction is taken, the position is updated as
 
 \[
@@ -200,7 +202,7 @@ smoothing high-frequency error components quickly, but low-frequency components 
 with bilinear interpolation,
 which is more complex but converges faster \cite{tatebe1993multigrid};
 a GMG with Alcouffe preconditioner \cite{alcouffe1981multi}, which is better for sharply contrasting features.
-We implement these methods directly to reduce WASM dependencies and binary footprint. 
+We implement these methods directly to reduce Wasm dependencies and binary footprint. 
 
 Multigrid preconditioners are more complex than the Jacobi preconditioner. After smoothing high-frequency error features
 using a few Jacobi iterations, the remaining low-frequency components are then smoothed using a coarse grid.
@@ -285,7 +287,7 @@ Algorithm \ref{alg:gmg_vcycle} shows one cycle. Overall, one cycle performs the 
 
 \subsection{Example datasets and resistance map calculation}
 
-To demonstrate the functionality of our WASM toolset, a test region corresponding to a 1~$\text{km}^2$ region centered at
+To demonstrate the functionality of our Wasm toolset, a test region corresponding to a 1~$\text{km}^2$ region centered at
 286600E, 79050N (EPSG:27700 easting \& northing coordinate system) was selected.
 The region includes buildings, roads, and a river. Vector data was obtained from
 the UK Ordnance Survey open data \cite{os_data}.
@@ -297,10 +299,10 @@ For raster landscape feature resistance, we took the feature height as resistanc
 These parameters were arbitrary and chosen to introduce variation into the test resistance map inputted into current calculation.
 In practice, these parameters can be set freely.
 
-To keep the WASM toolset lightweight, we avoid heavy geospatial dependencies. For vector rasterisation, we use
+To keep the Wasm toolset lightweight, we avoid heavy geospatial dependencies. For vector rasterisation, we use
 the \texttt{geojson} and \texttt{geo} crates, which are lightweight and have no external dependencies. Handling vector inputs allows
-applications with vector data to use the WASM toolset directly, and interface cleanly with vector tile
-data such as MVT derived from mbtiles.
+applications with vector data to use the Wasm toolset directly, and interface cleanly with vector tile
+data.
 
 \subsection{Benchmarking}
 
@@ -310,7 +312,7 @@ Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be ru
 
 Two benchmarks were run. 
 In the first case, a resistance map was generated at $1000\times1000$ resolution, then downsampled to lower resolutions, and the analysis code was run with 5 repeats each.
-It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/WASM JIT compilation engine warm-up (`warm start').
+It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/Wasm JIT compilation engine warm-up (`warm start').
 
 For comparison with Circuitscape version 5.17.1, a configuration file was created with advanced mode, `cg+amg' solver and and run with both 4 threads and single-threaded mode.
 We also performed an assessment with Circuitscape version 5.11.2, which reports preconditioner building solver timing in addition to overall time. Version 5.17.1 does not
@@ -319,7 +321,7 @@ report this information, summarising only `complete job' time, which is less tha
 
 \subsection{Code}
 
-Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. Optimisation codes were written in Rust and compiled to WASM using 
+Code can be obtained at \url{https://github.com/asouthgate/wasm-connectivity}. Optimisation codes were written in Rust and compiled to Wasm using 
 \texttt{wasm-pack} \cite{wasm_pack_2024} and \texttt{wasm-bindgen} \cite{wasm_bindgen_2024}.
 This code contains several simple examples. All results can be easily reproduced by running the ReactJS \cite{reactjs} development server, clicking to the benchmark panel, running the benchmarks, and downloading the results.
 
@@ -333,7 +335,7 @@ the CG MG preconditioners were much faster than Jacobi preconditioning, while ta
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/resistance_current_react.png}
-\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with WASM connectivity library, computed in 6.52 seconds.}
+\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with Wasm connectivity library, computed in 6.52 seconds.}
 \label{fig:wasm-connectivity}
 \end{figure}
 
@@ -346,23 +348,28 @@ the CG MG preconditioners were much faster than Jacobi preconditioning, while ta
 \label{fig:benchmarking}
 \end{figure}
 
-Figure \ref{fig:comparison} shows a side-by-side comparison of a Circuitscape current map produced from
-the same resistance map input with a zero-volt ground, showing equivalent results (max absolute difference $<1e-5$).
+Figure \ref{fig:comparison} shows a side-by-side comparison of a rescaled Circuitscape current map produced from
+the same resistance map input with a zero-volt ground, showing equivalent results.
 
 \begin{figure}[htb!]
 \centering
-\includegraphics[width=1.0\textwidth]{figures/cs_vs_wasm.png}
-\caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape 5.11.2 preconditioner building plus solving took 2.48 seconds, versus 3.79 for WASM (Alcouffe). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. Circuitscape was tested with both 1 thread and 4 threads. }
-\label{fig:cs_runtime}
+\includegraphics[width=0.48\textwidth]{figures/cs_results_curmap.png}
+\hfill
+\includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_neumann.png}
+\caption{Side-by-side comparison showing log rescaled current maps produced by Circuitscape (left) and our implementation (right), to show consistency. 
+Current maps were rescaled to the range $[1, 100]$, and are shown with log colorbar. Max absolute difference $<10^{-5}$ rescaled units.}
+\label{fig:comparison}
 \end{figure}
+
 
 As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape 5.11.2 solve step is quicker than the presented
 WASM browser solvers. Circuitscape 5.17.1 does not report these steps individually.
 The average time for WASM (Alcouffe) was 3.79 seconds, compared to 2.48 seconds for the 
 preconditioner building and solve step in Circuitscape 5.11.2.
 However, the total wall-clock runtime of both tested versions of Circuitscape, including post-solving steps was over $8\times$ slower.
-Although we did not undertake extensive profiling of Circuitscape to determine the reasons for this, it is possible that
-the majority of the runtime was taken by post-processing and file writing.
+
+Although we did not undertake extensive profiling of Circuitscape to determine the reasons for the increase in time,
+it is possible that the majority of the runtime was taken by post-processing and file writing.
 For the test data, 4 threads did not offer much of a speed-up compared to the single-threaded case.
 In the web browser context which we use, presentation in 
 the browser is near-instantaneous.
@@ -371,16 +378,14 @@ circuitscape in a web-application context, even though the circuitscape solver i
 especially if the solver does not dominate the time taken for an
 analysis round trip from browser to server and back.
 
+
+
 \begin{figure}[htb!]
 \centering
-\includegraphics[width=0.48\textwidth]{figures/cs_results_curmap.png}
-\hfill
-\includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_neumann.png}
-\caption{Side-by-side comparison showing log current maps produced by Circuitscape (left) and our implementation (right), to show consistency. 
-Rescaled current shown with log colorbar. Max absolute difference $<1e-5$.}
-\label{fig:comparison}
+\includegraphics[width=1.0\textwidth]{figures/cs_vs_wasm.png}
+\caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape 5.11.2 preconditioner building plus solving took 2.48 seconds, versus 3.79 for WASM (Alcouffe). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. Circuitscape was tested with both 1 thread and 4 threads. }
+\label{fig:cs_runtime}
 \end{figure}
-
 
 
 \section{Discussion}
@@ -405,7 +410,7 @@ In addition, for front-end web applications, it is often important that data tra
 
 Some of the methods applicable in this paper, as image processing codes, could be suitable for GPU acceleration, such as through WebGPU. Dedicated GPU
 cards offer acceleration for highly parallel workloads. While dedicated GPU cards can be expensive and in short supply, consumer hardware often includes
-integrated GPU that can be exploited for acceleration provided a suitable workload. In addition, it is possible to implement multithreaded applications
+integrated GPU that can be exploited for acceleration provided they are given a suitable workload. In addition, it is possible to implement multithreaded applications
 using shared buffers and web workers, which could also be explored in future work.
 Future work could also explore alternative solver methods and optimisations for the browser context, such as using mixed-precision or SIMD instructions.
 
@@ -417,7 +422,7 @@ This paper was written by hand without LLM generation. Code and research was dev
 
 Alex Southgate: conceptualization; problem formulation; solver and geospatial pipeline implementation; paper writing; testing. Joanna Redihough: conceptualization, especially
 with respect to utility of frontend integration; front-end code; paper editing.
-Thomas Woolley: paper editing; conceptualization of improvements to benchmarking.
+Thomas E. Woolley: paper editing; conceptualization of improvements to benchmarking.
 
 \bibliographystyle{unsrt}
 \bibliography{refs} 
