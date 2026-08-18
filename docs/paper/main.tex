@@ -110,7 +110,7 @@ Equations \eqref{eq:balance1} and \eqref{eq:balance2} can be written in the form
 \label{eq:system}
 \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s},
 \end{equation}
-where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by either setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation, or by setting $\mathbf{L}_{jj}$ to $1$, off-diagonal to zero, and current $\mathbf{s}_j$ to zero for ground pixels. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected.
+where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by either setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation, or by setting $\mathbf{L}_{jj}$ to $1$, off-diagonals to zero, and current $\mathbf{s}_j$ to zero for ground pixels. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected.
 Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}.
 
 \subsection{Modes}
