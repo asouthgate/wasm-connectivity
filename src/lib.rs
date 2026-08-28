@@ -215,6 +215,15 @@ pub fn downsample_raster(
     json_response(&output)
 }
 
+#[derive(Serialize)]
+struct RasterizeOutput {
+    resistance_map: Vec<f64>,
+    layer_masks: Vec<geospatial::LayerMask>,
+    nrows: usize,
+    ncols: usize,
+    warnings: Vec<String>,
+}
+
 #[wasm_bindgen]
 pub fn rasterize_geojson(
     base_raster: Vec<f64>,
@@ -230,16 +239,14 @@ pub fn rasterize_geojson(
     let (resistance_data, layer_masks, warnings) = geospatial::prepare_geospatial_layers(
         &base_raster, nrows, ncols, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
     );
-    let mut map = serde_json::Map::new();
-    map.insert("resistance_map".to_string(), serde_json::Value::String(f64_to_base64(&resistance_data)));
-    let masks: Vec<serde_json::Value> = layer_masks.iter().map(|m| {
-        serde_json::json!({ "name": m.name, "data": f64_to_base64(&m.data) })
-    }).collect();
-    map.insert("layer_masks".to_string(), serde_json::Value::Array(masks));
-    map.insert("nrows".to_string(), serde_json::json!(nrows));
-    map.insert("ncols".to_string(), serde_json::json!(ncols));
-    map.insert("warnings".to_string(), serde_json::json!(warnings));
-    serde_json::to_string(&map).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
+    let output = RasterizeOutput {
+        resistance_map: resistance_data,
+        layer_masks,
+        nrows,
+        ncols,
+        warnings,
+    };
+    json_response(&output)
 }
 
 #[wasm_bindgen]
