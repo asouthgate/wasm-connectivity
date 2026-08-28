@@ -1,8 +1,7 @@
 use sprs::CsMat;
 use serde::Serialize;
 use std::collections::HashSet;
-use crate::{components, pcg as solver, current, grid, cache};
-use crate::ConnectivityOutput;
+use crate::{components, pcg as solver, current, cache};
 use crate::multigrid::{self, MgPreconditioner};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -101,230 +100,8 @@ pub struct AnnotatedOutput<T: Serialize> {
 }
 
 // ----------------------------------------------------------------------------
-// Point-source (pairwise) mode
-// ----------------------------------------------------------------------------
-
-pub fn compute_point_sources(
-    laplacian: &CsMat<f64>,
-    components: &[Vec<usize>],
-    focal_points: &[(i32, usize)],
-    cell_to_node: &[i32],
-    nrows: usize,
-    ncols: usize,
-    max_iter: usize,
-    tol: f64,
-) -> ConnectivityOutput {
-    compute_point_sources_inner(
-        laplacian, components, focal_points, cell_to_node, nrows, ncols,
-        max_iter, tol, None,
-    ).0
-}
-
-pub fn compute_point_sources_warm(
-    laplacian: &CsMat<f64>,
-    components: &[Vec<usize>],
-    focal_points: &[(i32, usize)],
-    cell_to_node: &[i32],
-    nrows: usize,
-    ncols: usize,
-    max_iter: usize,
-    tol: f64,
-    prior_voltages: Option<&[f64]>,
-) -> AnnotatedOutput<ConnectivityOutput> {
-    let (out, iters) = compute_point_sources_inner(
-        laplacian, components, focal_points, cell_to_node, nrows, ncols,
-        max_iter, tol, prior_voltages,
-    );
-    AnnotatedOutput { output: out, total_iters: iters }
-}
-
-fn compute_point_sources_inner(
-    laplacian: &CsMat<f64>,
-    components: &[Vec<usize>],
-    focal_points: &[(i32, usize)],
-    cell_to_node: &[i32],
-    nrows: usize,
-    ncols: usize,
-    max_iter: usize,
-    tol: f64,
-    prior_voltages: Option<&[f64]>,
-) -> (ConnectivityOutput, usize) {
-    let n = components.iter().map(|c| c.len()).sum::<usize>();
-    let num_points = focal_points.len();
-
-    let mut resistance_matrix = vec![vec![f64::NAN; num_points]; num_points];
-    for (i, row) in resistance_matrix.iter_mut().enumerate() {
-        row[i] = 0.0;
-    }
-
-    let mut cumulative_currents = vec![0.0f64; n];
-
-    let mut node_to_comp_id: Vec<usize> = vec![usize::MAX; n];
-    for (comp_id, comp) in components.iter().enumerate() {
-        for &node in comp {
-            node_to_comp_id[node] = comp_id;
-        }
-    }
-
-    let mut voltages_global = vec![0.0f64; n];
-    let mut node_current = Vec::new();
-    let mut pair_currents = Vec::new();
-
-    let mut comp_focal: Vec<(usize, usize)> = Vec::new();
-    let mut total_iters = 0usize;
-
-    for (comp_id, comp) in components.iter().enumerate() {
-        let comp_size = comp.len();
-
-        comp_focal.clear();
-        for (idx, (_id, node)) in focal_points.iter().enumerate() {
-            if node_to_comp_id[*node] == comp_id {
-                comp_focal.push((idx, *node));
-            }
-        }
-
-        if comp_focal.len() < 2 {
-            continue;
-        }
-
-        let (a_local, node_to_local) =
-            components::build_subgraph_laplacian(laplacian, comp);
-
-        for ii in 0..comp_focal.len() {
-            let (src_idx, src_node) = comp_focal[ii];
-
-            for &(dst_idx, dst_node) in &comp_focal[(ii + 1)..] {
-
-                node_current.clear();
-                node_current.resize(comp_size, 0.0);
-                let li_src = node_to_local[&src_node];
-                let li_dst = node_to_local[&dst_node];
-                node_current[li_src] = -1.0;
-                node_current[li_dst] = 1.0;
-
-                let local_seed = prior_voltages.map(|pv| {
-                    let mut seed = Vec::with_capacity(comp_size);
-                    for &gn in comp {
-                        seed.push(if gn < pv.len() { pv[gn] } else { 0.0 });
-                    }
-                    seed
-                });
-                let local_seed_ref = local_seed.as_ref().map(|s| s.as_slice());
-
-                let res = solver::cg_solve(&a_local, &node_current, max_iter, tol, local_seed_ref);
-                total_iters += res.iters;
-                let voltages_local = res.x;
-
-                let v_src = voltages_local[li_src];
-                let v_dst = voltages_local[li_dst];
-                let resistance = v_dst - v_src;
-
-                if resistance.is_finite() && resistance > 0.0 {
-                    resistance_matrix[src_idx][dst_idx] = resistance;
-                    resistance_matrix[dst_idx][src_idx] = resistance;
-                }
-
-                for slot in voltages_global.iter_mut().take(n) {
-                    *slot = 0.0;
-                }
-                for (li, &gn) in comp.iter().enumerate() {
-                    voltages_global[gn] = voltages_local[li] - v_src;
-                }
-
-                current::compute_node_current_map_into(laplacian, &voltages_global, &mut pair_currents);
-                for (cum, &pc) in cumulative_currents.iter_mut().zip(pair_currents.iter()).take(n) {
-                    *cum += pc;
-                }
-            }
-        }
-    }
-
-    let current_map = current::reconstruct_grid_map(&cumulative_currents, cell_to_node, nrows * ncols);
-    let point_ids: Vec<i32> = focal_points.iter().map(|(id, _)| *id).collect();
-
-    (
-        ConnectivityOutput {
-            resistance_matrix,
-            current_map,
-            nrows,
-            ncols,
-            point_ids,
-        },
-        total_iters,
-    )
-}
-
-// ----------------------------------------------------------------------------
 // Raster-source mode
 // ----------------------------------------------------------------------------
-
-/// Annotated variant of `compute_raster_sources` that returns the total
-/// PCG iteration count.
-pub fn compute_raster_sources_annotated(
-    resistance_data: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
-    max_iter: usize,
-    tol: f64,
-    remove_average: bool,
-    ground_mode: GroundMode,
-) -> AnnotatedOutput<RasterOutput> {
-    let (cell_to_node, num_nodes, _edges, laplacian, components) =
-        crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
-    let ground_nodes = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
-    let ground_set: HashSet<usize> = ground_nodes.iter().copied().collect();
-
-    // Declare the system matrix up front. Neumann adds finite ground
-    // (shunt) conductances to the diagonal; the rest of the algorithm runs
-    // on that single matrix. Dirichlet pinning happens per-component inside
-    // solve_component_voltages_warm.
-    let (a, lap_current, pin_grounds) = match ground_mode {
-        GroundMode::Neumann => {
-            let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
-            let a = if g.iter().any(|&x| x > 0.0) {
-                crate::laplacian::add_diagonal(&laplacian, &g)
-            } else {
-                laplacian.clone()
-            };
-            (a.clone(), a, false)
-        }
-        GroundMode::Dirichlet => (laplacian.clone(), laplacian, true),
-    };
-    let current_global = build_global_currents(
-        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
-    );
-    let (voltages_global, iters) = solve_component_voltages_warm(
-        &components, &current_global, &a,
-        num_nodes, max_iter, tol, remove_average, None,
-        &ground_set, pin_grounds,
-    );
-    let output = build_raster_output(&voltages_global, &lap_current, &cell_to_node, nrows, ncols);
-    AnnotatedOutput { output, total_iters: iters }
-}
-
-/// Cold raster-mode solve. Builds the circuit model from scratch and does
-/// not touch the warm-start cache. Bit-for-bit identical behaviour to the
-/// pre-warm-start implementation.
-pub fn compute_raster_sources(
-    resistance_data: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
-    max_iter: usize,
-    tol: f64,
-    remove_average: bool,
-    ground_mode: GroundMode,
-) -> RasterOutput {
-    compute_raster_sources_annotated(
-        resistance_data, nrows, ncols, nodata,
-        source_data, ground_data, max_iter, tol, remove_average, ground_mode,
-    ).output
-}
 
 /// Cached raster-mode solve. Uses the global cache (`cache` module):
 ///
@@ -391,31 +168,6 @@ pub fn solve_raster_cached(
     AnnotatedOutput { output: out, total_iters: iters }
 }
 
-/// Cached point-mode solve. Same `rebuild_laplacian` contract as
-/// `solve_raster_cached`.
-pub fn solve_point_cached(
-    resistance_data: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    point_data: &[i32],
-    max_iter: usize,
-    tol: f64,
-    rebuild_laplacian: bool,
-) -> AnnotatedOutput<ConnectivityOutput> {
-    let (laplacian, components, cell_to_node, _num_nodes) =
-        obtain_circuit_points(resistance_data, nrows, ncols, nodata, rebuild_laplacian);
-    let focal_points = grid::extract_focal_points(point_data, nrows, ncols, &cell_to_node);
-
-    let prior_voltages = cache::last_voltages();
-    let prior_slice = if prior_voltages.is_empty() { None } else { Some(prior_voltages.as_slice()) };
-
-    compute_point_sources_warm(
-        &laplacian, &components, &focal_points, &cell_to_node,
-        nrows, ncols, max_iter, tol, prior_slice,
-    )
-}
-
 // ----------------------------------------------------------------------------
 // Cache-aware circuit acquisition
 // ----------------------------------------------------------------------------
@@ -467,18 +219,6 @@ fn obtain_circuit(
     );
     let prior_out = if rebuild && !prior.is_empty() { Some(prior) } else { None };
     (laplacian, cell_to_node, num_nodes, components, prior_out)
-}
-
-fn obtain_circuit_points(
-    resistance_data: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    rebuild: bool,
-) -> (CsMat<f64>, Vec<Vec<usize>>, Vec<i32>, usize) {
-    let (laplacian, cell_to_node, num_nodes, components, _prior) =
-        obtain_circuit(resistance_data, nrows, ncols, nodata, rebuild);
-    (laplacian, components, cell_to_node, num_nodes)
 }
 
 // ----------------------------------------------------------------------------
@@ -798,25 +538,6 @@ fn build_raster_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid;
-
-    #[test]
-    fn test_pairwise_two_points() {
-        let (cell_to_node, _num_nodes, _edges, lap, comps) = crate::build_circuit_model(&[1.0; 25], 5, 5, crate::NODATA_SENTINEL);
-        let point_data = {
-            let mut p = vec![0i32; 25];
-            p[0] = 1;
-            p[24] = 2;
-            p
-        };
-        let points = grid::extract_focal_points(&point_data, 5, 5, &cell_to_node);
-        let result = compute_point_sources(&lap, &comps, &points, &cell_to_node, 5, 5, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL);
-
-        assert_eq!(result.point_ids.len(), 2);
-        assert_eq!(result.resistance_matrix.len(), 2);
-        assert!(result.resistance_matrix[0][1] > 0.0);
-        assert_eq!(result.resistance_matrix[0][0], 0.0);
-    }
 
     fn make_raster_inputs(size: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         let n = size * size;
@@ -853,10 +574,13 @@ mod tests {
             &src2, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
         ).output;
 
-        let cold2 = compute_raster_sources(
-            &res, size, size, crate::NODATA_SENTINEL,
-            &src2, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, GroundMode::Neumann,
-        );
+        let cold2 = {
+            cache::reset();
+            solve_raster_cached(
+                &res, size, size, crate::NODATA_SENTINEL,
+                &src2, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
+            ).output
+        };
 
         // The Laplacian is near-singular (constant vector null space), so
         // absolute voltages may differ by a constant shift between cold
@@ -890,10 +614,13 @@ mod tests {
             &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, true, GroundMode::Neumann,
         ).output;
 
-        let cold = compute_raster_sources(
-            &res, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, GroundMode::Neumann,
-        );
+        let cold = {
+            cache::reset();
+            solve_raster_cached(
+                &res, size, size, crate::NODATA_SENTINEL,
+                &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
+            ).output
+        };
 
         for i in 0..cold.current_map.len() {
             assert!((warm.current_map[i] - cold.current_map[i]).abs() < 1e-4,
