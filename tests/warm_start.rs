@@ -44,9 +44,10 @@ fn compute_all_current_maps() {
     for &(ground_mode, suffix) in &modes {
         // ---- Jacobi-preconditioned CG (original, component-based) ----
         let t0 = Instant::now();
-        let jacobi = solve::compute_raster_sources_annotated(
+        wasm_connect::cache::reset();
+        let jacobi = solve::solve_raster_cached(
             &resistance, base.nrows, base.ncols, base.nodata,
-            &src.data, &gnd.data, 100_000, 1e-6, true, ground_mode,
+            &src.data, &gnd.data, 100_000, 1e-6, true, false, ground_mode,
         );
         let t_jacobi = t0.elapsed();
         common::write_asc(

@@ -343,9 +343,7 @@ pub struct GeospatialOutput {
     pub nrows: usize,
     pub ncols: usize,
     pub warnings: Vec<String>,
-    /// Total PCG iterations across all component solves. `0` for the
-    /// uncached path which does not report iteration counts; populated
-    /// only by the cached warm-start variant.
+    /// Total PCG iterations across all component solves.
     pub total_iters: usize,
 }
 
@@ -384,102 +382,6 @@ pub fn prepare_geospatial_layers(
     (resistance_data, layer_masks, warnings)
 }
 
-/// Run the geospatial solver, returning the resistance map, current map, voltage map, and layer masks.
-///
-/// # Arguments
-///
-/// * `base_raster` - The base resistance raster data.
-/// * `nrows` - Number of rows in the raster.
-/// * `ncols` - Number of columns in the raster.
-/// * `nodata` - The nodata value in the raster.
-/// * `geojson_str` - The GeoJSON string containing features to rasterize.
-/// * `layer_params_str` - The JSON string containing layer parameters (resistance and width).
-/// * `xmin` - The minimum x-coordinate (longitude) of the raster.
-/// * `ymax` - The maximum y-coordinate (latitude) of the raster.
-/// * `cellsize` - The size of each cell in the raster.
-/// * `source_data` - The source current raster data.
-/// * `ground_data` - The ground current raster data.
-/// * `max_iter` - Maximum iterations for the solver.
-/// * `tol` - Tolerance for the solver convergence.
-pub fn run_geospatial_pipeline(
-    base_raster: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    geojson_str: &str,
-    layer_params_str: &str,
-    xmin: f64,
-    ymax: f64,
-    cellsize: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
-    max_iter: usize,
-    tol: f64,
-    ground_mode: crate::solve::GroundMode,
-) -> GeospatialOutput {
-    let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
-        base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
-    );
-
-    let raster_output = crate::solve::compute_raster_sources(
-        &resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, true, ground_mode,
-    );
-
-    GeospatialOutput {
-        resistance_map: resistance_data,
-        current_map: raster_output.current_map,
-        voltage_map: raster_output.voltages,
-        layer_masks,
-        nrows: raster_output.nrows,
-        ncols: raster_output.ncols,
-        warnings,
-        total_iters: 0,
-    }
-}
-
-/// Cached variant of `run_geospatial_pipeline` that routes the solve
-/// through `solve::solve_raster_cached` and reports the total PCG
-/// iteration count. See that function's docs for the
-/// `rebuild_laplacian` contract.
-pub fn run_geospatial_pipeline_cached(
-    base_raster: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    geojson_str: &str,
-    layer_params_str: &str,
-    xmin: f64,
-    ymax: f64,
-    cellsize: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
-    max_iter: usize,
-    tol: f64,
-    rebuild_laplacian: bool,
-    ground_mode: crate::solve::GroundMode,
-) -> GeospatialOutput {
-    let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
-        base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
-    );
-
-    let annotated = crate::solve::solve_raster_cached(
-        &resistance_data, nrows, ncols, nodata,
-        source_data, ground_data, max_iter, tol, true,
-        rebuild_laplacian, ground_mode,
-    );
-
-    GeospatialOutput {
-        resistance_map: resistance_data,
-        current_map: annotated.output.current_map,
-        voltage_map: annotated.output.voltages,
-        layer_masks,
-        nrows: annotated.output.nrows,
-        ncols: annotated.output.ncols,
-        warnings,
-        total_iters: annotated.total_iters,
-    }
-}
-
 pub fn run_geospatial_pipeline_cached_mg(
     base_raster: &[f64],
     nrows: usize,
@@ -501,43 +403,6 @@ pub fn run_geospatial_pipeline_cached_mg(
     );
 
     let annotated = crate::solve::solve_raster_sources_mg(
-        &resistance_data, nrows, ncols, nodata,
-        source_data, ground_data, max_iter, tol, true, ground_mode,
-    );
-
-    GeospatialOutput {
-        resistance_map: resistance_data,
-        current_map: annotated.output.current_map,
-        voltage_map: annotated.output.voltages,
-        layer_masks,
-        nrows: annotated.output.nrows,
-        ncols: annotated.output.ncols,
-        warnings,
-        total_iters: annotated.total_iters,
-    }
-}
-
-pub fn run_geospatial_pipeline_cached_mg_alcouffe(
-    base_raster: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    geojson_str: &str,
-    layer_params_str: &str,
-    xmin: f64,
-    ymax: f64,
-    cellsize: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
-    max_iter: usize,
-    tol: f64,
-    ground_mode: crate::solve::GroundMode,
-) -> GeospatialOutput {
-    let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
-        base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
-    );
-
-    let annotated = crate::solve::solve_raster_sources_mg_alcouffe(
         &resistance_data, nrows, ncols, nodata,
         source_data, ground_data, max_iter, tol, true, ground_mode,
     );

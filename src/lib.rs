@@ -13,7 +13,7 @@ pub mod cholesky;
 pub mod resistance;
 
 use wasm_bindgen::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
@@ -67,15 +67,6 @@ pub fn build_circuit_model(resistance_data: &[f64], nrows: usize, ncols: usize, 
     let laplacian = laplacian::build_laplacian(&edges, num_nodes);
     let components = components::find_connected_components(&laplacian, num_nodes);
     (cell_to_node, num_nodes, edges, laplacian, components)
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ConnectivityOutput {
-    pub resistance_matrix: Vec<Vec<f64>>,
-    pub current_map: Vec<f64>,
-    pub nrows: usize,
-    pub ncols: usize,
-    pub point_ids: Vec<i32>,
 }
 
 #[wasm_bindgen(start)]
@@ -294,124 +285,13 @@ pub fn run_resistance_pipeline_browser(
     serde_json::to_string(&map).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
 }
 
-#[allow(dead_code)]
-fn compute_points(
-    resistance_data: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    point_data: Vec<i32>,
-    max_iter: usize,
-    tol: f64,
-) -> ConnectivityOutput {
-    let (cell_to_node, _num_nodes, _edges, laplacian, components) = build_circuit_model(resistance_data, nrows, ncols, nodata);
-
-    let focal_points = grid::extract_focal_points(&point_data, nrows, ncols, &cell_to_node);
-
-    let result = solve::compute_point_sources(
-        &laplacian,
-        &components,
-        &focal_points,
-        &cell_to_node,
-        nrows,
-        ncols,
-        max_iter,
-        tol,
-    );
-
-    ConnectivityOutput {
-        resistance_matrix: result.resistance_matrix,
-        current_map: result.current_map,
-        nrows: result.nrows,
-        ncols: result.ncols,
-        point_ids: result.point_ids,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_uniform_resistance_grid(size: usize, resistance: f64) -> (Vec<f64>, Vec<i32>) {
-        let n = size * size;
-        let res_data = vec![resistance; n];
-        let mut point_data = vec![0i32; n];
-        point_data[0] = 1;
-        point_data[n - 1] = 2;
-        (res_data, point_data)
-    }
-
-    fn make_corridor_grid() -> (Vec<f64>, Vec<i32>) {
-        let size = 10;
-        let n = size * size;
-        let mut res_data = vec![10.0f64; n];
-        for row in 0..size {
-            for col in 0..size {
-                if col == 5 {
-                    res_data[row * size + col] = 1.0;
-                }
-            }
-        }
-
-        let mut point_data = vec![0i32; n];
-        point_data[0] = 1;
-        point_data[n - 1] = 2;
-
-        (res_data, point_data)
-    }
-
-    #[test]
-    fn test_uniform_grid_resistance() {
-        let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
-        let output = compute_points(&res_data, 5, 5, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
-
-        assert_eq!(output.point_ids.len(), 2);
-        assert_eq!(output.resistance_matrix.len(), 2);
-        assert_eq!(output.resistance_matrix[0].len(), 2);
-
-        let r = output.resistance_matrix[0][1];
-        assert!(r > 0.0, "Resistance should be positive, got {}", r);
-        assert_eq!(
-            output.resistance_matrix[1][0], r,
-            "Resistance matrix must be symmetric"
-        );
-        assert_eq!(output.resistance_matrix[0][0], 0.0);
-        assert_eq!(output.resistance_matrix[1][1], 0.0);
-    }
-
-    #[test]
-    fn test_uniform_current_map_symmetry() {
-        let (res_data, point_data) = make_uniform_resistance_grid(5, 1.0);
-        let output = compute_points(&res_data, 5, 5, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
-
-        assert_eq!(output.current_map.len(), 25);
-        let has_current = output.current_map.iter().any(|&v| v > 0.0);
-        assert!(has_current, "Current map should have non-zero values");
-    }
-
-    #[test]
-    fn test_corridor_grid() {
-        let (res_data, point_data) = make_corridor_grid();
-        let output = compute_points(&res_data, 10, 10, NODATA_SENTINEL, point_data, DEFAULT_MAX_ITER, DEFAULT_TOL);
-
-        assert!(output.resistance_matrix[0][1] > 0.0);
-
-        let mid_row = 5;
-        let col_low_res = output.current_map[mid_row * 10];
-        let col_low_res2 = output.current_map[mid_row * 10 + 9];
-        let col_high_res = output.current_map[mid_row * 10 + 5];
-
-        assert!(
-            col_high_res > col_low_res,
-            "Current should be higher through low-resistance corridor: corridor={}, edge_left={}, edge_right={}",
-            col_high_res,
-            col_low_res,
-            col_low_res2
-        );
-    }
-
     #[test]
     fn test_raster_edge_to_edge() {
+        cache::reset();
         let size = 10;
         let n = size * size;
         let res_data = vec![1.0f64; n];
@@ -421,10 +301,10 @@ mod tests {
             source_data[row * size] = 1.0;
             ground_data[row * size + (size - 1)] = 1.0;
         }
-        let output = solve::compute_raster_sources(
+        let output = solve::solve_raster_cached(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Neumann,
-        );
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Neumann,
+        ).output;
         assert_eq!(output.voltages.len(), n);
         assert_eq!(output.current_map.len(), n);
         let has_current = output.current_map.iter().any(|&v| v > 0.0);
@@ -435,6 +315,7 @@ mod tests {
 
     #[test]
     fn test_raster_center_source() {
+        cache::reset();
         let size = 10;
         let n = size * size;
         let res_data = vec![1.0f64; n];
@@ -448,10 +329,10 @@ mod tests {
                 }
             }
         }
-        let output = solve::compute_raster_sources(
+        let output = solve::solve_raster_cached(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Neumann,
-        );
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Neumann,
+        ).output;
         let center_voltage = output.voltages[5 * size + 5];
         assert!(
             center_voltage > 0.0,

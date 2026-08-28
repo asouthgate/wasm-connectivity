@@ -1,5 +1,5 @@
 use sprs::CsMat;
-use crate::pcg::{self, Preconditioner, mat_vec_mul_slice};
+use crate::pcg::{Preconditioner, mat_vec_mul_slice};
 use crate::cholesky;
 use crate::solve::apply_dirichlet_ground_lap;
 use std::cell::RefCell;
@@ -622,14 +622,10 @@ fn symmetric_gauss_seidel_smooth(
     }
 }
 
-#[allow(dead_code)]
-fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
-    pcg::mat_vec_mul_into(a, v, out);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pcg;
 
     // Helper to generate safe mock resistance data for a uniform grid
     fn generate_mock_resistance(nrows: usize, ncols: usize) -> Vec<f64> {
@@ -655,8 +651,8 @@ mod tests {
         
         let mut ax = vec![0.0; n];
         let mut ay = vec![0.0; n];
-        mat_vec_mul_into(&mg.levels[0].laplacian, &x, &mut ax);
-        mat_vec_mul_into(&mg.levels[0].laplacian, &y, &mut ay);
+        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &x, &mut ax);
+        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &y, &mut ay);
         let dot_x_ay: f64 = x.iter().zip(ay.iter()).map(|(a, b)| a * b).sum();
         let dot_y_ax: f64 = y.iter().zip(ax.iter()).map(|(a, b)| a * b).sum();
         assert!((dot_x_ay - dot_y_ax).abs() < 1e-7, "Fine matrix A is asymmetric!");
@@ -702,7 +698,7 @@ mod tests {
             mg.apply(&r, &mut z);
 
             let mut az = vec![0.0; n];
-            mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             if z_az.abs() < 1e-30 {
                 break;
@@ -839,7 +835,7 @@ mod tests {
         let z = crate::cholesky::cholesky_solve(l, &b, n);
 
         let mut az = vec![0.0; n];
-        mat_vec_mul_into(&lvl.laplacian, &z, &mut az);
+        pcg::mat_vec_mul_into(&lvl.laplacian, &z, &mut az);
 
         let mut max_err = 0.0;
         for i in 0..n {
@@ -910,7 +906,7 @@ mod tests {
         mg.apply(&b, &mut z);
 
         let mut az = vec![0.0; comp_size];
-        mat_vec_mul_into(&a_local, &z, &mut az);
+        pcg::mat_vec_mul_into(&a_local, &z, &mut az);
         let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
         let rz: f64 = b.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
 
@@ -952,7 +948,7 @@ mod tests {
         mg.apply(&b, &mut z);
 
         let mut az = vec![0.0; n];
-        mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
         let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
         let rz: f64 = b.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
 
@@ -1079,7 +1075,7 @@ mod tests {
         let x = crate::cholesky::cholesky_solve(l, &b, n);
 
         let mut ax = vec![0.0; n];
-        mat_vec_mul_into(&lvl.laplacian, &x, &mut ax);
+        pcg::mat_vec_mul_into(&lvl.laplacian, &x, &mut ax);
 
         let mut max_err = 0.0;
         for i in 0..n {
@@ -1147,7 +1143,7 @@ mod tests {
             mg.apply(&r, &mut z);
 
             let mut az = vec![0.0; n];
-            mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             let rz: f64 = r.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
             eprintln!("  iter {}: ||r||={:.4e} r·z={:.4e} z·Az={:.4e}",
@@ -1219,7 +1215,7 @@ mod tests {
             mg.apply(&r, &mut z);
 
             let mut az = vec![0.0; n];
-            mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             let rz: f64 = r.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
 
@@ -1375,7 +1371,7 @@ mod tests {
             mg.apply(&r, &mut z);
 
             let mut az = vec![0.0; n];
-            mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             let rz: f64 = r.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
 
@@ -1423,8 +1419,8 @@ mod tests {
 
         let mut ax = vec![0.0; n];
         let mut ay = vec![0.0; n];
-        mat_vec_mul_into(&mg.levels[0].laplacian, &x, &mut ax);
-        mat_vec_mul_into(&mg.levels[0].laplacian, &y, &mut ay);
+        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &x, &mut ax);
+        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &y, &mut ay);
         let dot_x_ay: f64 = x.iter().zip(ay.iter()).map(|(a, b)| a * b).sum();
         let dot_y_ax: f64 = y.iter().zip(ax.iter()).map(|(a, b)| a * b).sum();
         assert!((dot_x_ay - dot_y_ax).abs() < 1e-7, "Fine matrix A is asymmetric!");
