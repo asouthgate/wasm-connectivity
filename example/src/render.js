@@ -40,29 +40,36 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
   const ctx = canvas.getContext('2d');
   const img = ctx.createImageData(w, h);
 
-  let minV = Infinity, maxV = -Infinity;
   let minRaw = Infinity, maxRaw = -Infinity;
   for (const v of data) {
     if (v === nodata || isNaN(v)) continue;
     if (v < minRaw) minRaw = v;
     if (v > maxRaw) maxRaw = v;
-    const t = logScale && v > 0 ? Math.log10(v) : v;
-    if (t < minV) minV = t;
-    if (t > maxV) maxV = t;
   }
-  if (!isFinite(minV)) minV = 0;
-  if (!isFinite(maxV)) maxV = 1;
-  if (maxV <= minV) maxV = minV + 1;
+  if (!isFinite(minRaw)) minRaw = 0;
+  if (!isFinite(maxRaw)) maxRaw = 1;
+  if (maxRaw <= minRaw) maxRaw = minRaw + 1;
 
-  const min = minV, max = maxV;
+  const span = maxRaw - minRaw;
   const stops = plasma ? PLASMA_STOPS : VIRIDIS_STOPS;
   for (let r = 0; r < nrows; r++) {
     for (let c = 0; c < ncols; c++) {
       const v = data[r * ncols + c];
       let rr = 17, gg = 17, bb = 17;
       if (v !== nodata && !isNaN(v)) {
-        const t = logScale && v > 0 ? Math.log10(v) : v;
-        const s = (t - min) / (max - min);
+        let s;
+        if (logScale && v > 0) {
+          // Rescale raw values to [1, 100] then take log10 (∈ [0, 2]),
+          // matching the paper's tif2png.py rendering. Normalising the raw
+          // values first (instead of min/max on log10) keeps the skewed
+          // low-current bulk from collapsing into one colour.
+          const scaled = 1 + ((v - minRaw) / span) * 99;
+          s = Math.log10(scaled) / 2;
+        } else {
+          s = (v - minRaw) / span;
+        }
+        if (s < 0) s = 0;
+        else if (s > 1) s = 1;
         [rr, gg, bb] = colorFromStops(s, stops);
       }
       for (let dy = 0; dy < scale; dy++) {
