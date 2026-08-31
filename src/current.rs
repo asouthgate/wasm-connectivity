@@ -1,5 +1,81 @@
 use sprs::CsMat;
 
+fn _compute_current_nbr_contribution(
+    r1: f64, r2: f64, v1: f64, v2: f64,
+    current_sum_pos: &mut f64, current_sum_neg: &mut f64
+) -> f64 {
+    let avg_res = (r1 + r2) / 2.0;
+    let dv = v1 - v2;
+    let current_contribution = dv / avg_res;
+    if current_contribution > 0.0 {
+        *current_sum_pos += current_contribution;
+    } else {
+        *current_sum_neg -= current_contribution;
+    }
+    current_contribution
+}
+
+/// Simple function to compute current from voltages and resistances.
+pub fn compute_node_current_map_into2(
+    resistance_data: &[f64],
+    voltages: &[f64],
+    nrows: usize,
+    ncols: usize,
+    out: &mut Vec<f64>
+) {
+    for ind in 0..out.len() {
+        let mut current_sum_pos = 0.0;
+        let mut current_sum_neg = 0.0;
+        let res = resistance_data[ind];
+        let voltage = voltages[ind];
+        // current must be computed as voltages / resistance
+        // summed over all neighbors
+        // so now iterate over neighbors:
+        // upper neighbor
+        let mut nbr_ind;
+        
+        // upper neighbor
+        if ind >= ncols {
+            nbr_ind = ind - ncols;
+            _compute_current_nbr_contribution(
+                res, resistance_data[nbr_ind], voltage, voltages[nbr_ind],
+                &mut current_sum_pos, &mut current_sum_neg
+            );
+        }
+
+        // lower neighbor
+        if ind < (nrows - 1) * ncols {
+            nbr_ind = ind + ncols;
+            _compute_current_nbr_contribution(
+                res, resistance_data[nbr_ind], voltage, voltages[nbr_ind],
+                &mut current_sum_pos, &mut current_sum_neg
+            );        
+        }
+
+        // left neighbor
+        if ind % ncols != 0 {
+            nbr_ind = ind - 1;
+            _compute_current_nbr_contribution(
+                res, resistance_data[nbr_ind], voltage, voltages[nbr_ind],
+                &mut current_sum_pos, &mut current_sum_neg
+            );
+        }
+
+        // right neighbor
+        if (ind + 1) % ncols != 0 {
+            nbr_ind = ind + 1;
+            _compute_current_nbr_contribution(
+                res, resistance_data[nbr_ind], voltage, voltages[nbr_ind],
+                &mut current_sum_pos, &mut current_sum_neg
+            );
+        }
+
+        out[ind] = current_sum_pos.max(current_sum_neg);
+        
+    }
+
+}
+
 /// Compute the current map for each node in the graph given the Laplacian matrix and the node voltages.
 ///
 /// The matrix may be a pure graph Laplacian `L`, or a full system matrix

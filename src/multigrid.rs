@@ -240,10 +240,6 @@ pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Hierarchy construction
-// ---------------------------------------------------------------------------
-
 /// Which prolongation operator to use during Galerkin coarsening.
 #[derive(Copy, Clone, PartialEq)]
 enum ProlongKind {

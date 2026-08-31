@@ -427,7 +427,23 @@ pub fn solve_raster_sources_mg_alcouffe(
     }
     let res = solver::cg_solve_precond(&a, &b, max_iter, tol, None, &mg);
 
-    let out = build_raster_output(&res.x, &lap_current, &cell_to_node, nrows, ncols);
+    // let out = build_raster_output(&res.x, &lap_current, &cell_to_node, nrows, ncols);
+
+    let voltage_map = current::reconstruct_grid_map(&res.x, &cell_to_node, nrows * ncols);
+
+    let mut output_current = vec![0.0f64; nrows * ncols];
+    current::compute_node_current_map_into2(
+        resistance_data, &voltage_map, nrows, ncols, &mut output_current
+    );
+
+
+    let out = RasterOutput {
+        voltages: voltage_map,
+        current_map: output_current,
+        nrows,
+        ncols,
+    };
+
 
     AnnotatedOutput { output: out, total_iters: res.iters }
 }
