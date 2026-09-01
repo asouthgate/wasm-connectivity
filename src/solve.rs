@@ -143,17 +143,17 @@ pub fn solve_raster_cached(
         .as_ref()
         .map(|v| v.as_slice())
         .filter(|v| !v.is_empty());
-    let (a, lap_current, pin_grounds) = match ground_mode {
+    let (a, pin_grounds) = match ground_mode {
         GroundMode::Neumann => {
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             let a = if g.iter().any(|&x| x > 0.0) {
                 crate::laplacian::add_diagonal(&laplacian, &g)
             } else {
-                laplacian.clone()
+                laplacian
             };
-            (a.clone(), a, false)
+            (a, false)
         }
-        GroundMode::Dirichlet => (laplacian.clone(), laplacian, true),
+        GroundMode::Dirichlet => (laplacian, true),
     };
     let (voltages_global, iters) = solve_component_voltages_warm(
         &components, &current_global, &a,
@@ -161,7 +161,10 @@ pub fn solve_raster_cached(
         &ground_set, pin_grounds,
     );
 
-    let out = build_raster_output(&voltages_global, &lap_current, &cell_to_node, nrows, ncols);
+    let out = build_raster_output(
+        &voltages_global, resistance_data, ground_data,
+        &cell_to_node, nrows, ncols, nodata, ground_mode,
+    );
 
     cache::store_last_voltages(&out.voltages);
 
@@ -314,16 +317,16 @@ pub fn solve_raster_sources_mg(
     // pins ground nodes at V=0. The MG hierarchy is built from the same
     // matrix, so Galerkin coarsening propagates ground effects to all levels.
     let grounds_present;
-    let (a, lap_current, mut b) = match ground_mode {
+    let (a, mut b) = match ground_mode {
         GroundMode::Neumann => {
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             grounds_present = g.iter().any(|&x| x > 0.0);
             let a = if grounds_present {
                 crate::laplacian::add_diagonal(&laplacian, &g)
             } else {
-                laplacian.clone()
+                laplacian
             };
-            (a.clone(), a, current_global)
+            (a, current_global)
         }
         GroundMode::Dirichlet => {
             let gns = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
@@ -331,11 +334,11 @@ pub fn solve_raster_sources_mg(
             let a = if grounds_present {
                 apply_dirichlet_ground_lap(&laplacian, &gns)
             } else {
-                laplacian.clone()
+                laplacian
             };
             let mut b = current_global;
             zero_ground_rhs(&mut b, &gns);
-            (a, laplacian, b)
+            (a, b)
         }
     };
 
@@ -354,7 +357,10 @@ pub fn solve_raster_sources_mg(
     }
     let res = solver::cg_solve_precond(&a, &b, max_iter, tol, None, &mg);
 
-    let out = build_raster_output(&res.x, &lap_current, &cell_to_node, nrows, ncols);
+    let out = build_raster_output(
+        &res.x, resistance_data, ground_data,
+        &cell_to_node, nrows, ncols, nodata, ground_mode,
+    );
 
     AnnotatedOutput { output: out, total_iters: res.iters }
 }
@@ -387,30 +393,32 @@ pub fn solve_raster_sources_mg_alcouffe(
 
     // Declare the system matrix up front (see solve_raster_sources_mg).
     let grounds_present;
-    let (a, lap_current, mut b, mg_weights) = match ground_mode {
+    let (a, mut b, mg_weights) = match ground_mode {
         GroundMode::Neumann => {
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             grounds_present = g.iter().any(|&x| x > 0.0);
             let a = if grounds_present {
                 crate::laplacian::add_diagonal(&laplacian, &g)
             } else {
-                laplacian.clone()
+                laplacian
             };
-            (a.clone(), a, current_global, None)
+            (a, current_global, None)
         }
         GroundMode::Dirichlet => {
             let gns = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
             grounds_present = !gns.is_empty();
             // Alcouffe prolongation weights come from the un-pinned Laplacian;
-            // identity rows at ground nodes would corrupt them.
-            let a = if grounds_present {
-                apply_dirichlet_ground_lap(&laplacian, &gns)
+            // identity rows at ground nodes would corrupt them. Keep it only
+            // when pinning actually happens (no grounds -> `a` is already the
+            // un-pinned Laplacian).
+            let (a, weights) = if grounds_present {
+                (apply_dirichlet_ground_lap(&laplacian, &gns), Some(laplacian))
             } else {
-                laplacian.clone()
+                (laplacian, None)
             };
             let mut b = current_global;
             zero_ground_rhs(&mut b, &gns);
-            (a, laplacian.clone(), b, Some(laplacian))
+            (a, b, weights)
         }
     };
 
@@ -427,7 +435,10 @@ pub fn solve_raster_sources_mg_alcouffe(
     }
     let res = solver::cg_solve_precond(&a, &b, max_iter, tol, None, &mg);
 
-    let out = build_raster_output(&res.x, &lap_current, &cell_to_node, nrows, ncols);
+    let out = build_raster_output(
+        &res.x, resistance_data, ground_data,
+        &cell_to_node, nrows, ncols, nodata, ground_mode,
+    );
 
     AnnotatedOutput { output: out, total_iters: res.iters }
 }
@@ -518,14 +529,24 @@ fn solve_component_voltages_warm(
 
 fn build_raster_output(
     voltages_global: &[f64],
-    laplacian: &CsMat<f64>,
+    resistance_data: &[f64],
+    ground_data: &[f64],
     cell_to_node: &[i32],
     nrows: usize,
     ncols: usize,
+    nodata: f64,
+    ground_mode: GroundMode,
 ) -> RasterOutput {
-    let node_currents = current::compute_node_current_map(laplacian, voltages_global);
-    let current_map = current::reconstruct_grid_map(&node_currents, cell_to_node, nrows * ncols);
     let voltage_map = current::reconstruct_grid_map(voltages_global, cell_to_node, nrows * ncols);
+    let current_map = current::compute_current_map_from_raster(
+        resistance_data,
+        ground_data,
+        &voltage_map,
+        nrows,
+        ncols,
+        nodata,
+        ground_mode == GroundMode::Neumann,
+    );
 
     RasterOutput {
         voltages: voltage_map,

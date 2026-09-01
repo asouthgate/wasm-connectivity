@@ -1,6 +1,6 @@
 [package]
 name = "wasm-connect"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [lib]
@@ -15,14 +15,24 @@ console_error_panic_hook = "0.1"
 geo = "0.28"
 geojson = "0.24"
 tiff = { version = "0.9", optional = true }
+image = { version = "0.25", optional = true }
 
 [features]
-bin = ["tiff"]
+bin = ["tiff", "image"]
 
 [[bin]]
 name = "resistance-pipeline"
 path = "src/bin/resistance_pipeline.rs"
 required-features = ["bin"]
 
+[[bin]]
+name = "prof-solve"
+path = "src/bin/prof_solve.rs"
+required-features = ["bin"]
+
 [dev-dependencies]
 image = "0.25"
+
+[profile.release-prof]
+inherits = "release"
+debug = 1

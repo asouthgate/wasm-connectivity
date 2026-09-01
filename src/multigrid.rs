@@ -32,10 +32,6 @@ pub struct MgPreconditioner {
     workspaces: RefCell<Vec<LevelWorkspace>>, 
 }
 
-// ---------------------------------------------------------------------------
-// Prolongation matrix for Galerkin coarsening
-// ---------------------------------------------------------------------------
-
 /// Build a sparse prolongation matrix P: coarse → fine.
 /// Uses bilinear interpolation: each coarse cell contributes to a 4×4
 /// block of fine cells with weights derived from the tensor product of
@@ -103,9 +99,77 @@ fn restrict_sparse(rows: &[usize], cols: &[usize], vals: &[f64], fine: &[f64], c
     }
 }
 
-// ---------------------------------------------------------------------------
-// Matrix-dependent (Alcouffe) prolongation
-// ---------------------------------------------------------------------------
+/// Galerkin coarse operator: `L_coarse = P^T * L_fine * P`.
+///
+/// Why we roll by hand? Because `P^T * L_fine * P` is 
+// sparse-sparse-sparse product, and the intermediate `L_fine * P` is 
+// much denser than the output and wastes several hundred MB for 1000x1000
+//
+/// Two-pass: pass 1 compute indices, step2 fill values
+fn galerkin_coarsen(fine_lap: &CsMat<f64>, p: &CsMat<f64>, coarse_n: usize) -> CsMat<f64> {
+    let p_csc = p.to_csc();
+
+    // Pass 1; we do this instead of hash map
+    let mut seen = vec![usize::MAX; coarse_n];
+    let mut row_nnz = vec![0usize; coarse_n];
+    for i in 0..coarse_n {
+        let Some(pcol) = p_csc.outer_view(i) else { continue };
+        for (a, _) in pcol.iter() {
+            let Some(la) = fine_lap.outer_view(a) else { continue };
+            for (b, _) in la.iter() {
+                if let Some(pb) = p.outer_view(b) {
+                    for (j, _) in pb.iter() {
+                        if seen[j] != i {
+                            seen[j] = i;
+                            row_nnz[i] += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Exact-sized CSR layout from the symbolic counts.
+    let mut indptr = vec![0usize; coarse_n + 1];
+    for i in 0..coarse_n {
+        indptr[i + 1] = indptr[i] + row_nnz[i];
+    }
+    let nnz = indptr[coarse_n];
+
+    // Pass 2: do the actual multiply (scatter, not gather) to avoid intermediate dense matrix
+    // this is not like usual mat-mat mult, it's inside-out instead
+    let mut seen = vec![usize::MAX; coarse_n];
+    let mut pos = vec![0usize; coarse_n];
+    let mut row_count = vec![0usize; coarse_n];
+    let mut cols = vec![0usize; nnz];
+    let mut vals = vec![0.0f64; nnz];
+    for i in 0..coarse_n {
+        let Some(pcol) = p_csc.outer_view(i) else { continue };
+        for (a, &p_ai) in pcol.iter() {
+            let Some(la) = fine_lap.outer_view(a) else { continue };
+            for (b, &l_ab) in la.iter() {
+                if let Some(pb) = p.outer_view(b) {
+                    for (j, &p_bj) in pb.iter() {
+                        let slot = if seen[j] != i {
+                            seen[j] = i;
+                            let s = indptr[i] + row_count[i];
+                            row_count[i] += 1;
+                            pos[j] = s;
+                            cols[s] = j;
+                            vals[s] = 0.0;
+                            s
+                        } else {
+                            pos[j]
+                        };
+                        vals[slot] += p_ai * l_ab * p_bj;
+                    }
+                }
+            }
+        }
+    }
+
+    CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
+}
 
 fn get_conductance(lap: &CsMat<f64>, r1: usize, c1: usize, r2: usize, c2: usize, ncols: usize) -> f64 {
     let idx1 = r1 * ncols + c1;
@@ -240,10 +304,6 @@ pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Hierarchy construction
-// ---------------------------------------------------------------------------
-
 /// Which prolongation operator to use during Galerkin coarsening.
 #[derive(Copy, Clone, PartialEq)]
 enum ProlongKind {
@@ -339,10 +399,8 @@ impl MgPreconditioner {
             let p_tri = sprs::TriMat::from_triplets((fine_n, coarse_n), p_rows.clone(), p_cols.clone(), p_vals.clone());
             let p = p_tri.to_csr();
 
-            // Galerkin: L_coarse = P^T * L_fine * P
-            let pt = p.transpose_view().to_csr();
-            let pt_lap = sprs::smmp::mul_csr_csr::<f64, f64, f64, usize, usize>(pt.view(), fine_lap.view());
-            let mut laplacian = sprs::smmp::mul_csr_csr::<f64, f64, f64, usize, usize>(pt_lap.view(), p.view());
+            // Galerkin: L_coarse = P^T * L_fine * P (fused, no intermediate)
+            let mut laplacian = galerkin_coarsen(fine_lap, &p, coarse_n);
             crate::laplacian::regularize_laplacian(&mut laplacian);
 
             levels.push(MgLevel {
@@ -391,10 +449,6 @@ impl MgPreconditioner {
             workspaces: RefCell::new(workspaces),
         }
     }
-
-    // -----------------------------------------------------------------------
-    // V-cycle
-    // -----------------------------------------------------------------------
 
     fn v_cycle(&self, workspaces: &RefCell<Vec<LevelWorkspace>>, b: &[f64], level: usize) {
         let lvl = &self.levels[level];

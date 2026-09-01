@@ -1,78 +1,96 @@
-use sprs::CsMat;
-
-/// Compute the current map for each node in the graph given the Laplacian matrix and the node voltages.
+/// Compute the per-cell current map directly from the resistance raster and
+/// the (per-cell) voltage map.
 ///
-/// The matrix may be a pure graph Laplacian `L`, or a full system matrix
-/// `L + G` where `G` is a diagonal of finite ground (shunt) conductances.
-/// In the latter case the shunt conductance at each node is recovered as
-/// `A[i,i] - Σ_j≠i |A[i,j]|` (exactly zero for a pure graph Laplacian), and
-/// the resulting ground current `G[i]·V[i]` is counted like any other branch
-/// current. No separate ground vector is required.
+/// The current between two adjacent cells `i` and `j` is
+///
+/// `I_ij = 2 (V_i - V_j) / (r_i + r_j)`,
+///
+/// The effective resistance is the arithmetic
+/// mean `(r_i + r_j) / 2`) (would be harmonic for conductances). 
+/// For each cell the map reports the flow magnitude `max(out-flow, in-flow)`.
+///
+/// Cells whose resistance is nodata, non-finite, or non-positive are treated
+/// as non-conductive: they contribute zero current and edges to them are
+/// skipped.
+///
+/// When `neumann_ground` is set, a ground cell contributes its shunt current
+/// `ground[i] * V_i` (current to the 0V reference) in addition to any branch
+/// currents.
 ///
 /// # Arguments
-/// * `laplacian` - A reference to the Laplacian (or system) matrix of the graph.
-/// * `voltages` - A slice containing the voltage values for each node.
-/// * `out` - A mutable reference to a vector where the computed current values will be stored.
-/// # Panics
-/// This function will panic if the length of `voltages` does not match the number of rows in the `laplacian` matrix.
-pub fn compute_node_current_map_into(
-    laplacian: &CsMat<f64>,
+/// * `resistance_data` - Per-cell resistance raster (row-major).
+/// * `ground_data` - Per-cell ground raster (shunt conductance in Neumann mode).
+/// * `voltages` - Per-cell voltage map (row-major), length `nrows * ncols`.
+/// * `nrows`, `ncols` - Grid dimensions.
+/// * `nodata` - The nodata sentinel for `resistance_data`.
+/// * `neumann_ground` - Whether `ground_data` declares shunt conductances.
+///
+/// # Returns
+/// Per-cell current map, length `nrows * ncols`.
+pub fn compute_current_map_from_raster(
+    resistance_data: &[f64],
+    ground_data: &[f64],
     voltages: &[f64],
-    out: &mut Vec<f64>,
-) {
-    let n = laplacian.rows();
-    out.clear();
-    out.resize(n, 0.0);
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    neumann_ground: bool,
+) -> Vec<f64> {
+    let n = nrows * ncols;
+    let mut out = vec![0.0f64; n];
 
-    for node in 0..n {
-        let mut pos_sum = 0.0f64;
-        let mut neg_sum = 0.0f64;
-        let vn = voltages[node];
-        let rv = laplacian.outer_view(node).unwrap(); // panic if out of bounds, should not happen
-        let mut diag_val = 0.0f64;
-        let mut offdiag_conductance_sum = 0.0f64;
-        for (neighbor, &val) in rv.iter() {
-            if neighbor == node {
-                diag_val = val;
-                continue;
-            }
-            // conductance is positive, and the laplacian off-diagonals
-            // should be negative conductances. We can take absolute value
-            // or negative.
-            debug_assert!(val <= 0.0);
-            let conductance = -val;
-            offdiag_conductance_sum += conductance;
-            let dv = vn - voltages[neighbor];
-            let branch_current = conductance * dv;
-            // KCL means current in and out is balanced
-            if branch_current > 0.0 {
-                pos_sum += branch_current;
-            } else if branch_current < 0.0 {
-                neg_sum -= branch_current;
+    let is_conductive = |r: f64| r.is_finite() && r > 0.0 && r != nodata;
+
+    for ind in 0..n {
+        let res = resistance_data[ind];
+        if !is_conductive(res) {
+            continue;
+        }
+        let v = voltages[ind];
+        let mut pos = 0.0f64;
+        let mut neg = 0.0f64;
+
+        // upper neighbor
+        if ind >= ncols {
+            let nb = ind - ncols;
+            if is_conductive(resistance_data[nb]) {
+                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > 0.0 { pos += branch; } else { neg -= branch; }
             }
         }
-        // Shunt (ground) conductance: the part of the diagonal not explained
-        // by the edge conductances. Zero for a pure graph Laplacian; equal to
-        // G[i] for a system matrix declared as L + G. The tiny Laplacian
-        // regularization bump at node 0 also surfaces here but is negligible.
-        let shunt_g = (diag_val - offdiag_conductance_sum).max(0.0);
-        if shunt_g > 0.0 {
-            // Current to/from the 0V reference, by Ohm's law.
-            if vn > 0.0 {
-                pos_sum += shunt_g * vn;
-            } else if vn < 0.0 {
-                neg_sum += shunt_g * -vn;
+        // lower neighbor
+        if ind < (nrows - 1) * ncols {
+            let nb = ind + ncols;
+            if is_conductive(resistance_data[nb]) {
+                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > 0.0 { pos += branch; } else { neg -= branch; }
             }
         }
-        // KCL does not hold for boundary
-        out[node] = pos_sum.max(neg_sum);
+        // left neighbor
+        if ind % ncols != 0 {
+            let nb = ind - 1;
+            if is_conductive(resistance_data[nb]) {
+                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > 0.0 { pos += branch; } else { neg -= branch; }
+            }
+        }
+        // right neighbor
+        if (ind + 1) % ncols != 0 {
+            let nb = ind + 1;
+            if is_conductive(resistance_data[nb]) {
+                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > 0.0 { pos += branch; } else { neg -= branch; }
+            }
+        }
+
+        if neumann_ground && ground_data[ind] > 0.0 {
+            let shunt = ground_data[ind] * v;
+            if shunt > 0.0 { pos += shunt; } else { neg -= shunt; }
+        }
+
+        out[ind] = pos.max(neg);
     }
-}
 
-// Compute the current map given graph Laplacian and voltages
-pub fn compute_node_current_map(laplacian: &CsMat<f64>, voltages: &[f64]) -> Vec<f64> {
-    let mut out = Vec::new();
-    compute_node_current_map_into(laplacian, voltages, &mut out);
     out
 }
 
@@ -105,7 +123,6 @@ pub fn reconstruct_grid_map(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sprs::CsMat;
 
     #[test]
     fn test_reconstruct_grid_map() {
@@ -132,52 +149,46 @@ mod tests {
         assert_eq!(grid, vec![300.0, 0.0, 100.0, 0.0, 200.0]);
     }
 
-    fn setup_test_laplacian() -> CsMat<f64> {
-        let indptr = vec![0, 3, 6, 9];
-        let indices = vec![
-            0, 1, 2, // Row 0 columns
-            0, 1, 2, // Row 1 columns
-            0, 1, 2, // Row 2 columns
-        ];
-        let data = vec![
-             1.0, -1.0,  0.0,
-            -1.0,  3.0, -2.0,
-             0.0, -2.0,  2.0,
-        ]; 
-        
-        CsMat::new((3, 3), indptr, indices, data)
+    #[test]
+    fn test_compute_current_map_uniform() {
+        // 2x2 uniform grid, alternating voltages: each cell carries 1.0 A.
+        let resistance = vec![1.0, 1.0, 1.0, 1.0];
+        let ground = vec![0.0, 0.0, 0.0, 0.0];
+        let voltages = vec![1.0, 0.0, 1.0, 0.0];
+        let out = compute_current_map_from_raster(
+            &resistance, &ground, &voltages, 2, 2, crate::NODATA_SENTINEL, false,
+        );
+        assert_eq!(out, vec![1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]
-    fn test_compute_current_equilibrium_internal_node() {
-        let laplacian = setup_test_laplacian();
-        let voltages = vec![10.0, 6.0, 4.0];
-        let mut out = Vec::new();
-
-        compute_node_current_map_into(&laplacian, &voltages, &mut out);
-
-        // At internal Node 1, pos_sum (4.0) and neg_sum (4.0) match exactly.
-        let epsilon = 1e-12;
-        assert!((out[1] - 4.0).abs() < epsilon, "Expected 4.0A at Node 1, got {}", out[1]);
+    fn test_compute_current_map_nodata() {
+        // Cell 1 is nodata: it reports 0, and its neighbours skip the edge.
+        let resistance = vec![1.0, crate::NODATA_SENTINEL, 1.0, 1.0];
+        let ground = vec![0.0, 0.0, 0.0, 0.0];
+        let voltages = vec![1.0, 0.0, 1.0, 0.0];
+        let out = compute_current_map_from_raster(
+            &resistance, &ground, &voltages, 2, 2, crate::NODATA_SENTINEL, false,
+        );
+        assert_eq!(out, vec![0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]
-    fn test_compute_current_at_boundaries() {
-        let laplacian = setup_test_laplacian();
-        let voltages = vec![10.0, 6.0, 4.0];
-        let mut out = Vec::new();
-        compute_node_current_map_into(&laplacian, &voltages, &mut out);
-        let epsilon = 1e-12;
-        assert!((out[0] - 4.0).abs() < epsilon, "Source node should register 4.0A");
-        assert!((out[2] - 4.0).abs() < epsilon, "Sink node should register 4.0A");
-    }
+    fn test_compute_current_map_neumann_ground() {
+        // 2x1 grid, ground (shunt conductance 5) on the bottom cell at V=1.
+        let resistance = vec![1.0, 1.0];
+        let ground = vec![0.0, 5.0];
+        let voltages = vec![2.0, 1.0];
 
-    #[test]
-    fn test_compute_current_zero_everywhere_on_equal_voltage() {
-        let laplacian = setup_test_laplacian();
-        let voltages = vec![5.0, 5.0, 5.0];
-        let mut out = Vec::new();
-        compute_node_current_map_into(&laplacian, &voltages, &mut out);
-        assert_eq!(out, vec![0.0, 0.0, 0.0], "Current mapping must be completely zeroed out");
+        let out_no_shunt = compute_current_map_from_raster(
+            &resistance, &ground, &voltages, 2, 1, crate::NODATA_SENTINEL, false,
+        );
+        assert_eq!(out_no_shunt, vec![1.0, 1.0]);
+
+        let out_shunt = compute_current_map_from_raster(
+            &resistance, &ground, &voltages, 2, 1, crate::NODATA_SENTINEL, true,
+        );
+        // Bottom cell adds shunt 5 * 1 = 5 A on top of the 1 A branch current.
+        assert_eq!(out_shunt, vec![1.0, 5.0]);
     }
 }
