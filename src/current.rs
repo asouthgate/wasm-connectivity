@@ -3,7 +3,7 @@
 ///
 /// The current between two adjacent cells `i` and `j` is
 ///
-///     I_ij = 2 (V_i - V_j) / (r_i + r_j),
+/// `I_ij = 2 (V_i - V_j) / (r_i + r_j)`,
 ///
 /// The effective resistance is the arithmetic
 /// mean `(r_i + r_j) / 2`) (would be harmonic for conductances). 
