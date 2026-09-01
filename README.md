@@ -14,6 +14,8 @@ interactive connectivity modelling for biological systems, such as ecological ma
 make build
 ```
 
+To build the optional profiling dependencies, see (or run) `scripts/profile-mem.sh`.
+
 ## Serve the example 
 
 ```
