@@ -1,15 +1,13 @@
 /// Compute the per-cell current map directly from the resistance raster and
-/// the (per-cell) voltage map, without consulting the Laplacian.
+/// the (per-cell) voltage map.
 ///
 /// The current between two adjacent cells `i` and `j` is
 ///
 ///     I_ij = 2 (V_i - V_j) / (r_i + r_j),
 ///
-/// i.e. the branch conductance is the harmonic mean of the two cell
-/// conductances (equivalently, the effective resistance is the arithmetic
-/// mean `(r_i + r_j) / 2`), matching `graph::conductance_avg`. For each cell
-/// the map reports the flow magnitude `max(out-flow, in-flow)`, the same
-/// quantity the original matrix-based current map reported.
+/// The effective resistance is the arithmetic
+/// mean `(r_i + r_j) / 2`) (would be harmonic for conductances). 
+/// For each cell the map reports the flow magnitude `max(out-flow, in-flow)`.
 ///
 /// Cells whose resistance is nodata, non-finite, or non-positive are treated
 /// as non-conductive: they contribute zero current and edges to them are
