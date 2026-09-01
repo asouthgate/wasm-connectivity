@@ -59,10 +59,6 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
       if (v !== nodata && !isNaN(v)) {
         let s;
         if (logScale && v > 0) {
-          // Rescale raw values to [1, 100] then take log10 (∈ [0, 2]),
-          // matching the paper's tif2png.py rendering. Normalising the raw
-          // values first (instead of min/max on log10) keeps the skewed
-          // low-current bulk from collapsing into one colour.
           const scaled = 1 + ((v - minRaw) / span) * 99;
           s = Math.log10(scaled) / 2;
         } else {
