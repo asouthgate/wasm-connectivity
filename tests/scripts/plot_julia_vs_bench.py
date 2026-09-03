@@ -136,7 +136,7 @@ def main():
     print(f"  alcouffe 500x500 (interp) mean = {np.mean(alcouffe_500):.2f}s ± {np.std(alcouffe_500):.2f}")
 
     labels = [
-        "WASM\n(Alcouffe)",
+        "WASM",
         "Circuitscape 5.11.2\nprecond + solve",
         "Circuitscape 5.11.2\ncomplete job",
         "Circuitscape 5.17.1 (4t)\ncomplete job",

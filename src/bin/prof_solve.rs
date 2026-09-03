@@ -1,12 +1,12 @@
 //! Native memory-profiling harness for the connectivity solve.
 //!
 //! Runs the same pipeline as `tests/warm_start.rs::compute_all_current_maps`
-//! (rasterize GeoJSON -> solve Jacobi / MG / MG-Alcouffe x Neumann / Dirichlet
+//! (rasterize GeoJSON -> solve Jacobi / MG x Neumann / Dirichlet
 //! -> write ASC + PNG artifacts) under a heap profiler (e.g. valgrind/massif).
 //!
 //! Usage:
 //!   cargo run --profile release-prof --bin prof-solve --features bin -- <500|1000> \
-//!       [--solver jacobi|mg|alcouffe|all] [--ground neumann|dirichlet|all] \
+//!       [--solver jacobi|mg|all] [--ground neumann|dirichlet|all] \
 //!       [--mode artifacts|pipeline] [--out <dir>]
 //!
 //! `artifacts` (default) writes ASC+PNG per solver; `pipeline` runs the
@@ -145,7 +145,7 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
     let geojson = fs::read_to_string(format!("{DATA_DIR}/all_features_{resolution}.geojson")).unwrap();
 
     let layer_params_str =
-        r#"{"roads":{"resistance":50,"width":3},"rivers":{"resistance":0.5,"width":4},"buildings":{"resistance":500,"width":0}}"#;
+        r#"{"roads":{"resistance":5,"width":3},"rivers":{"resistance":0.5,"width":4},"buildings":{"resistance":500,"width":0}}"#;
 
     // Browser-equivalent path: run the full pipeline and serialize the result
     // to JSON exactly like lib.rs::run_geospatial_pipeline_cached_mg does, so
@@ -234,36 +234,13 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
             );
             eprintln!("[mg {suffix}] {} iters in {} ms", mg.total_iters, t1.elapsed().as_millis());
         }
-
-        if solver == "alcouffe" || solver == "all" {
-            let t2 = Instant::now();
-            let mg_alc = solve::solve_raster_sources_mg_alcouffe(
-                &resistance, base.nrows, base.ncols, base.nodata,
-                &src.data, &gnd.data, 100_000, 1e-6, true, ground_mode,
-            );
-            write_asc(
-                &format!("{out_dir}/current_map_mg_alcouffe_{suffix}.asc"),
-                &mg_alc.output.current_map, base.nrows, base.ncols,
-                base.xllcorner, base.yllcorner, base.cellsize, out_nodata,
-            );
-            asc_to_png(
-                &format!("{out_dir}/current_map_mg_alcouffe_{suffix}.asc"),
-                &format!("{out_dir}/current_map_mg_alcouffe_{suffix}.png"),
-            );
-            write_asc(
-                &format!("{out_dir}/voltage_map_mg_alcouffe_{suffix}.asc"),
-                &mg_alc.output.voltages, base.nrows, base.ncols,
-                base.xllcorner, base.yllcorner, base.cellsize, out_nodata,
-            );
-            eprintln!("[mg-alcouffe {suffix}] {} iters in {} ms", mg_alc.total_iters, t2.elapsed().as_millis());
-        }
     }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: prof_solve <500|1000> [--solver jacobi|mg|alcouffe|all] [--ground neumann|dirichlet|all] [--mode artifacts|pipeline] [--out <dir>]");
+        eprintln!("Usage: prof_solve <500|1000> [--solver jacobi|mg|all] [--ground neumann|dirichlet|all] [--mode artifacts|pipeline] [--out <dir>]");
         std::process::exit(1);
     }
 

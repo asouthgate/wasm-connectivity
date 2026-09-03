@@ -8,12 +8,12 @@ import { loadExampleData } from '../data';
 const RESOLUTIONS = [1000, 800, 600, 400, 200];
 
 const DEFAULT_PARAMS = {
-  roads:    { resistance: 50,  width: 3 },
+  roads:    { resistance: 5,  width: 3 },
   rivers:   { resistance: 0.5, width: 4 },
   buildings:{ resistance: 500, width: 0 },
 };
 
-const RUNS = ['jacobi', 'gmg', 'alcouffe'];
+const RUNS = ['jacobi', 'gmg'];
 
 export const BENCHMARK_HEADERS = [
   'resolution',
@@ -57,9 +57,6 @@ function benchmarkJacobi(baseRaster, nrows, ncols, nodata, geojsonStr, layerPara
 }
 function benchmarkGmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
   return callBenchWorker('benchmark_gmg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
-}
-function benchmarkAlcouffe(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
-  return callBenchWorker('benchmark_alcouffe', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
 }
 
 export default function Benchmark() {
@@ -118,10 +115,8 @@ export default function Benchmark() {
             let result;
             if (runName === 'jacobi') {
               result = await benchmarkJacobi(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
-            } else if (runName === 'gmg') {
-              result = await benchmarkGmg(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
             } else {
-              result = await benchmarkAlcouffe(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
+              result = await benchmarkGmg(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
             }
             allResults.push({ resolution: res, repeat: r, run: runName, ...result });
             setRuns([...allResults]);
@@ -158,7 +153,7 @@ export default function Benchmark() {
 
       {hasData && (
         <div className="bench-info">
-          Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} rep{reps !== 1 ? 's' : ''} · 3 solvers per rep: Jacobi CG, GMG CG, GMG Alcouffe
+          Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} rep{reps !== 1 ? 's' : ''} · 2 solvers per rep: Jacobi CG, GMG CG
         </div>
       )}
 

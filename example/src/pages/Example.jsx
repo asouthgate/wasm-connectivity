@@ -32,8 +32,8 @@ export default function Example() {
   const [timer, setTimer] = useState('');
   const [error, setError] = useState(false);
 
-  const [terrainRes, setTerrainRes] = useState(1.0);
-  const [roadRes, setRoadRes] = useState(50);
+  const [terrainRes, setTerrainRes] = useState(100.0);
+  const [roadRes, setRoadRes] = useState(5);
   const [roadWidth, setRoadWidth] = useState(3);
   const [riverRes, setRiverRes] = useState(0.5);
   const [riverWidth, setRiverWidth] = useState(4);

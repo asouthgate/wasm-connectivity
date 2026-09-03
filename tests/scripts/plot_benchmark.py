@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Plot benchmark time and memory trajectories for three solvers.
+"""Plot benchmark time and memory trajectories for two solvers.
 
 CSV schema (emitted by web/src/pages/Benchmark.jsx):
     resolution,repeat,run,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb,total_iters
 
-run is one of: jacobi, gmg, alcouffe.
+run is one of: jacobi, gmg.
 Per row: total_time_s = prep_time_s + conn_time_s.
 """
 import sys
@@ -14,21 +14,18 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-RUNS = ('jacobi', 'gmg', 'alcouffe')
+RUNS = ('jacobi', 'gmg')
 RUN_LABELS = {
     'jacobi':  'Jacobi CG',
     'gmg':     'GMG CG',
-    'alcouffe':'Alcouffe CG',
 }
 RUN_LINESTYLES = {
     'jacobi':  '-',
     'gmg':     '--',
-    'alcouffe':':',
 }
 RUN_COLORS = {
     'jacobi':  '#444444',
     'gmg':     '#e66101',  # Distinct color scheme for clarity
-    'alcouffe':'#5e3c99',
 }
 
 

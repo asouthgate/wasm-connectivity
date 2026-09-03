@@ -4,7 +4,6 @@ import {
   __reset,
   solve_raster_sources_jacobi_cached,
   solve_raster_sources_mg,
-  solve_raster_sources_mg_alcouffe,
   rasterize_geojson,
   reset_cache,
 } from '@wasm-connect/lib/wasm_connect.js';
@@ -40,14 +39,9 @@ function solveGmg(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
   return solve_raster_sources_mg(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
 }
 
-function solveAlcouffe(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
-  return solve_raster_sources_mg_alcouffe(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
-}
-
 const SOLVERS = {
   jacobi: solveJacobi,
   gmg: solveGmg,
-  alcouffe: solveAlcouffe,
 };
 
 function runBenchmark(solveFn, [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]) {

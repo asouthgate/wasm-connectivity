@@ -166,131 +166,6 @@ fn galerkin_coarsen(fine_lap: &CsMat<f64>, p: &CsMat<f64>, coarse_n: usize) -> C
     CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
 }
 
-fn get_conductance(lap: &CsMat<f64>, r1: usize, c1: usize, r2: usize, c2: usize, ncols: usize) -> f64 {
-    let idx1 = r1 * ncols + c1;
-    let idx2 = r2 * ncols + c2;
-    if idx1 >= lap.rows() || idx2 >= lap.rows() {
-        return 0.0;
-    }
-    if let Some(rv) = lap.outer_view(idx1) {
-        for (col, &val) in rv.iter() {
-            if col == idx2 {
-                return -val;
-            }
-        }
-    }
-    0.0
-}
-
-fn build_alcouffe_prolongation_triplets(
-    lap: &CsMat<f64>,
-    fine_nrows: usize,
-    fine_ncols: usize,
-    coarse_nrows: usize,
-    coarse_ncols: usize,
-) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
-    let fine_n = fine_nrows * fine_ncols;
-    let mut rows = Vec::with_capacity(fine_n * 3);
-    let mut cols = Vec::with_capacity(fine_n * 3);
-    let mut vals = Vec::with_capacity(fine_n * 3);
-
-    // Coarse grid coincides with the even-indexed fine points: coarse point
-    // (cr, cc) lives at fine (2*cr, 2*cc). The standard operator-induced
-    // (Alcouffe) interpolation therefore injects coarse-aligned fine points
-    // with unit weight and, for straddling fine points, splits weight between
-    // the two bracketing coarse points in proportion to the conductance
-    // coupling to each.
-
-    for fr in 0..fine_nrows {
-        // Vertical: coarse-aligned (even) rows inject at 2*cfr = fr; odd rows
-        // straddle coarse rows f_low = fr-1 and f_high = fr+1.
-        let v_aligned = fr % 2 == 0;
-        for fc in 0..fine_ncols {
-            let fine_idx = fr * fine_ncols + fc;
-
-            let h_aligned = fc % 2 == 0;
-
-            // Vertical stencil (weights to the "up"/"down" coarse rows in
-            // raster terms: row fr-1 is above, row fr+1 is below).
-            let (v_lo, v_lo_w, v_hi, v_hi_w) = if v_aligned {
-                let cr = fr / 2;
-                // Inject the fine point's own coarse row.
-                (cr, 1.0, cr, 0.0)
-            } else {
-                // Straddling: bracketing coarse rows at fine rows fr-1, fr+1.
-                let d_above = if fr > 0 {
-                    get_conductance(lap, fr - 1, fc, fr, fc, fine_ncols)
-                } else {
-                    0.0
-                };
-                let d_below = if fr + 1 < fine_nrows {
-                    get_conductance(lap, fr, fc, fr + 1, fc, fine_ncols)
-                } else {
-                    0.0
-                };
-                let s = d_above + d_below;
-                if s > 0.0 {
-                    ((fr - 1) / 2, d_above / s, (fr + 1) / 2, d_below / s)
-                } else {
-                    ((fr - 1) / 2, 0.5, (fr + 1) / 2, 0.5)
-                }
-            };
-
-            // Horizontal stencil (weights to the left/right coarse columns).
-            let (h_lo, h_lo_w, h_hi, h_hi_w) = if h_aligned {
-                let cc = fc / 2;
-                (cc, 1.0, cc, 0.0)
-            } else {
-                let d_left = if fc > 0 {
-                    get_conductance(lap, fr, fc - 1, fr, fc, fine_ncols)
-                } else {
-                    0.0
-                };
-                let d_right = if fc + 1 < fine_ncols {
-                    get_conductance(lap, fr, fc, fr, fc + 1, fine_ncols)
-                } else {
-                    0.0
-                };
-                let s = d_left + d_right;
-                if s > 0.0 {
-                    ((fc - 1) / 2, d_left / s, (fc + 1) / 2, d_right / s)
-                } else {
-                    ((fc - 1) / 2, 0.5, (fc + 1) / 2, 0.5)
-                }
-            };
-
-            // Product of the vertical and horizontal 1-D weights (tensor
-            // stencil). Each fine row sums to exactly 1.0 because v_lo_w + v_hi_w
-            // == 1.0 and h_lo_w + h_hi_w == 1.0.
-            let mut emit = |cr: usize, cv: f64, cc: usize, ch: f64| {
-                if cr < coarse_nrows && cc < coarse_ncols {
-                    let w = cv * ch;
-                    if w != 0.0 {
-                        rows.push(fine_idx);
-                        cols.push(cr * coarse_ncols + cc);
-                        vals.push(w);
-                    }
-                }
-            };
-            emit(v_lo, v_lo_w, h_lo, h_lo_w);
-            emit(v_lo, v_lo_w, h_hi, h_hi_w);
-            emit(v_hi, v_hi_w, h_lo, h_lo_w);
-            emit(v_hi, v_hi_w, h_hi, h_hi_w);
-        }
-    }
-
-    (rows, cols, vals)
-}
-
-/// Which prolongation operator to use during Galerkin coarsening.
-#[derive(Copy, Clone, PartialEq)]
-enum ProlongKind {
-    /// Fixed bilinear interpolation weights.
-    Bilinear,
-    /// Alcouffe operator-induced weights derived from the fine Laplacian.
-    Alcouffe,
-}
-
 impl MgPreconditioner {
     /// Build a multigrid hierarchy directly from a fine-grid system matrix.
     ///
@@ -302,21 +177,7 @@ impl MgPreconditioner {
         ncols: usize,
         max_levels: usize,
     ) -> Self {
-        Self::from_laplacian_impl(a, nrows, ncols, max_levels, ProlongKind::Bilinear, None)
-    }
-
-    /// Alcouffe variant of `build_from_laplacian`. `weights` optionally
-    /// supplies a separate matrix for deriving the first-level prolongation
-    /// weights (e.g. the un-pinned Laplacian when `a` has Dirichlet identity
-    /// rows); defaults to `a`.
-    pub fn build_alcouffe_from_laplacian(
-        a: &CsMat<f64>,
-        weights: Option<&CsMat<f64>>,
-        nrows: usize,
-        ncols: usize,
-        max_levels: usize,
-    ) -> Self {
-        Self::from_laplacian_impl(a, nrows, ncols, max_levels, ProlongKind::Alcouffe, weights)
+        Self::from_laplacian_impl(a, nrows, ncols, max_levels)
     }
 
     fn from_laplacian_impl(
@@ -324,8 +185,6 @@ impl MgPreconditioner {
         nrows: usize,
         ncols: usize,
         max_levels: usize,
-        prolong: ProlongKind,
-        weights_lap: Option<&CsMat<f64>>,
     ) -> Self {
         debug_assert_eq!(
             a.rows(), nrows * ncols,
@@ -355,21 +214,8 @@ impl MgPreconditioner {
             }
 
             let fine_lap = &levels.last().unwrap().laplacian;
-            let (p_rows, p_cols, p_vals) = match prolong {
-                ProlongKind::Bilinear =>
-                    build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc),
-                ProlongKind::Alcouffe => {
-                    // For the first prolongation (level 0 -> 1), use the
-                    // weights matrix if supplied (avoids Dirichlet-identity
-                    // rows corrupting Alcouffe weights).
-                    let lap_for_prolong = if levels.len() == 1 {
-                        weights_lap.unwrap_or(fine_lap)
-                    } else {
-                        fine_lap
-                    };
-                    build_alcouffe_prolongation_triplets(lap_for_prolong, fine_nr, fine_nc, next_nr, next_nc)
-                }
-            };
+            let (p_rows, p_cols, p_vals) =
+                build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc);
             let fine_n = fine_nr * fine_nc;
             let coarse_n = next_nr * next_nc;
 
@@ -594,14 +440,6 @@ mod tests {
         let (_cell_to_node, _num_nodes, _edges, laplacian) =
             crate::build_circuit_model(&filled, nrows, ncols, -1.0);
         MgPreconditioner::build_from_laplacian(&laplacian, nrows, ncols, max_levels)
-    }
-
-    // Build an Alcouffe MG hierarchy from a resistance raster (nodata -1.0).
-    fn build_mg_alcouffe(resistance: &[f64], nrows: usize, ncols: usize, max_levels: usize) -> MgPreconditioner {
-        let filled = crate::raster::fill_nodata(resistance, -1.0);
-        let (_cell_to_node, _num_nodes, _edges, laplacian) =
-            crate::build_circuit_model(&filled, nrows, ncols, -1.0);
-        MgPreconditioner::build_alcouffe_from_laplacian(&laplacian, None, nrows, ncols, max_levels)
     }
 
     #[test]
@@ -1111,202 +949,5 @@ mod tests {
         let r_last = residuals[residuals.len() - 1];
         eprintln!("Smoother-only {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
             nrows, ncols, residuals.len(), r0, r_last, r_last / r0);
-    }
-
-    // -------------------------------------------------------------------
-    // Alcouffe matrix-dependent prolongation tests
-    // -------------------------------------------------------------------
-
-    #[test]
-    fn test_alcouffe_weights_partition_uniform() {
-        let nrows = 16;
-        let ncols = 16;
-        let n = nrows * ncols;
-        let resistance = vec![1.0; n];
-
-        let mg = build_mg_alcouffe(&resistance, nrows, ncols, 4);
-        let ap = mg.levels[1].prolongation.as_ref().unwrap();
-
-        let fine_n = nrows * ncols;
-        let mut col_sum = vec![0.0; fine_n];
-        for k in 0..ap.0.len() {
-            assert!(ap.2[k] > 0.0 && ap.2[k] <= 1.0001,
-                "Alcouffe weight out of (0,1]: {}", ap.2[k]);
-            col_sum[ap.0[k]] += ap.2[k];
-        }
-
-        let border = 2;
-        let mut checked = 0;
-        for fr in border..(nrows - border) {
-            for fc in border..(ncols - border) {
-                let idx = fr * ncols + fc;
-                assert!(
-                    (col_sum[idx] - 1.0).abs() < 1e-12,
-                    "Alcouffe column sum for interior ({},{}) is {} (expected 1.0)",
-                    fr, fc, col_sum[idx]
-                );
-                checked += 1;
-            }
-        }
-        assert!(checked > 0, "No interior fine nodes found");
-    }
-
-    #[test]
-    fn test_alcouffe_differs_on_variable() {
-        let nrows = 16;
-        let ncols = 16;
-        let n = nrows * ncols;
-
-        let uniform = vec![1.0; n];
-        let mut variable = vec![1.0; n];
-        for r in 0..nrows {
-            for c in 0..ncols {
-                let idx = r * ncols + c;
-                if c % 4 == 0 {
-                    variable[idx] = 1000.0;
-                }
-            }
-        }
-
-        let mg_uni = build_mg_alcouffe(&uniform, nrows, ncols, 4);
-        let mg_var = build_mg_alcouffe(&variable, nrows, ncols, 4);
-
-        let up = mg_uni.levels[1].prolongation.as_ref().unwrap();
-        let vp = mg_var.levels[1].prolongation.as_ref().unwrap();
-
-        assert_eq!(up.0.len(), vp.0.len(),
-            "Alcouffe P sizes differ: uniform {} vs variable {}",
-            up.0.len(), vp.0.len());
-
-        let mut total_diff = 0.0;
-        for k in 0..up.0.len() {
-            assert_eq!(up.0[k], vp.0[k], "row mismatch at {}", k);
-            assert_eq!(up.1[k], vp.1[k], "col mismatch at {}", k);
-            total_diff += (up.2[k] - vp.2[k]).abs();
-        }
-        assert!(
-            total_diff > 1e-6,
-            "Alcouffe weights should differ on variable coeff grid; total diff = {:.6e}",
-            total_diff
-        );
-    }
-
-    #[test]
-    fn test_alcouffe_preconditioned_cg_converges_variable() {
-        let nrows = 32;
-        let ncols = 32;
-        let n = nrows * ncols;
-
-        let mut resistance = vec![1.0; n];
-        for r in 0..nrows {
-            for c in 0..ncols {
-                let idx = r * ncols + c;
-                if c % 8 == 0 {
-                    resistance[idx] = 0.001;
-                }
-                if r % 8 == 4 {
-                    resistance[idx] = 1e6;
-                }
-            }
-        }
-
-        let mg = build_mg_alcouffe(&resistance, nrows, ncols, 6);
-
-        for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let diag_inv = crate::circuit::laplacian::extract_diag_inv(&lvl.laplacian);
-            let nn = lvl.nrows * lvl.ncols;
-            let mut min_d = f64::MAX;
-            let mut max_d = 0.0;
-            for i in 0..nn {
-                if diag_inv[i] < min_d { min_d = diag_inv[i]; }
-                if diag_inv[i] > max_d { max_d = diag_inv[i]; }
-            }
-            eprintln!("Alcouffe level {}: diag_inv [{:.4e}, {:.4e}] ratio {:.2e}",
-                level_idx, min_d, max_d, max_d / min_d.max(1e-30));
-        }
-
-        let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
-        let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
-        let b: Vec<f64> = b_raw.iter().map(|v| v - mean).collect();
-
-        let mut x = vec![0.0; n];
-        let mut r = b.clone();
-        let b_norm = b.iter().map(|v| v * v).sum::<f64>().sqrt();
-
-        let mut residuals = Vec::new();
-
-        for _iter in 0..20 {
-            let r_norm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
-            residuals.push(r_norm);
-
-            let mut z = vec![0.0; n];
-            mg.apply(&r, &mut z);
-
-            let mut az = vec![0.0; n];
-            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
-            let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
-            let rz: f64 = r.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
-
-            if z_az.abs() < 1e-30 {
-                break;
-            }
-
-            let alpha = rz / z_az;
-
-            for i in 0..n {
-                x[i] += alpha * z[i];
-                r[i] -= alpha * az[i];
-            }
-
-            if r_norm / b_norm < 1e-6 {
-                break;
-            }
-        }
-
-        let r0 = residuals[0];
-        let r_last = residuals[residuals.len() - 1];
-        eprintln!("Alcouffe variable coeff {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
-            nrows, ncols, residuals.len(), r0, r_last, r_last / r0);
-        assert!(
-            r_last < r0,
-            "Alcouffe MG-preconditioned CG diverged on variable coefficient grid: ||r|| went from {:.6e} to {:.6e}",
-            r0, r_last
-        );
-    }
-
-    #[test]
-    fn test_alcouffe_symmetry() {
-        let nrows = 15;
-        let ncols = 15;
-        let n = nrows * ncols;
-
-        let resistance = generate_mock_resistance(nrows, ncols);
-        let mg = build_mg_alcouffe(&resistance, nrows, ncols, 3);
-
-        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
-        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.2).cos()).collect();
-
-        let mut mx = vec![0.0; n];
-        let mut my = vec![0.0; n];
-
-        let mut ax = vec![0.0; n];
-        let mut ay = vec![0.0; n];
-        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &x, &mut ax);
-        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &y, &mut ay);
-        let dot_x_ay: f64 = x.iter().zip(ay.iter()).map(|(a, b)| a * b).sum();
-        let dot_y_ax: f64 = y.iter().zip(ax.iter()).map(|(a, b)| a * b).sum();
-        assert!((dot_x_ay - dot_y_ax).abs() < 1e-7, "Fine matrix A is asymmetric!");
-
-        mg.apply(&x, &mut mx);
-        mg.apply(&y, &mut my);
-
-        let dot_x_my: f64 = x.iter().zip(my.iter()).map(|(a, b)| a * b).sum();
-        let dot_y_mx: f64 = y.iter().zip(mx.iter()).map(|(a, b)| a * b).sum();
-
-        assert!(
-            (dot_x_my - dot_y_mx).abs() < 1e-6,
-            "Alcouffe MG Preconditioner is asymmetric! x*M(y) = {}, y*M(x) = {}",
-            dot_x_my, dot_y_mx
-        );
     }
 }

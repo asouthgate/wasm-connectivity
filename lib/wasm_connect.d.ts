@@ -24,8 +24,6 @@ export function solve_raster_sources_jacobi_cached(resistance_data: Float64Array
 
 export function solve_raster_sources_mg(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, use_dirichlet_ground: boolean): string;
 
-export function solve_raster_sources_mg_alcouffe(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, use_dirichlet_ground: boolean): string;
-
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -37,7 +35,6 @@ export interface InitOutput {
     readonly run_resistance_pipeline_browser: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
     readonly solve_raster_sources_jacobi_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number];
     readonly solve_raster_sources_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
-    readonly solve_raster_sources_mg_alcouffe: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly init_panic_hook: () => void;
     readonly reset_cache: () => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
