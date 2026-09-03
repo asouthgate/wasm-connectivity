@@ -1,6 +1,13 @@
 /* tslint:disable */
 /* eslint-disable */
 
+/**
+ * Estimate a bat roost location from per-detector call data using the
+ * Woolley error-surface method. `surface` is the full `grid_size x grid_size`
+ * loss field (row-major, y-outer), and `x`/`y`/`loss` are the best point.
+ */
+export function compute_roost_surface(x: Float64Array, y: Float64Array, counts: Float64Array, grid_size: number, capture_radius: number, diffusivity: number, t0: number, t1: number, loss: string): string;
+
 export function downsample_raster(data: Float64Array, nrows: number, ncols: number, nodata: number, target_rows: number, target_cols: number): string;
 
 export function init_panic_hook(): void;
@@ -17,19 +24,17 @@ export function solve_raster_sources_jacobi_cached(resistance_data: Float64Array
 
 export function solve_raster_sources_mg(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, use_dirichlet_ground: boolean): string;
 
-export function solve_raster_sources_mg_alcouffe(resistance_data: Float64Array, nrows: number, ncols: number, nodata: number, source_data: Float64Array, ground_data: Float64Array, max_iter: number, tol: number, use_dirichlet_ground: boolean): string;
-
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly compute_roost_surface: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number];
     readonly downsample_raster: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly rasterize_geojson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly run_geospatial_pipeline_cached_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => [number, number];
     readonly run_resistance_pipeline_browser: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number];
     readonly solve_raster_sources_jacobi_cached: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number];
     readonly solve_raster_sources_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
-    readonly solve_raster_sources_mg_alcouffe: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly init_panic_hook: () => void;
     readonly reset_cache: () => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

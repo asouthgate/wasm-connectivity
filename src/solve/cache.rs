@@ -6,8 +6,8 @@
 //! source/ground rasters between solves, while the resistance raster stays
 //! fixed; or it makes small edits to the resistance raster that should not
 //! require a fully cold PCG restart. This module caches the expensive
-//! artifacts of `build_circuit_model` (cell_to_node, laplacian, connected
-//! components) plus the most recent per-node voltage vector, so a re-solve
+//! artifacts of `build_circuit_model` (cell_to_node, laplacian) plus the
+//! most recent per-node voltage vector, so a re-solve
 //! can either:
 //!   * skip the Laplacian rebuild entirely (resistance unchanged), or
 //!   * rebuild the Laplacian but seed PCG with the prior voltage solution.
@@ -26,7 +26,6 @@ pub struct BuildCache {
     pub laplacian: CsMat<f64>,
     pub cell_to_node: Vec<i32>,
     pub num_nodes: usize,
-    pub components: Vec<Vec<usize>>,
     pub nrows: usize,
     pub ncols: usize,
     pub nodata: f64,
@@ -53,7 +52,6 @@ pub fn store(
     laplacian: CsMat<f64>,
     cell_to_node: Vec<i32>,
     num_nodes: usize,
-    components: Vec<Vec<usize>>,
     nrows: usize,
     ncols: usize,
     nodata: f64,
@@ -70,7 +68,6 @@ pub fn store(
             laplacian,
             cell_to_node,
             num_nodes,
-            components,
             nrows,
             ncols,
             nodata,
@@ -127,9 +124,9 @@ mod tests {
         reset();
         assert!(take().is_none());
 
-        let (_cell_to_node, _num_nodes, _edges, lap, comps) =
+        let (_cell_to_node, _num_nodes, _edges, lap) =
             crate::build_circuit_model(&[1.0; 9], 3, 3, crate::NODATA_SENTINEL);
-        store(lap.clone(), vec![1, 2, 3, 0], 3, comps.clone(), 3, 3, -9999.0);
+        store(lap.clone(), vec![1, 2, 3, 0], 3, 3, 3, -9999.0);
         assert_eq!(peek_meta(), Some((3, 3, -9999.0)));
 
         let taken = take().expect("cache should be populated");
@@ -146,9 +143,9 @@ mod tests {
         store_last_voltages(&[1.0, 2.0, 3.0]);
         assert!(last_voltages().is_empty(), "no circuit stored -> no voltages");
 
-        let (_cell_to_node, _n, _e, lap, comps) =
+        let (_cell_to_node, _n, _e, lap) =
             crate::build_circuit_model(&[1.0; 4], 2, 2, crate::NODATA_SENTINEL);
-        store(lap, vec![1, 2, 3, 4], 4, comps, 2, 2, -9999.0);
+        store(lap, vec![1, 2, 3, 4], 4, 2, 2, -9999.0);
         store_last_voltages(&[10.0, 20.0, 30.0, 40.0]);
         assert_eq!(last_voltages(), vec![10.0, 20.0, 30.0, 40.0]);
         reset();

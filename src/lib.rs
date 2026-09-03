@@ -1,16 +1,13 @@
-pub mod grid;
-pub mod graph;
-pub mod laplacian;
-pub mod components;
-pub mod pcg;
-pub mod current;
-pub mod solve;
-pub mod cache;
+pub mod circuit;
 pub mod geospatial;
-pub mod resample;
-pub mod multigrid;
-pub mod cholesky;
+pub mod linalg;
+pub mod raster;
 pub mod resistance;
+pub mod roost;
+pub mod solve;
+
+pub use circuit::build_circuit_model;
+pub use solve::cache;
 
 use wasm_bindgen::prelude::*;
 use serde::Serialize;
@@ -58,15 +55,6 @@ fn f64_to_base64(data: &[f64]) -> String {
         bytes[i * 4..(i + 1) * 4].copy_from_slice(&(v as f32).to_le_bytes());
     }
     encode_base64(&bytes)
-}
-
-pub fn build_circuit_model(resistance_data: &[f64], nrows: usize, ncols: usize, nodata: f64) -> (Vec<i32>, usize, graph::EdgeTriplets, sprs::CsMat<f64>, Vec<Vec<usize>>) {
-    let conductance = grid::Grid::to_conductance(resistance_data, nrows, ncols, nodata);
-    let (cell_to_node, num_nodes) = grid::build_cell_to_node(&conductance);
-    let edges = graph::build_conductance_edges(&conductance, &cell_to_node);
-    let laplacian = laplacian::build_laplacian(&edges, num_nodes);
-    let components = components::find_connected_components(&laplacian, num_nodes);
-    (cell_to_node, num_nodes, edges, laplacian, components)
 }
 
 #[wasm_bindgen(start)]
@@ -133,34 +121,6 @@ pub fn solve_raster_sources_mg(
 }
 
 #[wasm_bindgen]
-pub fn solve_raster_sources_mg_alcouffe(
-    resistance_data: Vec<f64>,
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    source_data: Vec<f64>,
-    ground_data: Vec<f64>,
-    max_iter: usize,
-    tol: f64,
-    use_dirichlet_ground: bool,
-) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
-    let annotated = solve::solve_raster_sources_mg_alcouffe(
-        &resistance_data,
-        nrows,
-        ncols,
-        nodata,
-        &source_data,
-        &ground_data,
-        max_iter,
-        tol,
-        true,
-        ground_mode,
-    );
-    json_response(&annotated)
-}
-
-#[wasm_bindgen]
 pub fn reset_cache() {
     cache::reset();
 }
@@ -211,7 +171,7 @@ pub fn downsample_raster(
     target_rows: usize,
     target_cols: usize,
 ) -> String {
-    let output = resample::downsample_raster(&data, nrows, ncols, nodata, target_rows, target_cols);
+    let output = raster::downsample_raster(&data, nrows, ncols, nodata, target_rows, target_cols);
     json_response(&output)
 }
 
@@ -290,6 +250,62 @@ pub fn run_resistance_pipeline_browser(
     map.insert("nrows".to_string(),        serde_json::json!(output.nrows));
     map.insert("ncols".to_string(),        serde_json::json!(output.ncols));
     serde_json::to_string(&map).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
+}
+
+#[derive(Serialize)]
+struct RoostSurfaceOutput {
+    x: f64,
+    y: f64,
+    loss: f64,
+    grid_size: usize,
+    surface: Vec<f64>,
+}
+
+/// Estimate a bat roost location from per-detector call data using the
+/// Henley et al. error-surface method. `surface` is the full `grid_size x grid_size`
+/// loss field (row-major, y-outer), and `x`/`y`/`loss` are the best point.
+#[wasm_bindgen]
+pub fn compute_roost_surface(
+    x: Vec<f64>,
+    y: Vec<f64>,
+    counts: Vec<f64>,
+    grid_size: usize,
+    capture_radius: f64,
+    diffusivity: f64,
+    t0: f64,
+    t1: f64,
+    loss: String,
+) -> String {
+    if loss != "l2" && loss != "l1" {
+        return serde_json::to_string(&json!({ "error": format!("invalid loss {:?}, expected l2 or l1", loss) }))
+            .unwrap_or_else(|_| r#"{"error":"invalid loss"}"#.to_string());
+    }
+    if grid_size < 2 {
+        return serde_json::to_string(&json!({ "error": "grid_size must be >= 2" }))
+            .unwrap_or_else(|_| r#"{"error":"invalid grid_size"}"#.to_string());
+    }
+    if !(t1 > t0 && t0 > 0.0) {
+        return serde_json::to_string(&json!({ "error": "require 0 < t0 < t1" }))
+            .unwrap_or_else(|_| r#"{"error":"invalid t0/t1"}"#.to_string());
+    }
+    if x.len() != y.len() || x.len() != counts.len() || x.is_empty() {
+        return serde_json::to_string(&json!({ "error": "x, y and counts must be non-empty and equal length" }))
+            .unwrap_or_else(|_| r#"{"error":"invalid detector data"}"#.to_string());
+    }
+
+    let mut surface = Vec::with_capacity(grid_size * grid_size);
+    let result = roost::compute_error_surface(
+        &x, &y, &counts, grid_size, capture_radius, diffusivity, t0, t1, &loss,
+        |_cx, _cy, l| surface.push(l),
+    );
+
+    json_response(&RoostSurfaceOutput {
+        x: result.x,
+        y: result.y,
+        loss: result.loss,
+        grid_size,
+        surface,
+    })
 }
 
 #[cfg(test)]

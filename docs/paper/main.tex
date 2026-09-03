@@ -28,7 +28,17 @@
 \maketitle
 
 \begin{abstract}
-Circuit theory has been successfully applied to ecological connectivity modelling, notably via the Circuitscape \cite{mcrae2007circuit} software, which is typically run locally on a laptop or via a server. For downstream geospatial web applications relying on connectivity analysis, backend infrastructure is required, which can be costly and require advanced data governance. Recent developments in WebAssembly (Wasm) now allow fast \Cpp{} or Rust code to be run directly in a sandboxed browser environment for edge computing. We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient implementation of connectivity analysis. This approach may be useful for geospatial modelling software where rasters and memory footprint are small enough for the browser context. Our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
+Circuit theory has been successfully applied to ecological connectivity modelling, 
+notably via the Circuitscape \cite{mcrae2007circuit} software, 
+which is typically run locally on a laptop or via a server. 
+For downstream geospatial web applications relying on connectivity analysis, 
+backend infrastructure is required, which can be costly and require advanced data governance. 
+Recent developments in WebAssembly (Wasm) now allow fast \Cpp{} or 
+Rust code to be run directly in a sandboxed browser environment for edge computing. 
+We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient implementation of connectivity analysis. 
+This approach may be useful for geospatial modelling software where rasters and 
+memory footprint are small enough for the browser context. 
+Our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
 \end{abstract}
 
 \section{Introduction}
@@ -196,12 +206,11 @@ where $\mathbf{M}^{-1}$ approximates $\mathbf{L}$. When $\mathbf{M}^{-1} = \math
 We cannot compute $\mathbf{M}^{-1}$ directly, since this is computationally infeasible for large matrices, and if we could, we could solve our original system directly.
 Instead, we choose an easily invertible $\mathbf{M}$ that approximates $\mathbf{L}$.
 
-We compare several preconditioners: a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, 
+We compare two preconditioners: a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, 
 which can be useful for some data \cite{wathen2015preconditioning}, 
 smoothing high-frequency error components quickly, but low-frequency components slowly \cite[Ch. 4.6]{leveque2007finite}; a geometric multigrid (GMG) preconditioner,
 with bilinear interpolation,
-which is more complex but converges faster \cite{tatebe1993multigrid};
-a GMG with Alcouffe preconditioner \cite{alcouffe1981multi}, which is better for sharply contrasting features.
+which is more complex but converges faster \cite{tatebe1993multigrid}.
 We implement these methods directly to reduce Wasm dependencies and binary footprint. 
 
 Multigrid preconditioners are more complex than the Jacobi preconditioner. After smoothing high-frequency error features
@@ -213,7 +222,6 @@ which works for low-frequency features with high-frequency features already havi
 Finally, smoothing is performed again to eliminate interpolation artifacts.
 If this process is applied recursively, one outer loop is known as a `V-cycle' \cite[Ch. 4.6]{leveque2007finite, alcouffe2000parallel};
 at the lowest resolution, the system is solved directly. 
-In our case, two developments are applied: Galerkin coarsening and Alcouffe interpolation \cite{alcouffe1981multi}.
 The algorithm proceeds as follows.
 
 The finest grid is smoothed with a few iterations of a Gauss-Seidel smoother. The residual is calculated,
@@ -232,9 +240,6 @@ These operators are comparable to downsampling and upsampling. In Galerkin coars
 
 This is applied repeatedly until the coarsest resolution is reached.
 In the simplest case, $\mathbf{P}$ could be bilinear interpolation. 
-For the Alcouffe preconditioner \cite{alcouffe1981multi, alcouffe2000parallel},
-the matrix $\mathbf{P}$ is chosen with smoothing weights calculated from
-conductances.
 The coarse system is then solved directly to get the coarse error
 
 \[
@@ -293,9 +298,9 @@ The region includes buildings, roads, and a river. Vector data was obtained from
 the UK Ordnance Survey open data \cite{os_data}.
 Digital surface model (DSM) and digital terrain model (DTM) LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
 
-For the test resistance map, we use constant resistance parameters for rasterised vector features: 50 for roads (3 pixel buffer), 500 for buildings, 
-and 0.5 for rivers (4 pixel buffer).
-For raster landscape feature resistance, we took the feature height as resistance. 
+For the test resistance map, we use constant resistance parameters for rasterised vector features:
+5 for roads (3 pixel buffer), 500 for buildings, 0.5 for rivers (4 pixel buffer).
+For raster landscape feature resistance, we took the feature height as resistance and multiplied by 100. 
 These parameters were arbitrary and chosen to introduce variation into the test resistance map inputted into current calculation.
 In practice, these parameters can be set freely.
 
@@ -364,7 +369,7 @@ Current maps were rescaled to the range $[1, 100]$, and are shown with log color
 
 As demonstrated by Figure \ref{fig:cs_runtime}, Circuitscape 5.11.2 solve step is quicker than the presented
 WASM browser solvers. Circuitscape 5.17.1 does not report these steps individually.
-The average time for WASM (Alcouffe) was 3.79 seconds, compared to 2.48 seconds for the 
+The average time for WASM (GMG) was 1.64 seconds, compared to 2.48 seconds for the 
 preconditioner building and solve step in Circuitscape 5.11.2.
 However, the total wall-clock runtime of both tested versions of Circuitscape, including post-solving steps was over $8\times$ slower.
 
@@ -383,7 +388,7 @@ analysis round trip from browser to server and back.
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=1.0\textwidth]{figures/cs_vs_wasm.png}
-\caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape 5.11.2 preconditioner building plus solving took 2.48 seconds, versus 3.79 for WASM (Alcouffe). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. Circuitscape was tested with both 1 thread and 4 threads. }
+\caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape 5.11.2 preconditioner building plus solving took 2.48 seconds, versus 1.64 seconds for WASM (GMG). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. Circuitscape was tested with both 1 thread and 4 threads. }
 \label{fig:cs_runtime}
 \end{figure}
 

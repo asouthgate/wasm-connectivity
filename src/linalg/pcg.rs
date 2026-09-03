@@ -19,7 +19,7 @@ pub struct JacobiPreconditioner {
 
 impl JacobiPreconditioner {
     pub fn new(a: &CsMat<f64>) -> Self {
-        Self { diag_inv: crate::laplacian::extract_diag_inv(a) }
+        Self { diag_inv: crate::circuit::laplacian::extract_diag_inv(a) }
     }
 }
 

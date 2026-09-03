@@ -1,5 +1,5 @@
 use sprs::CsMat;
-use crate::graph::EdgeTriplets;
+use crate::circuit::graph::EdgeTriplets;
 
 pub fn extract_diag_inv(lap: &CsMat<f64>) -> Vec<f64> {
     let n = lap.rows();
@@ -124,7 +124,7 @@ pub fn add_diagonal(lap: &CsMat<f64>, diag: &[f64]) -> CsMat<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::EdgeTriplets;
+    use crate::circuit::graph::EdgeTriplets;
 
     #[test]
     fn test_build_laplacian_two_node() {
