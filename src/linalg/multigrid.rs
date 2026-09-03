@@ -182,15 +182,6 @@ fn get_conductance(lap: &CsMat<f64>, r1: usize, c1: usize, r2: usize, c2: usize,
     0.0
 }
 
-fn push_triplet(rows: &mut Vec<usize>, cols: &mut Vec<usize>, vals: &mut Vec<f64>,
-                fine: usize, coarse: usize, w: f64) {
-    if w > 1e-20 {
-        rows.push(fine);
-        cols.push(coarse);
-        vals.push(w);
-    }
-}
-
 fn build_alcouffe_prolongation_triplets(
     lap: &CsMat<f64>,
     fine_nrows: usize,
@@ -203,82 +194,88 @@ fn build_alcouffe_prolongation_triplets(
     let mut cols = Vec::with_capacity(fine_n * 3);
     let mut vals = Vec::with_capacity(fine_n * 3);
 
+    // Coarse grid coincides with the even-indexed fine points: coarse point
+    // (cr, cc) lives at fine (2*cr, 2*cc). The standard operator-induced
+    // (Alcouffe) interpolation therefore injects coarse-aligned fine points
+    // with unit weight and, for straddling fine points, splits weight between
+    // the two bracketing coarse points in proportion to the conductance
+    // coupling to each.
+
     for fr in 0..fine_nrows {
+        // Vertical: coarse-aligned (even) rows inject at 2*cfr = fr; odd rows
+        // straddle coarse rows f_low = fr-1 and f_high = fr+1.
+        let v_aligned = fr % 2 == 0;
         for fc in 0..fine_ncols {
             let fine_idx = fr * fine_ncols + fc;
 
-            let d_above = if fr > 0 {
-                get_conductance(lap, fr - 1, fc, fr, fc, fine_ncols)
-            } else { 0.0 };
-            let d_below = if fr + 1 < fine_nrows {
-                get_conductance(lap, fr, fc, fr + 1, fc, fine_ncols)
-            } else { 0.0 };
-            let v_sum = d_above + d_below;
+            let h_aligned = fc % 2 == 0;
 
-            let d_left = if fc > 0 {
-                get_conductance(lap, fr, fc - 1, fr, fc, fine_ncols)
-            } else { 0.0 };
-            let d_right = if fc + 1 < fine_ncols {
-                get_conductance(lap, fr, fc, fr, fc + 1, fine_ncols)
-            } else { 0.0 };
-            let h_sum = d_left + d_right;
-
-            let w_v0 = if v_sum < 1e-30 { 0.5 } else { d_above / v_sum };
-            let w_v1 = if v_sum < 1e-30 { 0.5 } else { d_below / v_sum };
-            let w_h0 = if h_sum < 1e-30 { 0.5 } else { d_left / h_sum };
-            let w_h1 = if h_sum < 1e-30 { 0.5 } else { d_right / h_sum };
-
-            let cr0 = if fr > 0 { (fr / 2).min(coarse_nrows - 1) } else { 0 };
-            let cr1 = if fr + 1 < fine_nrows { (fr + 1) / 2 } else { coarse_nrows };
-            let cc0 = if fc > 0 { (fc / 2).min(coarse_ncols - 1) } else { 0 };
-            let cc1 = if fc + 1 < fine_ncols { (fc + 1) / 2 } else { coarse_ncols };
-
-            let ok_cr0 = cr0 < coarse_nrows && d_above > 1e-30;
-            let ok_cr1 = cr1 < coarse_nrows && d_below > 1e-30;
-            let ok_cc0 = cc0 < coarse_ncols && d_left > 1e-30;
-            let ok_cc1 = cc1 < coarse_ncols && d_right > 1e-30;
-
-            let full_vertical = ok_cr0 && ok_cr1;
-            let full_horizontal = ok_cc0 && ok_cc1;
-
-            if full_vertical && full_horizontal {
-                push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc0, w_v0 * w_h0);
-                push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc1, w_v0 * w_h1);
-                push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc0, w_v1 * w_h0);
-                push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc1, w_v1 * w_h1);
-            } else if full_vertical {
-                if ok_cc0 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc0, w_v0 * 1.0);
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc0, w_v1 * 1.0);
-                } else if ok_cc1 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc1, w_v0 * 1.0);
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc1, w_v1 * 1.0);
-                } else {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc0, 1.0);
-                }
-            } else if full_horizontal {
-                if ok_cr0 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc0, 1.0 * w_h0);
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc1, 1.0 * w_h1);
-                } else if ok_cr1 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc0, 1.0 * w_h0);
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc1, 1.0 * w_h1);
-                } else {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc0, 1.0);
-                }
+            // Vertical stencil (weights to the "up"/"down" coarse rows in
+            // raster terms: row fr-1 is above, row fr+1 is below).
+            let (v_lo, v_lo_w, v_hi, v_hi_w) = if v_aligned {
+                let cr = fr / 2;
+                // Inject the fine point's own coarse row.
+                (cr, 1.0, cr, 0.0)
             } else {
-                if ok_cr0 && ok_cc0 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc0, 1.0);
-                } else if ok_cr0 && ok_cc1 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc1, 1.0);
-                } else if ok_cr1 && ok_cc0 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc0, 1.0);
-                } else if ok_cr1 && ok_cc1 {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr1 * coarse_ncols + cc1, 1.0);
+                // Straddling: bracketing coarse rows at fine rows fr-1, fr+1.
+                let d_above = if fr > 0 {
+                    get_conductance(lap, fr - 1, fc, fr, fc, fine_ncols)
                 } else {
-                    push_triplet(&mut rows, &mut cols, &mut vals, fine_idx, cr0 * coarse_ncols + cc0, 1.0);
+                    0.0
+                };
+                let d_below = if fr + 1 < fine_nrows {
+                    get_conductance(lap, fr, fc, fr + 1, fc, fine_ncols)
+                } else {
+                    0.0
+                };
+                let s = d_above + d_below;
+                if s > 0.0 {
+                    ((fr - 1) / 2, d_above / s, (fr + 1) / 2, d_below / s)
+                } else {
+                    ((fr - 1) / 2, 0.5, (fr + 1) / 2, 0.5)
                 }
-            }
+            };
+
+            // Horizontal stencil (weights to the left/right coarse columns).
+            let (h_lo, h_lo_w, h_hi, h_hi_w) = if h_aligned {
+                let cc = fc / 2;
+                (cc, 1.0, cc, 0.0)
+            } else {
+                let d_left = if fc > 0 {
+                    get_conductance(lap, fr, fc - 1, fr, fc, fine_ncols)
+                } else {
+                    0.0
+                };
+                let d_right = if fc + 1 < fine_ncols {
+                    get_conductance(lap, fr, fc, fr, fc + 1, fine_ncols)
+                } else {
+                    0.0
+                };
+                let s = d_left + d_right;
+                if s > 0.0 {
+                    ((fc - 1) / 2, d_left / s, (fc + 1) / 2, d_right / s)
+                } else {
+                    ((fc - 1) / 2, 0.5, (fc + 1) / 2, 0.5)
+                }
+            };
+
+            // Product of the vertical and horizontal 1-D weights (tensor
+            // stencil). Each fine row sums to exactly 1.0 because v_lo_w + v_hi_w
+            // == 1.0 and h_lo_w + h_hi_w == 1.0.
+            let mut emit = |cr: usize, cv: f64, cc: usize, ch: f64| {
+                if cr < coarse_nrows && cc < coarse_ncols {
+                    let w = cv * ch;
+                    if w != 0.0 {
+                        rows.push(fine_idx);
+                        cols.push(cr * coarse_ncols + cc);
+                        vals.push(w);
+                    }
+                }
+            };
+            emit(v_lo, v_lo_w, h_lo, h_lo_w);
+            emit(v_lo, v_lo_w, h_hi, h_hi_w);
+            emit(v_hi, v_hi_w, h_lo, h_lo_w);
+            emit(v_hi, v_hi_w, h_hi, h_hi_w);
         }
     }
 
