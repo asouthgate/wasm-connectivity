@@ -1,8 +1,16 @@
 //! Exponential integral E1(x) = integral_x^inf exp(-t)/t dt  (x > 0).
 //!
-//! Port of the Numerical Recipes `expint(1, x)` algorithm (Cephes-style),
-//! matching `scipy.special.exp1`. Used for the analytic time integral of the
-//! heat-diffusion kernel in the roost-location model.
+//! Algorithm: Cephes `exp1` (`expn.c`, S. L. Moshier) — a Lentz continued
+//! fraction for `x > 1` and the power-series expansion in `-gamma - ln(x)`
+//! for `x <= 1`. `scipy.special.exp1` wraps the same algorithm. See:
+//!
+//!   * Moshier, S. L., *Methods and Programs for Mathematical Functions*,
+//!     Prentice-Hall, 1989 (Cephes `expn.c`).
+//!   * SciPy, `scipy/special/cephes/expn.c` (`scipy.special.exp1`).
+//!
+//! The test reference values are from `scipy.special.exp1`. Used for the
+//! analytic time integral of the heat-diffusion kernel in the roost-location
+//! model.
 
 const EULER: f64 = 0.577_215_664_901_532_9;
 const MAXIT: usize = 100;

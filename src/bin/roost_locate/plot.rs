@@ -2,7 +2,7 @@
 
 use image::{DynamicImage, Rgb, RgbImage};
 use plotters::prelude::*;
-use wasm_connect::roost::parula::parula_u8;
+use wasm_connect::roost::colormap::colormap_u8;
 
 pub struct PlotData<'a> {
     /// Surface loss values, row-major (`y` outer, `x` inner).
@@ -23,15 +23,24 @@ pub struct PlotData<'a> {
 
 const ORANGE: RGBColor = RGBColor(255, 140, 0);
 
-// Layout estimates (label areas + margins). The plotting area is filled by the
-// heatmap; everything else is axis labels / caption / legend.
-const LEFT: f64 = 63.0;
-const RIGHT: f64 = 14.0;
-const TOP: f64 = 40.0;
-const BOTTOM: f64 = 52.0;
-const PLOT_HEIGHT: f64 = 560.0;
+/// Presentation settings for rendering. The caller owns these values
+/// (pixel sizes and contour definitions); the render code bakes in no tuning.
+pub struct PlotConfig<'a> {
+    /// Plotting area height in pixels; width follows the data's aspect ratio.
+    pub plot_height: f64,
+    /// Pixel margins around the plotting area (axis labels / caption / legend).
+    pub margin_left: f64,
+    pub margin_right: f64,
+    pub margin_top: f64,
+    pub margin_bottom: f64,
+    /// Contour levels as fractions of the maximum loss, drawn as white bands.
+    /// Must be non-empty.
+    pub contour_levels: &'a [f64],
+    /// Contour band half-width in pixels.
+    pub contour_width: f64,
+}
 
-pub fn render(path: &str, data: &PlotData) -> Result<(), String> {
+pub fn render(path: &str, data: &PlotData, config: &PlotConfig) -> Result<(), String> {
     let max_loss = data
         .surface
         .iter()
@@ -42,16 +51,18 @@ pub fn render(path: &str, data: &PlotData) -> Result<(), String> {
     }
 
     let norm: Vec<f64> = data.surface.iter().map(|v| v / max_loss).collect();
-    let lut = parula_u8(256, "new");
+    let lut = colormap_u8(256);
 
     let xspan = data.xmax - data.xmin;
     let yspan = data.ymax - data.ymin;
     let aspect = xspan / yspan;
 
     // Size the canvas so the plotting area has the data's aspect ratio.
-    let plot_w = PLOT_HEIGHT * aspect;
-    let width = (plot_w + LEFT + RIGHT).round().max(400.0) as u32;
-    let height = (PLOT_HEIGHT + TOP + BOTTOM).round() as u32;
+    let plot_w = config.plot_height * aspect;
+    let width = (plot_w + config.margin_left + config.margin_right)
+        .round()
+        .max(400.0) as u32;
+    let height = (config.plot_height + config.margin_top + config.margin_bottom).round() as u32;
 
     let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
     root.fill(&WHITE).map_err(|e| format!("{e:?}"))?;
@@ -82,7 +93,15 @@ pub fn render(path: &str, data: &PlotData) -> Result<(), String> {
     // Heatmap + contour bands, rendered directly at the plot resolution so
     // both the colormap and the contour lines come out smooth.
     let (pw, ph) = chart.plotting_area().dim_in_pixel();
-    let heatmap = build_heatmap(&norm, data.grid_size, &lut, pw, ph);
+    let heatmap = build_heatmap(
+        &norm,
+        data.grid_size,
+        &lut,
+        pw,
+        ph,
+        config.contour_levels,
+        config.contour_width,
+    );
     let elem: BitMapElement<(f64, f64)> = ((data.xmin, data.ymax), DynamicImage::ImageRgb8(heatmap)).into();
     chart
         .draw_series(std::iter::once(elem))
@@ -156,15 +175,10 @@ pub fn render(path: &str, data: &PlotData) -> Result<(), String> {
 }
 
 /// Contour levels (as fractions of the maximum loss) drawn as white bands.
-const CONTOUR_LEVELS: [f64; 4] = [0.1, 0.2, 0.3, 0.4];
-/// Contour line half-width in pixels (band thickness stays roughly constant
-/// by scaling the value-epsilon by the local gradient magnitude).
-const CONTOUR_WIDTH: f64 = 0.75;
-
-fn color_at(lut: &[[u8; 3]], v: f64, mag_px: f64) -> Rgb<u8> {
+fn color_at(lut: &[[u8; 3]], v: f64, mag_px: f64, levels: &[f64], half_width: f64) -> Rgb<u8> {
     if mag_px > 1e-12 {
-        for &level in &CONTOUR_LEVELS {
-            if (v - level).abs() / mag_px < CONTOUR_WIDTH {
+        for &level in levels {
+            if (v - level).abs() / mag_px < half_width {
                 return Rgb([255, 255, 255]);
             }
         }
@@ -214,7 +228,15 @@ fn sample_bilinear(norm: &[f64], n: usize, fx: f64, fy: f64) -> f64 {
 /// Build the heatmap (with contour bands baked in) at `out_w x out_h` pixels.
 /// Image row 0 corresponds to the largest y (north); the surface grid row 0 is
 /// the smallest y.
-fn build_heatmap(norm: &[f64], n: usize, lut: &[[u8; 3]], out_w: u32, out_h: u32) -> RgbImage {
+fn build_heatmap(
+    norm: &[f64],
+    n: usize,
+    lut: &[[u8; 3]],
+    out_w: u32,
+    out_h: u32,
+    levels: &[f64],
+    contour_width: f64,
+) -> RgbImage {
     let (gx, gy) = gradient(norm, n);
     let mut img = RgbImage::new(out_w, out_h);
     let dw = (out_w - 1) as f64;
@@ -233,7 +255,7 @@ fn build_heatmap(norm: &[f64], n: usize, lut: &[[u8; 3]], out_w: u32, out_h: u32
             let gx_px = sample_bilinear(&gx, n, fx, fy) * span / dw;
             let gy_px = sample_bilinear(&gy, n, fx, fy) * span / dh;
             let mag = (gx_px * gx_px + gy_px * gy_px).sqrt();
-            img.put_pixel(ox, oy, color_at(lut, v, mag));
+            img.put_pixel(ox, oy, color_at(lut, v, mag, levels, contour_width));
         }
     }
     img

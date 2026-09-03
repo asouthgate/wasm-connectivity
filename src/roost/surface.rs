@@ -1,7 +1,6 @@
 //! Error surface over a grid of candidate roost positions.
 //!
-//! Port of `compute_error_surface` from the Python implementation. For each
-//! candidate roost position we predict the proportion of calls each detector
+//! For each candidate roost position we predict the proportion of calls each detector
 //! should have caught using a 2D heat-diffusion kernel (analytic integral over
 //! `[t0, t1]` in terms of the exponential integral E1), then compare against
 //! the observed proportions. The roost estimate is the grid point with the

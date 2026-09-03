@@ -4,7 +4,7 @@ mod io;
 mod plot;
 
 use io::{aggregate, count_calls, read_detectors, read_sunset};
-use plot::{render as render_plot, PlotData};
+use plot::{render as render_plot, PlotConfig, PlotData};
 use wasm_connect::roost::compute_error_surface;
 
 const USAGE: &str = "\
@@ -258,7 +258,16 @@ fn run() -> Result<(), String> {
             known_roost: args.roost,
             loss: result.loss,
         };
-        render_plot(plot_path, &data)?;
+        let config = PlotConfig {
+            plot_height: 560.0,
+            margin_left: 63.0,
+            margin_right: 14.0,
+            margin_top: 40.0,
+            margin_bottom: 52.0,
+            contour_levels: &[0.1, 0.2, 0.3, 0.4],
+            contour_width: 0.75,
+        };
+        render_plot(plot_path, &data, &config)?;
         eprintln!("Wrote plot to {plot_path}");
     }
 
