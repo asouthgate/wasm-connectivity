@@ -1,5 +1,24 @@
 use serde::Serialize;
 
+/// Resistance value used to fill nodata cells. 1e9 Ω makes the edge
+/// conductance ~1e-9 — effectively an insulator for the physics but
+/// keeps every pixel as a node so the grid is fully rectangular.
+pub const FILL_RESISTANCE: f64 = 1e9;
+
+/// Replace nodata / non-positive / non-finite resistance with
+/// [`FILL_RESISTANCE`] so every cell becomes a graph node.
+pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
+    data.iter()
+        .map(|&v| {
+            if v == nodata || !v.is_finite() || v <= 0.0 {
+                FILL_RESISTANCE
+            } else {
+                v
+            }
+        })
+        .collect()
+}
+
 #[derive(Serialize)]
 pub struct DownsampleOutput {
     pub data: Vec<f64>,

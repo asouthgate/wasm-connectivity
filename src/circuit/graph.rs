@@ -1,4 +1,4 @@
-use crate::grid::Grid;
+use crate::circuit::grid::Grid;
 
 // Compute the harmonic mean of two conductances
 // which is used to determine the effective conductance between two nodes in a grid.
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_conductance_edges_uniform() {
-        let (_cell_to_node, _num_nodes, edges, _lap, _comps) = crate::build_circuit_model(&[1.0; 4], 2, 2, crate::NODATA_SENTINEL);
+        let (_cell_to_node, _num_nodes, edges, _lap) = crate::build_circuit_model(&[1.0; 4], 2, 2, crate::NODATA_SENTINEL);
         assert!(edges.len() > 0);
     }
 }

@@ -1,12 +1,7 @@
 use sprs::CsMat;
-use crate::pcg::{Preconditioner, mat_vec_mul_slice};
-use crate::cholesky;
+use crate::linalg::pcg::{Preconditioner, mat_vec_mul_slice};
+use crate::linalg::cholesky;
 use std::cell::RefCell;
-
-/// Resistance value used to fill nodata cells. 1e9 Ω makes the edge
-/// conductance ~1e-9 — effectively an insulator for the physics but
-/// keeps every pixel as a node so the grid is fully rectangular.
-const FILL_RESISTANCE: f64 = 1e9;
 
 /// One level of the multigrid hierarchy.
 struct MgLevel {
@@ -290,20 +285,6 @@ fn build_alcouffe_prolongation_triplets(
     (rows, cols, vals)
 }
 
-/// Replace nodata / non-positive / non-finite resistance with
-/// `FILL_RESISTANCE` so every cell becomes a graph node.
-pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
-    data.iter()
-        .map(|&v| {
-            if v == nodata || !v.is_finite() || v <= 0.0 {
-                FILL_RESISTANCE
-            } else {
-                v
-            }
-        })
-        .collect()
-}
-
 /// Which prolongation operator to use during Galerkin coarsening.
 #[derive(Copy, Clone, PartialEq)]
 enum ProlongKind {
@@ -401,7 +382,7 @@ impl MgPreconditioner {
 
             // Galerkin: L_coarse = P^T * L_fine * P (fused, no intermediate)
             let mut laplacian = galerkin_coarsen(fine_lap, &p, coarse_n);
-            crate::laplacian::regularize_laplacian(&mut laplacian);
+            crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
 
             levels.push(MgLevel {
                 laplacian,
@@ -456,11 +437,11 @@ impl MgPreconditioner {
 
         if level == self.levels.len() - 1 {
             if let Some(ref l) = lvl.cholesky_l {
-                let x = crate::cholesky::cholesky_solve(l, b, n);
+                let x = crate::linalg::cholesky::cholesky_solve(l, b, n);
                 workspaces.borrow_mut()[level].z.copy_from_slice(&x);
             } else {
                 let mut ws = workspaces.borrow_mut();
-                let res = crate::pcg::cg_solve(&lvl.laplacian, b, 50, 1e-3, Some(&ws[level].z));
+                let res = crate::linalg::pcg::cg_solve(&lvl.laplacian, b, 50, 1e-3, Some(&ws[level].z));
                 ws[level].z.copy_from_slice(&res.x);
             }
             return;
@@ -603,7 +584,7 @@ fn symmetric_gauss_seidel_smooth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pcg;
+    use crate::linalg::pcg;
 
     // Helper to generate safe mock resistance data for a uniform grid
     fn generate_mock_resistance(nrows: usize, ncols: usize) -> Vec<f64> {
@@ -612,16 +593,16 @@ mod tests {
 
     // Build a bilinear MG hierarchy from a resistance raster (nodata -1.0).
     fn build_mg(resistance: &[f64], nrows: usize, ncols: usize, max_levels: usize) -> MgPreconditioner {
-        let filled = fill_nodata(resistance, -1.0);
-        let (_cell_to_node, _num_nodes, _edges, laplacian, _components) =
+        let filled = crate::raster::fill_nodata(resistance, -1.0);
+        let (_cell_to_node, _num_nodes, _edges, laplacian) =
             crate::build_circuit_model(&filled, nrows, ncols, -1.0);
         MgPreconditioner::build_from_laplacian(&laplacian, nrows, ncols, max_levels)
     }
 
     // Build an Alcouffe MG hierarchy from a resistance raster (nodata -1.0).
     fn build_mg_alcouffe(resistance: &[f64], nrows: usize, ncols: usize, max_levels: usize) -> MgPreconditioner {
-        let filled = fill_nodata(resistance, -1.0);
-        let (_cell_to_node, _num_nodes, _edges, laplacian, _components) =
+        let filled = crate::raster::fill_nodata(resistance, -1.0);
+        let (_cell_to_node, _num_nodes, _edges, laplacian) =
             crate::build_circuit_model(&filled, nrows, ncols, -1.0);
         MgPreconditioner::build_alcouffe_from_laplacian(&laplacian, None, nrows, ncols, max_levels)
     }
@@ -826,7 +807,7 @@ mod tests {
 
         let b: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.5 + 0.3).sin() + 1.0) * 0.5).collect();
         let l = lvl.cholesky_l.as_ref().unwrap();
-        let z = crate::cholesky::cholesky_solve(l, &b, n);
+        let z = crate::linalg::cholesky::cholesky_solve(l, &b, n);
 
         let mut az = vec![0.0; n];
         pcg::mat_vec_mul_into(&lvl.laplacian, &z, &mut az);
@@ -871,56 +852,6 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Diagnostic tests for MG preconditioner on subgraph vs full-grid Laplacian
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_mg_preconditioner_on_subgraph_mismatch() {
-        let nrows = 8;
-        let ncols = 8;
-        let n = nrows * ncols;
-
-        let resistance = generate_mock_resistance(nrows, ncols);
-        let (_cell_to_node, num_nodes, _edges, full_lap, components) =
-            crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
-        assert_eq!(num_nodes, n);
-
-        let mg = build_mg(&resistance, nrows, ncols, 4);
-
-        let comp = &components[0];
-        let (a_local, _node_to_local) = crate::components::build_subgraph_laplacian(&full_lap, comp);
-        let comp_size = comp.len();
-
-        let b_raw: Vec<f64> = (0..comp_size).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
-        let mean: f64 = b_raw.iter().sum::<f64>() / comp_size as f64;
-        let b: Vec<f64> = b_raw.iter().map(|v| v - mean).collect();
-
-        let mut z = vec![0.0; comp_size];
-        mg.apply(&b, &mut z);
-
-        let mut az = vec![0.0; comp_size];
-        pcg::mat_vec_mul_into(&a_local, &z, &mut az);
-        let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
-        let rz: f64 = b.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
-
-        let b_norm = b.iter().map(|v| v * v).sum::<f64>().sqrt();
-        eprintln!("Subgraph test: comp_size={}, full_grid={}", comp_size, n);
-        eprintln!("  ||b|| = {:.6e}, r·z = {:.6e}, z·Az = {:.6e}", b_norm, rz, z_az);
-        eprintln!("  alpha = {:.6e}", rz / z_az.max(1e-30));
-
-        assert!(
-            z_az > 0.0,
-            "MG preconditioner on subgraph: z·Az = {:.6e} (must be > 0 for CG descent)",
-            z_az
-        );
-        assert!(
-            rz > 0.0,
-            "MG preconditioner on subgraph: r·z = {:.6e} (must be > 0 for CG descent)",
-            rz
-        );
-    }
-
     #[test]
     fn test_mg_preconditioner_on_full_grid() {
         let nrows = 8;
@@ -928,7 +859,7 @@ mod tests {
         let n = nrows * ncols;
 
         let resistance = generate_mock_resistance(nrows, ncols);
-        let (_cell_to_node, num_nodes, _edges, _full_lap, _components) =
+        let (_cell_to_node, num_nodes, _edges, _full_lap) =
             crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
         assert_eq!(num_nodes, n);
 
@@ -963,56 +894,6 @@ mod tests {
     }
 
     #[test]
-    fn test_single_component_equals_full_grid() {
-        let nrows = 4;
-        let ncols = 4;
-        let n = nrows * ncols;
-
-        let resistance = generate_mock_resistance(nrows, ncols);
-        let (_cell_to_node, _num_nodes, _edges, full_lap, components) =
-            crate::build_circuit_model(&resistance, nrows, ncols, -1.0);
-
-        assert_eq!(components.len(), 1, "Uniform grid should have exactly 1 component");
-        assert_eq!(components[0].len(), n, "Component should include all nodes");
-
-        let (a_local, _node_to_local) = crate::components::build_subgraph_laplacian(&full_lap, &components[0]);
-
-        // Build inverse map: local index -> global index
-        let comp = &components[0];
-        let mut max_diff = 0.0;
-        for local_u in 0..n {
-            let global_u = comp[local_u];
-            if let Some(rv_local) = a_local.outer_view(local_u) {
-                if let Some(rv_full) = full_lap.outer_view(global_u) {
-                    // Compare each entry: local (local_v, val) vs full (global_v, val)
-                    for (local_v, &val) in rv_local.iter() {
-                        let global_v = comp[local_v];
-                        // Find the matching entry in the full Laplacian
-                        let mut found = false;
-                        for (full_col, &full_val) in rv_full.iter() {
-                            if full_col == global_v {
-                                let diff = (val - full_val).abs();
-                                if diff > max_diff {
-                                    max_diff = diff;
-                                }
-                                found = true;
-                                break;
-                            }
-                        }
-                        assert!(found, "Local entry ({},{}) -> global ({},{}) not found in full Laplacian",
-                            local_u, local_v, global_u, global_v);
-                    }
-                }
-            }
-        }
-        assert!(
-            max_diff < 1e-10,
-            "Subgraph Laplacian differs from full-grid Laplacian for single component: max_diff = {:.6e}",
-            max_diff
-        );
-    }
-
-    #[test]
     fn test_diag_inv_range_across_levels() {
         let nrows = 32;
         let ncols = 32;
@@ -1020,7 +901,7 @@ mod tests {
         let mg = build_mg(&resistance, nrows, ncols, 6);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
+            let diag_inv = crate::circuit::laplacian::extract_diag_inv(&lvl.laplacian);
             let n = lvl.nrows * lvl.ncols;
             let mut min_inv = f64::MAX;
             let mut max_inv = 0.0;
@@ -1066,7 +947,7 @@ mod tests {
 
         let l = lvl.cholesky_l.as_ref().unwrap();
         let b: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.5 + 0.3).sin() + 1.0) * 0.5).collect();
-        let x = crate::cholesky::cholesky_solve(l, &b, n);
+        let x = crate::linalg::cholesky::cholesky_solve(l, &b, n);
 
         let mut ax = vec![0.0; n];
         pcg::mat_vec_mul_into(&lvl.laplacian, &x, &mut ax);
@@ -1107,7 +988,7 @@ mod tests {
         let mg = build_mg(&resistance, nrows, ncols, 6);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
+            let diag_inv = crate::circuit::laplacian::extract_diag_inv(&lvl.laplacian);
             let nn = lvl.nrows * lvl.ncols;
             let mut min_d = f64::MAX;
             let mut max_d = 0.0;
@@ -1335,7 +1216,7 @@ mod tests {
         let mg = build_mg_alcouffe(&resistance, nrows, ncols, 6);
 
         for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let diag_inv = crate::laplacian::extract_diag_inv(&lvl.laplacian);
+            let diag_inv = crate::circuit::laplacian::extract_diag_inv(&lvl.laplacian);
             let nn = lvl.nrows * lvl.ncols;
             let mut min_d = f64::MAX;
             let mut max_d = 0.0;

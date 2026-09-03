@@ -1,6 +1,13 @@
 /* tslint:disable */
 /* eslint-disable */
 
+/**
+ * Estimate a bat roost location from per-detector call data using the
+ * Woolley error-surface method. `surface` is the full `grid_size x grid_size`
+ * loss field (row-major, y-outer), and `x`/`y`/`loss` are the best point.
+ */
+export function compute_roost_surface(x: Float64Array, y: Float64Array, counts: Float64Array, grid_size: number, capture_radius: number, diffusivity: number, t0: number, t1: number, loss: string): string;
+
 export function downsample_raster(data: Float64Array, nrows: number, ncols: number, nodata: number, target_rows: number, target_cols: number): string;
 
 export function init_panic_hook(): void;
@@ -23,6 +30,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly compute_roost_surface: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number];
     readonly downsample_raster: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly rasterize_geojson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly run_geospatial_pipeline_cached_mg: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => [number, number];

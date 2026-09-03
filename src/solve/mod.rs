@@ -1,8 +1,11 @@
 use sprs::CsMat;
 use serde::Serialize;
 use std::collections::HashSet;
-use crate::{components, pcg as solver, current, cache};
-use crate::multigrid::{self, MgPreconditioner};
+use crate::linalg::pcg as solver;
+use crate::linalg::multigrid::MgPreconditioner;
+
+pub mod cache;
+pub mod current;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum GroundMode {
@@ -105,18 +108,19 @@ pub struct AnnotatedOutput<T: Serialize> {
 
 /// Cached raster-mode solve. Uses the global cache (`cache` module):
 ///
-/// * `rebuild_laplacian = false` — the resistance-derived Laplacian,
-///   cell_to_node, and components are reused as-is; only the source/ground
-///   rasters are reinterpreted. This is the dominant interactive web-map
-///   case and skips the entire `build_circuit_model` pipeline.
+/// * `rebuild_laplacian = false` — the resistance-derived Laplacian and
+///   `cell_to_node` are reused as-is; only the source/ground rasters are
+///   reinterpreted. This is the dominant interactive web-map case and
+///   skips the entire `build_circuit_model` pipeline.
 /// * `rebuild_laplacian = true` — the circuit model is rebuilt from
 ///   `resistance_data`, but the previous solve's voltage field (still
 ///   cached) is fed to the new PCG run as an initial guess. Useful when
 ///   the user edits the resistance raster itself.
 ///
-/// In both cases, the new voltage field is written back to the cache so
-/// the next call can warm-start from it. Returns the output plus the
-/// total PCG iteration count (for warm-vs-cold benchmarks).
+/// Like the multigrid paths, nodata cells are filled with a high resistance
+/// so every cell is a node and the full rectangular system is solved in one
+/// shot (no connected-component extraction). The new voltage field is written
+/// back to the cache so the next call can warm-start from it.
 pub fn solve_raster_cached(
     resistance_data: &[f64],
     nrows: usize,
@@ -130,45 +134,65 @@ pub fn solve_raster_cached(
     rebuild_laplacian: bool,
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
-    let (laplacian, cell_to_node, num_nodes, components, prior_voltages) =
-        obtain_circuit(resistance_data, nrows, ncols, nodata, rebuild_laplacian);
+    let filled = crate::raster::fill_nodata(resistance_data, nodata);
+
+    let (laplacian, cell_to_node, num_nodes, prior_voltages) =
+        obtain_circuit(&filled, nrows, ncols, nodata, rebuild_laplacian);
 
     let ground_nodes = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
-    let ground_set: HashSet<usize> = ground_nodes.iter().copied().collect();
 
     let current_global = build_global_currents(
         &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
     );
-    let prior_slice = prior_voltages
-        .as_ref()
-        .map(|v| v.as_slice())
-        .filter(|v| !v.is_empty());
-    let (a, pin_grounds) = match ground_mode {
+
+    let grounds_present;
+    let (a, mut b) = match ground_mode {
         GroundMode::Neumann => {
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
-            let a = if g.iter().any(|&x| x > 0.0) {
-                crate::laplacian::add_diagonal(&laplacian, &g)
+            grounds_present = g.iter().any(|&x| x > 0.0);
+            let a = if grounds_present {
+                crate::circuit::laplacian::add_diagonal(&laplacian, &g)
             } else {
                 laplacian
             };
-            (a, false)
+            (a, current_global)
         }
-        GroundMode::Dirichlet => (laplacian, true),
+        GroundMode::Dirichlet => {
+            let gns = ground_nodes;
+            grounds_present = !gns.is_empty();
+            let a = if grounds_present {
+                apply_dirichlet_ground_lap(&laplacian, &gns)
+            } else {
+                laplacian
+            };
+            let mut b = current_global;
+            zero_ground_rhs(&mut b, &gns);
+            (a, b)
+        }
     };
-    let (voltages_global, iters) = solve_component_voltages_warm(
-        &components, &current_global, &a,
-        num_nodes, max_iter, tol, remove_average, prior_slice,
-        &ground_set, pin_grounds,
-    );
+
+    // Mean removal is only needed for singular (ground-free) systems.
+    if remove_average && !grounds_present {
+        let sum: f64 = b.iter().sum();
+        if sum.abs() > 1e-15 {
+            let mean = sum / num_nodes as f64;
+            for v in &mut b {
+                *v -= mean;
+            }
+        }
+    }
+
+    let prior_seed = prior_voltages.as_deref().filter(|v| v.len() == num_nodes);
+    let res = solver::cg_solve(&a, &b, max_iter, tol, prior_seed);
 
     let out = build_raster_output(
-        &voltages_global, resistance_data, ground_data,
+        &res.x, resistance_data, ground_data,
         &cell_to_node, nrows, ncols, nodata, ground_mode,
     );
 
-    cache::store_last_voltages(&out.voltages);
+    cache::store_last_voltages(&res.x);
 
-    AnnotatedOutput { output: out, total_iters: iters }
+    AnnotatedOutput { output: out, total_iters: res.iters }
 }
 
 // ----------------------------------------------------------------------------
@@ -178,50 +202,42 @@ pub fn solve_raster_cached(
 /// Reuse the cached circuit (no rebuild) or build a fresh one. The
 /// returned `prior_voltages` is the cache's most recent per-node voltage
 /// field — `None` if the cache was empty or the rebuild path discarded
-/// the prior solution. The owned laplacian / cell_to_node / components are left
-/// in the cache for the next call by this function (the caller does not
-/// need to re-store them).
+/// the prior solution. The owned laplacian / cell_to_node are left in the
+/// cache for the next call by this function.
 fn obtain_circuit(
     resistance_data: &[f64],
     nrows: usize,
     ncols: usize,
     nodata: f64,
     rebuild: bool,
-) -> (CsMat<f64>, Vec<i32>, usize, Vec<Vec<usize>>, Option<Vec<f64>>) {
+) -> (CsMat<f64>, Vec<i32>, usize, Option<Vec<f64>>) {
     let prior = cache::last_voltages();
 
     if !rebuild {
         if let Some((cached_nrows, cached_ncols, cached_nodata)) = cache::peek_meta() {
             if (cached_nrows, cached_ncols, cached_nodata) == (nrows, ncols, nodata) {
-                // We peek-and-store back to leave the cache intact for the
-                // subsequent call (which may be a no-rebuild run too).
                 let cached = cache::take().expect("peek_meta indicated cache present");
                 let prior_out = if prior.is_empty() { None } else { Some(prior) };
-                // We keep the circuit in the cache but drop our local
-                // reference to it; the caller instead re-stores the
-                // fresh laplacian/cell_to_node/components returned below.
                 cache::store(
                     cached.laplacian.clone(), cached.cell_to_node.clone(),
-                    cached.num_nodes, cached.components.clone(),
-                    cached.nrows, cached.ncols, cached.nodata,
+                    cached.num_nodes, cached.nrows, cached.ncols, cached.nodata,
                 );
                 return (
-                    cached.laplacian, cached.cell_to_node, cached.num_nodes,
-                    cached.components, prior_out,
+                    cached.laplacian, cached.cell_to_node, cached.num_nodes, prior_out,
                 );
             }
         }
     }
 
     // Rebuild path, or no-rebuild path with a stale/missing cache.
-    let (cell_to_node, num_nodes, _edges, laplacian, components) =
+    let (cell_to_node, num_nodes, _edges, laplacian) =
         crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
     cache::store(
-        laplacian.clone(), cell_to_node.clone(), num_nodes, components.clone(),
+        laplacian.clone(), cell_to_node.clone(), num_nodes,
         nrows, ncols, nodata,
     );
     let prior_out = if rebuild && !prior.is_empty() { Some(prior) } else { None };
-    (laplacian, cell_to_node, num_nodes, components, prior_out)
+    (laplacian, cell_to_node, num_nodes, prior_out)
 }
 
 // ----------------------------------------------------------------------------
@@ -303,9 +319,9 @@ pub fn solve_raster_sources_mg(
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
     // Fill nodata → every cell is a node → rectangular grid
-    let filled = multigrid::fill_nodata(resistance_data, nodata);
+    let filled = crate::raster::fill_nodata(resistance_data, nodata);
 
-    let (cell_to_node, num_nodes, _edges, laplacian, _components) =
+    let (cell_to_node, num_nodes, _edges, laplacian) =
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
 
     let current_global = build_global_currents(
@@ -322,7 +338,7 @@ pub fn solve_raster_sources_mg(
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             grounds_present = g.iter().any(|&x| x > 0.0);
             let a = if grounds_present {
-                crate::laplacian::add_diagonal(&laplacian, &g)
+                crate::circuit::laplacian::add_diagonal(&laplacian, &g)
             } else {
                 laplacian
             };
@@ -382,9 +398,9 @@ pub fn solve_raster_sources_mg_alcouffe(
     remove_average: bool,
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
-    let filled = multigrid::fill_nodata(resistance_data, nodata);
+    let filled = crate::raster::fill_nodata(resistance_data, nodata);
 
-    let (cell_to_node, num_nodes, _edges, laplacian, _components) =
+    let (cell_to_node, num_nodes, _edges, laplacian) =
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
 
     let current_global = build_global_currents(
@@ -398,7 +414,7 @@ pub fn solve_raster_sources_mg_alcouffe(
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             grounds_present = g.iter().any(|&x| x > 0.0);
             let a = if grounds_present {
-                crate::laplacian::add_diagonal(&laplacian, &g)
+                crate::circuit::laplacian::add_diagonal(&laplacian, &g)
             } else {
                 laplacian
             };
@@ -441,90 +457,6 @@ pub fn solve_raster_sources_mg_alcouffe(
     );
 
     AnnotatedOutput { output: out, total_iters: res.iters }
-}
-
-fn solve_component_voltages_warm(
-    components: &[Vec<usize>],
-    current_global: &[f64],
-    laplacian: &CsMat<f64>,
-    num_nodes: usize,
-    max_iter: usize,
-    tol: f64,
-    remove_average: bool,
-    prior_voltages: Option<&[f64]>,
-    ground_set: &HashSet<usize>,
-    pin_grounds: bool,
-) -> (Vec<f64>, usize) {
-    let mut voltages_global = vec![0.0f64; num_nodes];
-    let mut current_local = Vec::with_capacity(num_nodes);
-    let mut total_iters = 0usize;
-
-    let has_ground = !ground_set.is_empty();
-
-    for comp in components {
-        let total_current: f64 = comp.iter().map(|&gn| current_global[gn].abs()).sum();
-        let has_comp_ground = has_ground && comp.iter().any(|gn| ground_set.contains(gn));
-        if !total_current.is_finite() || (total_current < 1e-15 && !has_comp_ground) {
-            continue;
-        }
-
-        let (a_local, _node_to_local) =
-            components::build_subgraph_laplacian(laplacian, comp);
-        let comp_size = comp.len();
-
-        current_local.clear();
-        for &gn in comp {
-            current_local.push(current_global[gn]);
-        }
-
-        // For Dirichlet ground: build a modified local Laplacian with
-        // identity rows at ground local nodes and zero RHS. (Neumann grounds
-        // are already declared on the diagonal of `laplacian` itself.)
-        let a_local_mod = if pin_grounds && has_comp_ground {
-            let mut local_ground_indices = Vec::new();
-            for (li, &gn) in comp.iter().enumerate() {
-                if ground_set.contains(&gn) {
-                    local_ground_indices.push(li);
-                }
-            }
-            zero_ground_rhs(&mut current_local, &local_ground_indices);
-            Some(apply_dirichlet_ground_lap(&a_local, &local_ground_indices))
-        } else {
-            None
-        };
-        let a_solve = a_local_mod.as_ref().unwrap_or(&a_local);
-
-        // Mean removal is only needed for singular (ground-free) systems.
-        let do_remove = remove_average && !has_comp_ground;
-        if do_remove {
-            let sum: f64 = current_local.iter().sum();
-            if sum.abs() > 1e-15 {
-                let mean = sum / comp_size as f64;
-                for v in &mut current_local {
-                    *v -= mean;
-                }
-            }
-        }
-
-        let local_seed = prior_voltages.map(|pv| {
-            let mut seed = Vec::with_capacity(comp_size);
-            for &gn in comp {
-                seed.push(if gn < pv.len() { pv[gn] } else { 0.0 });
-            }
-            seed
-        });
-        let local_seed_ref = local_seed.as_ref().map(|s| s.as_slice());
-
-        let res = solver::cg_solve(a_solve, &current_local, max_iter, tol, local_seed_ref);
-        total_iters += res.iters;
-        let voltages_local = res.x;
-
-        for (li, &gn) in comp.iter().enumerate() {
-            voltages_global[gn] = voltages_local[li];
-        }
-    }
-
-    (voltages_global, total_iters)
 }
 
 fn build_raster_output(
