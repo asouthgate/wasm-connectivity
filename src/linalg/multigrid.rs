@@ -228,9 +228,9 @@ fn build_alcouffe_prolongation_triplets(
             let w_h0 = if h_sum < 1e-30 { 0.5 } else { d_left / h_sum };
             let w_h1 = if h_sum < 1e-30 { 0.5 } else { d_right / h_sum };
 
-            let cr0 = if fr > 0 { (fr - 1) / 2 } else { 0 };
+            let cr0 = if fr > 0 { (fr / 2).min(coarse_nrows - 1) } else { 0 };
             let cr1 = if fr + 1 < fine_nrows { (fr + 1) / 2 } else { coarse_nrows };
-            let cc0 = if fc > 0 { (fc - 1) / 2 } else { 0 };
+            let cc0 = if fc > 0 { (fc / 2).min(coarse_ncols - 1) } else { 0 };
             let cc1 = if fc + 1 < fine_ncols { (fc + 1) / 2 } else { coarse_ncols };
 
             let ok_cr0 = cr0 < coarse_nrows && d_above > 1e-30;
