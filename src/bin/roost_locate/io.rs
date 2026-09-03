@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-/// A detector row from `*_detectors.csv`.
+/// A detector row from detectors csv
 #[derive(Debug, Clone)]
 pub struct Detector {
     pub x: f64,
@@ -41,7 +41,7 @@ fn parse_opt_f64(s: &str) -> Option<f64> {
     }
 }
 
-/// Read `*_detectors.csv`, keyed by detector number.
+/// Read detectors csv, keyed by detector number.
 pub fn read_detectors(path: &str) -> Result<HashMap<String, Detector>, String> {
     let mut rdr = csv::Reader::from_path(path).map_err(|e| e.to_string())?;
     let headers = rdr.headers().map_err(|e| e.to_string())?.clone();
@@ -81,7 +81,7 @@ fn parse_time_fraction(s: &str) -> Option<f64> {
     Some((h * 3600.0 + m * 60.0 + sec) / 86400.0)
 }
 
-/// Read `Sunrise_sunset.csv` into `{(day, month, year): sunset_fraction}`.
+/// Read sunrise csv into `{(day, month, year): sunset_fraction}`.
 pub fn read_sunset(path: &str) -> Result<HashMap<(u32, u32, u32), f64>, String> {
     let mut rdr = csv::Reader::from_path(path).map_err(|e| e.to_string())?;
     let headers = rdr.headers().map_err(|e| e.to_string())?.clone();
@@ -100,7 +100,7 @@ pub fn read_sunset(path: &str) -> Result<HashMap<(u32, u32, u32), f64>, String> 
     Ok(map)
 }
 
-/// Count calls per detector from `*_master.csv`.
+/// Count calls per detector from master call data csv
 ///
 /// If `sunset` is `Some`, only rows whose `TIME` falls within
 /// `[sunset, sunset + 90min]` for their `DATE` are kept (rows whose date is

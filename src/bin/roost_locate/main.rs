@@ -8,7 +8,7 @@ use plot::{render as render_plot, PlotData};
 use wasm_connect::roost::compute_error_surface;
 
 const USAGE: &str = "\
-roost-locate — estimate a bat roost location from call data
+roost-locate: estimate a bat roost location from call data
 
 USAGE:
     roost-locate --detectors <detectors.csv> --master <master.csv> [OPTIONS]

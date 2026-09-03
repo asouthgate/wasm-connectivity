@@ -1,10 +1,4 @@
 //! PNG rendering of the error surface.
-//!
-//! Reproduces the layout of `python/main.py --plot`: a parula heatmap of the
-//! normalised loss, white contour lines, detector markers (size proportional
-//! to calls), the predicted roost, the weighted mean, and an optional known
-//! roost marker. The axes use an equal aspect ratio (metres map to pixels the
-//! same in x and y), matching the paper.
 
 use image::{DynamicImage, Rgb, RgbImage};
 use plotters::prelude::*;
