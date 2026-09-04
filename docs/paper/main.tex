@@ -131,19 +131,19 @@ Each approach has different assumptions and interpretation. We implement an equi
 
 \subsection{Solver}
 
-In Circuitscape, conjugate gradient with algebraic multigrid (`cg+amg') or a Cholesky solver is used via optimised libraries that are not available in a Wasm context. In order to keep the Wasm binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
+In Circuitscape, conjugate gradient with algebraic multigrid (`cg+amg') or a Cholesky solver is used via optimised libraries that are not designed for the Wasm context. In order to keep the Wasm binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
 
 A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for Wasm, a brief explanation follows. We solve the system
 
 \[
 \mathbf{L}\mathbf{v} = \mathbf{s},
 \]
-which is equivalent to solving the energy function
+which is equivalent to minimising the energy function
 
 \[
 f(\mathbf{v}) = \frac{1}{2} \mathbf{v}^T \mathbf{L}\mathbf{v} - \mathbf{v}^T\mathbf{s},
 \]
-since, when taking the negative gradient and setting to zero, we get the residual error for our system,
+since, when taking the negative gradient, we get the residual error for our system,
 
 \[
 -\nabla f(\mathbf{v}) = \mathbf{s} - \mathbf{L}\mathbf{v} = \mathbf{r}.
@@ -187,7 +187,7 @@ In the case of CG, $\alpha$ and $\beta$ are \cite[Ch. 4.3]{leveque2007finite}:
 \]
 
 \[
-\alpha_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{p}^T_{k+1}\mathbf{L}\mathbf{p_{k+1}}}.
+\alpha_{k+1} = \frac{\mathbf{r}^T_{k+1}\mathbf{r}_{k+1}}{\mathbf{p}^T_{k+1}\mathbf{L}\mathbf{p}_{k+1}}.
 \]
 
 
@@ -215,75 +215,58 @@ We implement these methods directly to reduce Wasm dependencies and binary footp
 
 Multigrid preconditioners are more complex than the Jacobi preconditioner. After smoothing high-frequency error features
 using a few Jacobi iterations, the remaining low-frequency components are then smoothed using a coarse grid.
-A system $\mathbf{L}_{coarse}\mathbf{e}_{coarse} = - \mathbf{r}_{coarse}$ is setup, with $\mathbf{L}_{coarse}$ and $\mathbf{r}_{coarse}$ coarse 
-approximations of $L$ and $r$, and $\mathbf{e}_{coarse}$ an approximation for the error $\mathbf{e} = \mathbf{v - A^{-1}s}$ in $\mathbf{v}$ \cite[Ch. 4.6]{leveque2007finite}.
+A system $\mathbf{L}_{l}\mathbf{e}_{l} = - \mathbf{r}_{l}$ is setup, with $\mathbf{L}_{l}$ and $\mathbf{r}_{l}$ coarse 
+approximations of $\mathbf{L}$ and $\mathbf{r}$, and $\mathbf{e}_{l}$ an approximation for the error $\mathbf{e} = \mathbf{v - L^{-1}s}$ in $\mathbf{v}$ \cite[Ch. 4.6]{leveque2007finite}.
+The subscript $l$ refers to the level, or the number of times this process is repeated recursively.
+As the final output, the $\mathbf{e}_{0}$ is often referred to as the preconditioned residual.
+
+Construction of coarser systems is recursive, so that the error in the second level refers to the error in the error from the first level. 
+As such, at each level within the V-cycle, the residuals of the system are not the same as the outer-layer CG residuals, but instead are residuals
+of the $l$th system. We use $d$ to denote these in Algorithm \ref{alg:gmg_vcycle}.
 Once this system is solved, interpolation is used to return to the fine grid,
 which works for low-frequency features with high-frequency features already having been smoothed out.
 Finally, smoothing is performed again to eliminate interpolation artifacts.
 If this process is applied recursively, one outer loop is known as a `V-cycle' \cite[Ch. 4.6]{leveque2007finite, alcouffe2000parallel};
 at the lowest resolution, the system is solved directly. 
-The algorithm proceeds as follows.
 
-The finest grid is smoothed with a few iterations of a Gauss-Seidel smoother. The residual is calculated,
-
-\[
-\mathbf{r} = \mathbf{s} - \mathbf{L}\mathbf{v}.
-\]
-
-This residual, $\mathbf{r}$, is passed down to a coarser grid using a restriction operator $\mathbf{R}$,
-and the coarse error passed back up to using the prolongation operator $\mathbf{P}$. The coarse $\mathbf{L}$ is obtained as $\mathbf{RLP}$. 
-These operators are comparable to downsampling and upsampling. In Galerkin coarsening, $\mathbf{R}=\mathbf{P}^T$:
-
-\[
-\mathbf{L}_{coarse} = \mathbf{P^TLP}
-\]
-
-This is applied repeatedly until the coarsest resolution is reached.
-In the simplest case, $\mathbf{P}$ could be bilinear interpolation. 
-The coarse system is then solved directly to get the coarse error
-
-\[
-\mathbf{e}_{coarse} = \Big(\mathbf{L}_{coarse}\Big)^{-1}\mathbf{r}_{coarse}.
-\]
-
-After the coarse error is calculated, it is passed upwards via the prolongation $\mathbf{P}$,
-
-\[
-\mathbf{e}_{fine} = \mathbf{P}\mathbf{e}_{coarse},
-\]
-
-\[
-\mathbf{v}_{fine} \leftarrow \mathbf{v}_{fine} + \mathbf{e}_{fine}.
-\]
-
-At the end of each step, post-smoothing is required to balance pre-smoothing. This cycle is referred to as the `V-cycle'. 
 Algorithm \ref{alg:gmg_vcycle} shows one cycle. Overall, one cycle performs the application of matrix $\mathbf{M}^{-1}$.
+For the CG update, the preconditioned residual $\mathbf{e_{fine}}$ is used to update $\mathbf{p}$ as \cite[Ch. 9.2]{saad2003iterative}
 
+\[
+\mathbf{p}_{k+1} = \mathbf{e}_{0,k+1} + \beta_{k+1}\mathbf{p}_k,
+\]
+
+with
+
+\[
+\beta_{k+1} = \frac{\mathbf{r}^T_{k+1} \mathbf{e}_{0,k+1}}{\mathbf{r}_k^T \mathbf{e}_{0,k}}
+\]
 
 \begin{algorithm}[h]
-\caption{Geometric Multigrid V-Cycle Preconditioner Step}
+\caption{\textbf{Geometric Multigrid V-Cycle Preconditioner Step}. Given level $l$, the coarse laplacian $L_l$ is precomputed.
+Note, $\mathbf{d}'_l$ is the residual for the error system at a given level, not the residual from the CG outer loop, 
+i.e. $\mathbf{d}'_l = \mathbf{d}_l - \mathbf{L}_l\mathbf{e}_l $.}
 \label{alg:gmg_vcycle}
 \begin{algorithmic}[1] % [1] adds line numbers; remove if you prefer no line numbers
 
-\Function{V}{$\mathbf{L}_l, \mathbf{s}_l, \mathbf{v}_l, l$}
-    \If{$l == 0$}
-        \State \Return $\mathbf{v}_0 = \text{Solve}(\mathbf{L}_0, \mathbf{s}_0)$
+\Function{V}{$\mathbf{L}_l, \mathbf{d}_l, l$}
+    \If{$l == l_{max}$}
+        \State \Return $\mathbf{e}_{l_{max}} = \text{Solve}(\mathbf{L}_{l_{max}}, \mathbf{d}_{l_{max}})$
     \EndIf
     
-    \State $\mathbf{v}_l \leftarrow \text{Smooth}(\mathbf{L}_l, \mathbf{v}_l, \mathbf{s}_l)$
+    \State $\mathbf{e}_l = \mathbf{0}$
+    \State $\mathbf{e}_l = \text{Smooth}(\mathbf{L}_l, \mathbf{e}_l, \mathbf{d}_l)$
     
-    \State $\mathbf{r}_l = \mathbf{s}_l - \mathbf{L}_l \mathbf{v}_l$
-    \State $\mathbf{s}_{l-1} = \mathbf{R} \mathbf{r}_l$
-    \State $\mathbf{v}_{l-1} = \mathbf{0}$
+    \State $\mathbf{d}'_l = \mathbf{d}_l - \mathbf{L}_l \mathbf{e}_l$
+    \State $\mathbf{d}_{l+1} = \mathbf{R} \mathbf{d}'_l$
     
-    \State $\mathbf{e}_{l-1} \leftarrow \text{V}(\mathbf{L}_{l-1}, \mathbf{s}_{l-1}, \mathbf{v}_{l-1}, l-1)$
+    \State $\mathbf{e}_{l+1} = \text{V}(\mathbf{L}_{l+1}, \mathbf{d}_{l+1}, l+1)$
     
-    \State $\mathbf{e}_l = \mathbf{P} \mathbf{e}_{l-1}$
-    \State $\mathbf{v}_l \leftarrow \mathbf{v}_l + \mathbf{e}_l$
+    \State $\mathbf{e}_l = \mathbf{e}_l + \mathbf{P} \mathbf{e}_{l+1}$
     
-    \State $\mathbf{v}_l \leftarrow \text{Smooth}(\mathbf{L}_l, \mathbf{v}_l, \mathbf{s}_l)$
+    \State $\mathbf{e}_l = \text{Smooth}(\mathbf{L}_l, \mathbf{e}_l, \mathbf{d}_l)$
     
-    \State \Return $\mathbf{v}_l$
+    \State \Return $\mathbf{e}_l$
 \EndFunction
 
 \end{algorithmic}
@@ -335,12 +318,12 @@ This code contains several simple examples. All results can be easily reproduced
 Figure \ref{fig:wasm-connectivity} gives an example of a $1000\times1000$ resistance input and current map output
 rendered in a frontend using raster source mode (referred to as advanced mode in Circuitscape) for the test region.
 Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. As shown,
-the CG MG preconditioners were much faster than Jacobi preconditioning, while taking modestly more memory.
+the CG MG preconditioner was much faster than Jacobi preconditioning, while taking modestly more memory.
 
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/resistance_current_react.png}
-\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with Wasm connectivity library, computed in 6.52 seconds.}
+\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with Wasm connectivity library, computed in 8.75 seconds.}
 \label{fig:wasm-connectivity}
 \end{figure}
 

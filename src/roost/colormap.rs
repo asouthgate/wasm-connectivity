@@ -1,11 +1,6 @@
 //! Perceptually-ramped heatmap colormap for surface rendering.
-//!
-//! A blue-to-yellow sequential ramp (dark blue low → cyan → green → warm
-//! yellow high), defined by our own anchor stops and linearly interpolated to
-//! `n` entries. It follows the same perceptual hue ordering as common
-//! scientific colormaps (e.g. viridis / parula) but is not a reproduction of
-//! any particular published colormap.
 
+/// Blue to yellow
 /// Anchor stops of the colormap: `[r, g, b]` in 0..1, evenly spaced in value.
 const STOPS: [[f64; 3]; 9] = [
     [0.14, 0.10, 0.46],
