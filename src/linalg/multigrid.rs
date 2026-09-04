@@ -278,6 +278,7 @@ impl MgPreconditioner {
         let lvl = &self.levels[level];
         let n = lvl.nrows * lvl.ncols;
 
+        // solve lowest case
         if level == self.levels.len() - 1 {
             if let Some(ref l) = lvl.cholesky_l {
                 let x = crate::linalg::cholesky::cholesky_solve(l, b, n);
@@ -290,7 +291,8 @@ impl MgPreconditioner {
             return;
         }
 
-        {
+        // start by filling with zeroes
+        { // create a new scope to drop the borrow before the next borrow_mut
             let mut ws = workspaces.borrow_mut();
             ws[level].z.fill(0.0);
             if b.as_ptr() != ws[level].rhs.as_ptr() {
@@ -298,6 +300,7 @@ impl MgPreconditioner {
             }
         }
 
+        // smooth
         for _ in 0..self.nu {
             let mut ws = workspaces.borrow_mut();
             unsafe {
@@ -309,6 +312,7 @@ impl MgPreconditioner {
             drop(ws);
         }
 
+        // compute the residual error rr = r - L_l * z 
         {
             let mut ws = workspaces.borrow_mut();
             unsafe {
@@ -318,11 +322,12 @@ impl MgPreconditioner {
                 let rhs = std::slice::from_raw_parts((*ptr).rhs.as_ptr(), n);
                 mat_vec_mul_slice(&lvl.laplacian, z, r);
                 for i in 0..n {
-                    r[i] = rhs[i] - r[i];
+                    r[i] = rhs[i] - r[i]; // rr = r - L_l * z
                 }
             }
         }
 
+        // Apply restriction to the next level's rhs: r_coarse = P^T * r_fine
         let next_b_ptr: *const f64;
         let next_b_len: usize;
         {

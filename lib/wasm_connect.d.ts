@@ -3,7 +3,7 @@
 
 /**
  * Estimate a bat roost location from per-detector call data using the
- * Woolley error-surface method. `surface` is the full `grid_size x grid_size`
+ * Henley et al. error-surface method. `surface` is the full `grid_size x grid_size`
  * loss field (row-major, y-outer), and `x`/`y`/`loss` are the best point.
  */
 export function compute_roost_surface(x: Float64Array, y: Float64Array, counts: Float64Array, grid_size: number, capture_radius: number, diffusivity: number, t0: number, t1: number, loss: string): string;
