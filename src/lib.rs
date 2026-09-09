@@ -253,22 +253,49 @@ pub fn run_resistance_pipeline_browser(
 }
 
 #[derive(Serialize)]
-struct RoostSurfaceOutput {
+struct RoostDetectorPoint {
+    x: f64,
+    y: f64,
+    count: f64,
+}
+
+#[derive(Serialize)]
+struct RoostFinderOutput {
+    /// Predicted roost (BNG easting/northing) + loss.
     x: f64,
     y: f64,
     loss: f64,
-    grid_size: usize,
-    surface: Vec<f64>,
+    /// The rendered error surface as a base64-encoded PNG (blue→yellow
+    /// colormap, north-up, low loss = warm).
+    surface_png_base64: String,
+    /// Weighted-mean centroid of detectors by count (BNG).
+    weighted_mean_x: f64,
+    weighted_mean_y: f64,
+    /// Per-detector points that contributed (BNG), with their (per-night or
+    /// raw) counts.
+    detectors: Vec<RoostDetectorPoint>,
+    /// Non-fatal warnings (e.g. skipped detectors).
+    warnings: Vec<String>,
 }
 
-/// Estimate a bat roost location from per-detector call data using the
-/// Henley et al. error-surface method. `surface` is the full `grid_size x grid_size`
-/// loss field (row-major, y-outer), and `x`/`y`/`loss` are the best point.
+/// Contour levels (fractions of max loss) drawn as white bands on the surface.
+const CONTOUR_LEVELS: [f64; 4] = [0.1, 0.2, 0.3, 0.4];
+const CONTOUR_WIDTH: f64 = 0.75;
+
+/// Parse roost-finder CSVs, aggregate per-detector calls, and compute the
+/// error surface + predicted roost in one WASM call.
+///
+/// `sunset_csv` (empty string → no temporal filtering) and
+/// `minutes_after_sunset` (the `[sunset, sunset + minutes]` window) only apply
+/// when a sunset table is supplied. `t0`/`t1` are exposed as free integration
+/// bounds (defaults 0.01 / 5400).
 #[wasm_bindgen]
-pub fn compute_roost_surface(
-    x: Vec<f64>,
-    y: Vec<f64>,
-    counts: Vec<f64>,
+pub fn roost_finder_compute(
+    detectors_csv: String,
+    master_csv: String,
+    sunset_csv: String,
+    minutes_after_sunset: f64,
+    per_night: bool,
     grid_size: usize,
     capture_radius: f64,
     diffusivity: f64,
@@ -276,36 +303,124 @@ pub fn compute_roost_surface(
     t1: f64,
     loss: String,
 ) -> String {
+    run_roost_finder(
+        &detectors_csv,
+        &master_csv,
+        &sunset_csv,
+        minutes_after_sunset,
+        per_night,
+        grid_size,
+        capture_radius,
+        diffusivity,
+        t0,
+        t1,
+        &loss,
+    )
+    .map(|out| json_response(&out))
+    .unwrap_or_else(|e| {
+        serde_json::to_string(&json!({ "error": e }))
+            .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
+    })
+}
+
+fn run_roost_finder(
+    detectors_csv: &str,
+    master_csv: &str,
+    sunset_csv: &str,
+    minutes_after_sunset: f64,
+    per_night: bool,
+    grid_size: usize,
+    capture_radius: f64,
+    diffusivity: f64,
+    t0: f64,
+    t1: f64,
+    loss: &str,
+) -> Result<RoostFinderOutput, String> {
+    use roost::io::{aggregate_with_warnings, count_calls, read_detectors, read_sunset};
+
     if loss != "l2" && loss != "l1" {
-        return serde_json::to_string(&json!({ "error": format!("invalid loss {:?}, expected l2 or l1", loss) }))
-            .unwrap_or_else(|_| r#"{"error":"invalid loss"}"#.to_string());
+        return Err(format!("invalid loss {:?}, expected l2 or l1", loss));
     }
     if grid_size < 2 {
-        return serde_json::to_string(&json!({ "error": "grid_size must be >= 2" }))
-            .unwrap_or_else(|_| r#"{"error":"invalid grid_size"}"#.to_string());
+        return Err("grid_size must be >= 2".to_string());
     }
     if !(t1 > t0 && t0 > 0.0) {
-        return serde_json::to_string(&json!({ "error": "require 0 < t0 < t1" }))
-            .unwrap_or_else(|_| r#"{"error":"invalid t0/t1"}"#.to_string());
+        return Err("require 0 < t0 < t1".to_string());
     }
-    if x.len() != y.len() || x.len() != counts.len() || x.is_empty() {
-        return serde_json::to_string(&json!({ "error": "x, y and counts must be non-empty and equal length" }))
-            .unwrap_or_else(|_| r#"{"error":"invalid detector data"}"#.to_string());
+
+    let detectors = read_detectors(detectors_csv)?;
+
+    let sunset = if sunset_csv.trim().is_empty() {
+        None
+    } else {
+        Some(read_sunset(sunset_csv)?)
+    };
+
+    let counts = count_calls(master_csv, sunset.as_ref().map(|s| (s, minutes_after_sunset)))?;
+    let (agg, warnings) = aggregate_with_warnings(&detectors, &counts, per_night);
+
+    if agg.x.is_empty() {
+        return Err("no detectors with calls found after aggregation".to_string());
     }
 
     let mut surface = Vec::with_capacity(grid_size * grid_size);
     let result = roost::compute_error_surface(
-        &x, &y, &counts, grid_size, capture_radius, diffusivity, t0, t1, &loss,
+        &agg.x, &agg.y, &agg.counts, grid_size, capture_radius, diffusivity, t0, t1, loss,
         |_cx, _cy, l| surface.push(l),
     );
 
-    json_response(&RoostSurfaceOutput {
+    let total: f64 = agg.counts.iter().sum();
+    let weighted_mean_x = agg
+        .x
+        .iter()
+        .zip(agg.counts.iter())
+        .map(|(x, c)| x * c)
+        .sum::<f64>()
+        / total;
+    let weighted_mean_y = agg
+        .y
+        .iter()
+        .zip(agg.counts.iter())
+        .map(|(y, c)| y * c)
+        .sum::<f64>()
+        / total;
+
+    let detector_points = agg
+        .x
+        .iter()
+        .zip(agg.y.iter())
+        .zip(agg.counts.iter())
+        .map(|((&x, &y), &count)| RoostDetectorPoint { x, y, count })
+        .collect();
+
+    let heatmap = roost::render::render_surface(
+        &surface,
+        grid_size,
+        grid_size as u32,
+        grid_size as u32,
+        &CONTOUR_LEVELS,
+        CONTOUR_WIDTH,
+    )?;
+    let surface_png_base64 = encode_base64(&encode_png(&heatmap)?);
+
+    Ok(RoostFinderOutput {
         x: result.x,
         y: result.y,
         loss: result.loss,
-        grid_size,
-        surface,
+        surface_png_base64,
+        weighted_mean_x,
+        weighted_mean_y,
+        detectors: detector_points,
+        warnings,
     })
+}
+
+fn encode_png(img: &image::RgbImage) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    image::DynamicImage::ImageRgb8(img.clone())
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(buf)
 }
 
 #[cfg(test)]

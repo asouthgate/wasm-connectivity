@@ -1,11 +1,14 @@
 //! Command-line entry point for bat roost location estimation.
 
-mod io;
 mod plot;
 
-use io::{aggregate, count_calls, read_detectors, read_sunset};
 use plot::{render as render_plot, PlotConfig, PlotData};
+use wasm_connect::roost::io::{aggregate_with_warnings, count_calls, read_detectors, read_sunset};
 use wasm_connect::roost::compute_error_surface;
+
+fn read_to_string(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+}
 
 const USAGE: &str = "\
 roost-locate: estimate a bat roost location from call data
@@ -16,8 +19,9 @@ USAGE:
 OPTIONS:
     --detectors <path>       Path to *_detectors.csv (required)
     --master <path>          Path to *_master.csv (required)
-    --filter-sunset <path>   Keep only calls within [sunset, sunset+90min],
-                             using a Date,Sunset CSV (optional)
+    --filter-sunset <path>   Keep only calls within [sunset, sunset+N min],
+                             using a date,sunset_time CSV (optional)
+    --minutes-after-sunset <min>  Window length for --filter-sunset (default 90)
     --t0 <seconds>           Integration lower bound (default 0.01)
     --t1 <seconds>           Integration upper bound (default 5400)
     --diffusivity <m^2/s>    Diffusion coefficient D (default 81.7)
@@ -36,6 +40,7 @@ struct Args {
     detectors: Option<String>,
     master: Option<String>,
     filter_sunset: Option<String>,
+    minutes_after_sunset: f64,
     t0: f64,
     t1: f64,
     diffusivity: f64,
@@ -57,6 +62,7 @@ impl Args {
             capture_radius: 15.0,
             grid_size: 500,
             loss: "l2".to_string(),
+            minutes_after_sunset: 90.0,
             ..Default::default()
         }
     }
@@ -95,6 +101,12 @@ fn parse_args() -> Result<Args, String> {
             "detectors" => args.detectors = Some(take_value(&inline, &mut it, &key)?),
             "master" => args.master = Some(take_value(&inline, &mut it, &key)?),
             "filter-sunset" => args.filter_sunset = Some(take_value(&inline, &mut it, &key)?),
+            "minutes-after-sunset" => {
+                let v = take_value(&inline, &mut it, &key)?;
+                args.minutes_after_sunset = v
+                    .parse()
+                    .map_err(|_| format!("invalid number for --minutes-after-sunset: {v}"))?;
+            }
             "output" => args.output = Some(take_value(&inline, &mut it, &key)?),
             "plot" => args.plot = Some(take_value(&inline, &mut it, &key)?),
             "t0" => {
@@ -162,15 +174,22 @@ fn run() -> Result<(), String> {
     let detectors_path = args.detectors.as_deref().ok_or("--detectors is required")?;
     let master_path = args.master.as_deref().ok_or("--master is required")?;
 
-    let detectors = read_detectors(detectors_path)?;
+    let detectors = read_detectors(&read_to_string(detectors_path)?)?;
 
     let sunset = match &args.filter_sunset {
-        Some(p) => Some(read_sunset(p)?),
+        Some(p) => Some(read_sunset(&read_to_string(p)?)?),
         None => None,
     };
 
-    let counts = count_calls(master_path, sunset.as_ref())?;
-    let agg = aggregate(&detectors, &counts, !args.raw_counts);
+    let counts = count_calls(
+        &read_to_string(master_path)?,
+        sunset.as_ref().map(|s| (s, args.minutes_after_sunset)),
+    )?;
+    let (agg, warnings) = aggregate_with_warnings(&detectors, &counts, !args.raw_counts);
+
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
 
     if agg.x.is_empty() {
         return Err("no detectors with calls found".to_string());

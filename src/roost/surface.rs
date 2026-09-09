@@ -68,6 +68,9 @@ pub fn compute_error_surface(
         other => panic!("unknown loss {other:?}, expected \"l2\" or \"l1\""),
     };
 
+    // Scratch buffer reused across all grid points to avoid per-cell allocation.
+    let mut buf = Vec::with_capacity(n);
+
     // Grid layout matches numpy: `meshgrid(zx, zy).ravel()` -> x varies fastest.
     for iy in 0..grid_size {
         let cy = ymin + (ymax - ymin) * (iy as f64) / ((grid_size - 1) as f64);
@@ -75,8 +78,7 @@ pub fn compute_error_surface(
             let cx = xmin + (xmax - xmin) * (ix as f64) / ((grid_size - 1) as f64);
 
             let mut detec_sum = 0.0;
-            // Reuse a small scratch buffer to avoid allocation in the hot loop.
-            let mut buf = Vec::with_capacity(n);
+            buf.clear();
             for i in 0..n {
                 let d2 = (x[i] - cx) * (x[i] - cx) + (y[i] - cy) * (y[i] - cy);
                 let detec = if d2 > 0.0 {
