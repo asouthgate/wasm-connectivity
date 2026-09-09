@@ -13,20 +13,20 @@
 //! columns), but the required columns must exist with exact (trimmed,
 //! BOM-stripped) names:
 //!
-//! * **detectors** — one row per detector:
+//! * **detectors**: one row per detector:
 //!   - `detector`      (string, required)
-//!   - `x`             (number, required) — British National Grid easting
-//!   - `y`             (number, required) — British National Grid northing
+//!   - `x`             (number, required): British National Grid easting
+//!   - `y`             (number, required): British National Grid northing
 //!   - `n_active_days` (number, optional; blank → `None`)
 //!
-//! * **master** — one row per recorded call:
+//! * **master**: one row per recorded call:
 //!   - `detector`      (string, required)
 //!   - `date`          (`dd/mm/yyyy`, required only when a sunset table is used)
 //!   - `time`          (`HH:MM:SS`, required only when a sunset table is used)
 //!
-//! * **sunset** — one row per survey date:
+//! * **sunset**: one row per survey date:
 //!   - `date`         (`dd/mm/yyyy`, required)
-//!   - `sunset_time`  (`HH:MM:SS`, required — parsed to a fraction of a day)
+//!   - `sunset_time`  (`HH:MM:SS`, required: parsed to a fraction of a day)
 
 use std::collections::HashMap;
 
