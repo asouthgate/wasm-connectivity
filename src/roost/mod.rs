@@ -8,6 +8,8 @@
 
 pub mod colormap;
 pub mod exp1;
+pub mod io;
+pub mod render;
 pub mod surface;
 
 pub use surface::{compute_error_surface, SurfaceResult};

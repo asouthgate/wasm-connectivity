@@ -1,13 +1,13 @@
 {
   "name": "wasm-connect",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "files": [
     "wasm_connect_bg.wasm",
     "wasm_connect.js",
     "wasm_connect.d.ts"
   ],
-  "main": "index.js",
+  "main": "wasm_connect.js",
   "types": "wasm_connect.d.ts",
   "sideEffects": [
     "./snippets/*"
