@@ -192,30 +192,25 @@ pub fn count_calls(
     Ok(counts)
 }
 
-/// Combine raw per-detector counts with detector coordinates and active
-/// nights, returning `None` for a detector that needs to be skipped (with a
-/// `Some(warning)` describing why).
-fn aggregate_row(
-    det: &Detector,
-    n: f64,
-    per_night: bool,
-) -> Result<f64, String> {
-    if per_night {
-        match det.days {
-            Some(d) if d > 0.0 => Ok(n / d),
-            _ => Err("missing/zero 'n_active_days'".to_string()),
-        }
-    } else {
-        Ok(n)
+/// Average a detector's raw call count over its active nights.
+///
+/// Returns `Err` with a reason when `n_active_days` is missing or zero, so the
+/// detector is skipped rather than biasing the result.
+fn aggregate_row(det: &Detector, n: f64) -> Result<f64, String> {
+    match det.days {
+        Some(d) if d > 0.0 => Ok(n / d),
+        _ => Err("missing/zero 'n_active_days'".to_string()),
     }
 }
 
-/// Aggregate per-detector counts with coordinates, returning parallel arrays
-/// and a list of non-fatal warnings.
+/// Aggregate per-detector counts into **average calls per active night**,
+/// returning parallel arrays and a list of non-fatal warnings.
+///
+/// Detectors with calls but no detector entry, or with missing/zero
+/// `n_active_days`, are skipped and reported as warnings.
 pub fn aggregate_with_warnings(
     detectors: &HashMap<String, Detector>,
     counts: &HashMap<String, u64>,
-    per_night: bool,
 ) -> (Aggregated, Vec<String>) {
     let mut ids: Vec<&String> = counts.keys().collect();
     ids.sort();
@@ -231,7 +226,7 @@ pub fn aggregate_with_warnings(
             warnings.push(format!("detector {id} has calls but no detector entry; skipping"));
             continue;
         };
-        match aggregate_row(det, n, per_night) {
+        match aggregate_row(det, n) {
             Ok(v) => {
                 x.push(det.x);
                 y.push(det.y);
@@ -246,13 +241,12 @@ pub fn aggregate_with_warnings(
     (Aggregated { x, y, counts: c }, warnings)
 }
 
-/// Aggregate without capturing warnings (backwards-compatible helper).
+/// Aggregate per-night without capturing warnings (convenience helper).
 pub fn aggregate(
     detectors: &HashMap<String, Detector>,
     counts: &HashMap<String, u64>,
-    per_night: bool,
 ) -> Aggregated {
-    aggregate_with_warnings(detectors, counts, per_night).0
+    aggregate_with_warnings(detectors, counts).0
 }
 
 #[cfg(test)]
@@ -314,7 +308,7 @@ date,sunset_time
         assert_eq!(counts["S1"], 2);
         assert_eq!(counts["B2"], 1);
         assert_eq!(counts["C1"], 1);
-        let agg = aggregate(&detectors, &counts, false);
+        let agg = aggregate(&detectors, &counts);
         assert_eq!(agg.x.len(), 3);
     }
 
@@ -326,17 +320,32 @@ date,sunset_time
         assert_eq!(counts["S1"], 2); // within [21:00, 22:30]
         assert_eq!(counts["B2"], 1); // 22:00 within window
         assert_eq!(counts.get("C1"), None); // 23:00 outside window
-        let agg = aggregate(&detectors, &counts, false);
-        assert_eq!(agg.counts, vec![1.0, 2.0]);
+        let agg = aggregate(&detectors, &counts);
+        // B2: 1 call / 2 active nights = 0.5; S1: 2 / 7. Sorted by detector id.
+        assert_eq!(agg.counts[0], 0.5);
+        assert!((agg.counts[1] - 2.0 / 7.0).abs() < 1e-12);
     }
 
     #[test]
-    fn per_night_aggregation_skips_zero_days() {
+    fn aggregation_averages_over_active_nights() {
         let detectors = read_detectors(DETECTORS).unwrap();
         let counts: HashMap<String, u64> = [("S1".to_string(), 14), ("B2".to_string(), 4)].into();
-        let (agg, warnings) = aggregate_with_warnings(&detectors, &counts, true);
+        let (agg, warnings) = aggregate_with_warnings(&detectors, &counts);
         // S1: 14/7 = 2.0, B2: 4/2 = 2.0
         assert_eq!(agg.counts, vec![2.0, 2.0]);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn aggregation_skips_missing_or_zero_active_nights() {
+        let detectors =
+            read_detectors("detector,x,y,n_active_days\nA,1,2,7\nB,3,4,\nC,5,6,0\n").unwrap();
+        let counts: HashMap<String, u64> =
+            [("A".to_string(), 14), ("B".to_string(), 3), ("C".to_string(), 3)].into();
+        let (agg, warnings) = aggregate_with_warnings(&detectors, &counts);
+        assert_eq!(agg.x, vec![1.0]);
+        assert_eq!(agg.counts, vec![2.0]);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings.iter().all(|w| w.contains("n_active_days")));
     }
 }

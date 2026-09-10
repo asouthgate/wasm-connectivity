@@ -282,39 +282,35 @@ struct RoostFinderOutput {
 const CONTOUR_LEVELS: [f64; 4] = [0.1, 0.2, 0.3, 0.4];
 const CONTOUR_WIDTH: f64 = 0.75;
 
-/// Parse roost-finder CSVs, aggregate per-detector calls, and compute the
-/// error surface + predicted roost in one WASM call.
+/// Parse roost-finder CSVs, average calls per detector per active night, and
+/// compute the error surface + predicted roost in one WASM call.
 ///
-/// `sunset_csv` (empty string → no temporal filtering) and
-/// `minutes_after_sunset` (the `[sunset, sunset + minutes]` window) only apply
-/// when a sunset table is supplied. `t0`/`t1` are exposed as free integration
-/// bounds (defaults 0.01 / 5400).
+/// When `sunset_csv` is supplied (non-empty), master rows are filtered to
+/// `[sunset, sunset + t1/60]`, so the observation window is tied to the
+/// kernel's integration upper bound `t1`. `t0`/`t1` are the integration bounds
+/// in seconds (defaults 0.01 / 5400).
+///
+/// Method: Henley et al. (2024), "A simple and fast method for estimating bat
+/// roost locations", *Royal Society Open Science* 11(4): 231999.
+/// <https://doi.org/10.1098/rsos.231999>
 #[wasm_bindgen]
 pub fn roost_finder_compute(
     detectors_csv: String,
     master_csv: String,
     sunset_csv: String,
-    minutes_after_sunset: f64,
-    per_night: bool,
     grid_size: usize,
-    capture_radius: f64,
     diffusivity: f64,
     t0: f64,
     t1: f64,
-    loss: String,
 ) -> String {
     run_roost_finder(
         &detectors_csv,
         &master_csv,
         &sunset_csv,
-        minutes_after_sunset,
-        per_night,
         grid_size,
-        capture_radius,
         diffusivity,
         t0,
         t1,
-        &loss,
     )
     .map(|out| json_response(&out))
     .unwrap_or_else(|e| {
@@ -327,26 +323,23 @@ fn run_roost_finder(
     detectors_csv: &str,
     master_csv: &str,
     sunset_csv: &str,
-    minutes_after_sunset: f64,
-    per_night: bool,
     grid_size: usize,
-    capture_radius: f64,
     diffusivity: f64,
     t0: f64,
     t1: f64,
-    loss: &str,
 ) -> Result<RoostFinderOutput, String> {
     use roost::io::{aggregate_with_warnings, count_calls, read_detectors, read_sunset};
 
-    if loss != "l2" && loss != "l1" {
-        return Err(format!("invalid loss {:?}, expected l2 or l1", loss));
-    }
     if grid_size < 2 {
         return Err("grid_size must be >= 2".to_string());
     }
     if !(t1 > t0 && t0 > 0.0) {
         return Err("require 0 < t0 < t1".to_string());
     }
+
+    // The observation window is tied to t1: calls are counted from sunset to
+    // sunset + t1/60 minutes, matching the kernel's integration upper bound.
+    let minutes_after_sunset = t1 / 60.0;
 
     let detectors = read_detectors(detectors_csv)?;
 
@@ -357,7 +350,7 @@ fn run_roost_finder(
     };
 
     let counts = count_calls(master_csv, sunset.as_ref().map(|s| (s, minutes_after_sunset)))?;
-    let (agg, warnings) = aggregate_with_warnings(&detectors, &counts, per_night);
+    let (agg, warnings) = aggregate_with_warnings(&detectors, &counts);
 
     if agg.x.is_empty() {
         return Err("no detectors with calls found after aggregation".to_string());
@@ -365,7 +358,7 @@ fn run_roost_finder(
 
     let mut surface = Vec::with_capacity(grid_size * grid_size);
     let result = roost::compute_error_surface(
-        &agg.x, &agg.y, &agg.counts, grid_size, capture_radius, diffusivity, t0, t1, loss,
+        &agg.x, &agg.y, &agg.counts, grid_size, diffusivity, t0, t1,
         |_cx, _cy, l| surface.push(l),
     );
 
