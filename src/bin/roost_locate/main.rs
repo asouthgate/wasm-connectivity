@@ -19,20 +19,22 @@ USAGE:
 OPTIONS:
     --detectors <path>       Path to *_detectors.csv (required)
     --master <path>          Path to *_master.csv (required)
-    --filter-sunset <path>   Keep only calls within [sunset, sunset+N min],
+    --filter-sunset <path>   Keep only calls within [sunset, sunset+t1/60],
                              using a date,sunset_time CSV (optional)
-    --minutes-after-sunset <min>  Window length for --filter-sunset (default 90)
     --t0 <seconds>           Integration lower bound (default 0.01)
-    --t1 <seconds>           Integration upper bound (default 5400)
+    --t1 <seconds>           Integration upper bound (default 5400); also sets
+                             the --filter-sunset window to t1/60 minutes
     --diffusivity <m^2/s>    Diffusion coefficient D (default 81.7)
-    --capture-radius <m>     Detector capture radius r (default 15)
     --grid-size <n>          Grid points per axis (default 500)
-    --loss <l2|l1>           Loss metric (default l2)
-    --raw-counts             Use raw counts instead of per-night averages
     --output <path>          Write the full surface as x,y,loss CSV
     --plot <path.png>        Render the surface to a PNG image
     --roost <x> <y>          Known roost coordinates to mark on the plot
     --help                   Show this help
+
+METHOD:
+    Henley et al. (2024), \"A simple and fast method for estimating bat roost
+    locations\", Royal Society Open Science 11(4): 231999.
+    https://doi.org/10.1098/rsos.231999
 ";
 
 #[derive(Default)]
@@ -40,14 +42,10 @@ struct Args {
     detectors: Option<String>,
     master: Option<String>,
     filter_sunset: Option<String>,
-    minutes_after_sunset: f64,
     t0: f64,
     t1: f64,
     diffusivity: f64,
-    capture_radius: f64,
     grid_size: usize,
-    loss: String,
-    raw_counts: bool,
     output: Option<String>,
     plot: Option<String>,
     roost: Option<(f64, f64)>,
@@ -59,10 +57,7 @@ impl Args {
             t0: 0.01,
             t1: 5400.0,
             diffusivity: 81.7,
-            capture_radius: 15.0,
             grid_size: 500,
-            loss: "l2".to_string(),
-            minutes_after_sunset: 90.0,
             ..Default::default()
         }
     }
@@ -101,12 +96,6 @@ fn parse_args() -> Result<Args, String> {
             "detectors" => args.detectors = Some(take_value(&inline, &mut it, &key)?),
             "master" => args.master = Some(take_value(&inline, &mut it, &key)?),
             "filter-sunset" => args.filter_sunset = Some(take_value(&inline, &mut it, &key)?),
-            "minutes-after-sunset" => {
-                let v = take_value(&inline, &mut it, &key)?;
-                args.minutes_after_sunset = v
-                    .parse()
-                    .map_err(|_| format!("invalid number for --minutes-after-sunset: {v}"))?;
-            }
             "output" => args.output = Some(take_value(&inline, &mut it, &key)?),
             "plot" => args.plot = Some(take_value(&inline, &mut it, &key)?),
             "t0" => {
@@ -123,24 +112,11 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| format!("invalid number for --diffusivity: {v}"))?;
             }
-            "capture-radius" => {
-                let v = take_value(&inline, &mut it, &key)?;
-                args.capture_radius = v
-                    .parse()
-                    .map_err(|_| format!("invalid number for --capture-radius: {v}"))?;
-            }
             "grid-size" => {
                 let v = take_value(&inline, &mut it, &key)?;
                 args.grid_size = v
                     .parse()
                     .map_err(|_| format!("invalid number for --grid-size: {v}"))?;
-            }
-            "loss" => args.loss = take_value(&inline, &mut it, &key)?,
-            "raw-counts" => {
-                if inline.is_some() {
-                    return Err("--raw-counts takes no value".to_string());
-                }
-                args.raw_counts = true;
             }
             "roost" => {
                 let x = take_value(&inline, &mut it, &key)?;
@@ -161,9 +137,6 @@ fn parse_args() -> Result<Args, String> {
 fn run() -> Result<(), String> {
     let args = parse_args()?;
 
-    if args.loss != "l2" && args.loss != "l1" {
-        return Err(format!("invalid loss {:?}, expected l2 or l1", args.loss));
-    }
     if args.grid_size < 2 {
         return Err("grid-size must be >= 2".to_string());
     }
@@ -181,11 +154,12 @@ fn run() -> Result<(), String> {
         None => None,
     };
 
+    // Observation window tied to t1: sunset + t1/60 minutes.
     let counts = count_calls(
         &read_to_string(master_path)?,
-        sunset.as_ref().map(|s| (s, args.minutes_after_sunset)),
+        sunset.as_ref().map(|s| (s, args.t1 / 60.0)),
     )?;
-    let (agg, warnings) = aggregate_with_warnings(&detectors, &counts, !args.raw_counts);
+    let (agg, warnings) = aggregate_with_warnings(&detectors, &counts);
 
     for w in &warnings {
         eprintln!("warning: {w}");
@@ -222,11 +196,9 @@ fn run() -> Result<(), String> {
         &agg.y,
         &agg.counts,
         args.grid_size,
-        args.capture_radius,
         args.diffusivity,
         args.t0,
         args.t1,
-        &args.loss,
         |x, y, loss| {
             if let Some(w) = wtr.as_mut() {
                 let _ = w.write_record([x.to_string(), y.to_string(), loss.to_string()]);
