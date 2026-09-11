@@ -265,9 +265,13 @@ struct RoostFinderOutput {
     x: f64,
     y: f64,
     loss: f64,
-    /// The rendered error surface as a base64-encoded PNG (blue→yellow
-    /// colormap, north-up, low loss = warm).
-    surface_png_base64: String,
+    /// Loss surface as base64-encoded little-endian `f32`, row-major with row 0
+    /// at the north edge (matching the shared frontend plotter).
+    surface_base64: String,
+    /// Number of grid points per axis.
+    grid_size: usize,
+    /// Grid extents in BNG: `[xmin, ymin, xmax, ymax]`.
+    bounds_bng: [f64; 4],
     /// Weighted-mean centroid of detectors by count (BNG).
     weighted_mean_x: f64,
     weighted_mean_y: f64,
@@ -277,10 +281,6 @@ struct RoostFinderOutput {
     /// Non-fatal warnings (e.g. skipped detectors).
     warnings: Vec<String>,
 }
-
-/// Contour levels (fractions of max loss) drawn as white bands on the surface.
-const CONTOUR_LEVELS: [f64; 4] = [0.1, 0.2, 0.3, 0.4];
-const CONTOUR_WIDTH: f64 = 0.75;
 
 /// Parse roost-finder CSVs, average calls per detector per active night, and
 /// compute the error surface + predicted roost in one WASM call.
@@ -386,34 +386,32 @@ fn run_roost_finder(
         .map(|((&x, &y), &count)| RoostDetectorPoint { x, y, count })
         .collect();
 
-    let heatmap = roost::render::render_surface(
-        &surface,
-        grid_size,
-        grid_size as u32,
-        grid_size as u32,
-        &CONTOUR_LEVELS,
-        CONTOUR_WIDTH,
-    )?;
-    let surface_png_base64 = encode_base64(&encode_png(&heatmap)?);
+    // Grid extents match the search grid built by `compute_error_surface`.
+    let xmin = agg.x.iter().cloned().fold(f64::INFINITY, f64::min);
+    let xmax = agg.x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let ymin = agg.y.iter().cloned().fold(f64::INFINITY, f64::min);
+    let ymax = agg.y.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+    // `surface` is south-first (iy = 0 -> ymin); the shared plotter expects
+    // row 0 at the north edge, so flip the rows before encoding.
+    let mut north_first = Vec::with_capacity(surface.len());
+    for iy in (0..grid_size).rev() {
+        north_first.extend_from_slice(&surface[iy * grid_size..(iy + 1) * grid_size]);
+    }
+    let surface_base64 = f64_to_base64(&north_first);
 
     Ok(RoostFinderOutput {
         x: result.x,
         y: result.y,
         loss: result.loss,
-        surface_png_base64,
+        surface_base64,
+        grid_size,
+        bounds_bng: [xmin, ymin, xmax, ymax],
         weighted_mean_x,
         weighted_mean_y,
         detectors: detector_points,
         warnings,
     })
-}
-
-fn encode_png(img: &image::RgbImage) -> Result<Vec<u8>, String> {
-    let mut buf = Vec::new();
-    image::DynamicImage::ImageRgb8(img.clone())
-        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    Ok(buf)
 }
 
 #[cfg(test)]

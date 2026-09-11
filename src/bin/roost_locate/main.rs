@@ -1,8 +1,5 @@
 //! Command-line entry point for bat roost location estimation.
 
-mod plot;
-
-use plot::{render as render_plot, PlotConfig, PlotData};
 use wasm_connect::roost::io::{aggregate_with_warnings, count_calls, read_detectors, read_sunset};
 use wasm_connect::roost::compute_error_surface;
 
@@ -27,8 +24,6 @@ OPTIONS:
     --diffusivity <m^2/s>    Diffusion coefficient D (default 81.7)
     --grid-size <n>          Grid points per axis (default 500)
     --output <path>          Write the full surface as x,y,loss CSV
-    --plot <path.png>        Render the surface to a PNG image
-    --roost <x> <y>          Known roost coordinates to mark on the plot
     --help                   Show this help
 
 METHOD:
@@ -47,8 +42,6 @@ struct Args {
     diffusivity: f64,
     grid_size: usize,
     output: Option<String>,
-    plot: Option<String>,
-    roost: Option<(f64, f64)>,
 }
 
 impl Args {
@@ -97,7 +90,6 @@ fn parse_args() -> Result<Args, String> {
             "master" => args.master = Some(take_value(&inline, &mut it, &key)?),
             "filter-sunset" => args.filter_sunset = Some(take_value(&inline, &mut it, &key)?),
             "output" => args.output = Some(take_value(&inline, &mut it, &key)?),
-            "plot" => args.plot = Some(take_value(&inline, &mut it, &key)?),
             "t0" => {
                 let v = take_value(&inline, &mut it, &key)?;
                 args.t0 = v.parse().map_err(|_| format!("invalid number for --t0: {v}"))?;
@@ -117,15 +109,6 @@ fn parse_args() -> Result<Args, String> {
                 args.grid_size = v
                     .parse()
                     .map_err(|_| format!("invalid number for --grid-size: {v}"))?;
-            }
-            "roost" => {
-                let x = take_value(&inline, &mut it, &key)?;
-                let y = it
-                    .next()
-                    .ok_or_else(|| format!("missing second value for --{key}"))?;
-                let x = x.parse().map_err(|_| format!("invalid --roost x: {x}"))?;
-                let y = y.parse().map_err(|_| format!("invalid --roost y: {y}"))?;
-                args.roost = Some((x, y));
             }
             _ => return Err(format!("unknown option --{key}")),
         }
@@ -169,12 +152,6 @@ fn run() -> Result<(), String> {
         return Err("no detectors with calls found".to_string());
     }
 
-    // Grid extents (the search grid spans the detector bounding box).
-    let xmin = agg.x.iter().cloned().fold(f64::INFINITY, f64::min);
-    let xmax = agg.x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let ymin = agg.y.iter().cloned().fold(f64::INFINITY, f64::min);
-    let ymax = agg.y.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
     let mut wtr = match &args.output {
         Some(p) => {
             let mut w = csv::Writer::from_path(p).map_err(|e| e.to_string())?;
@@ -183,13 +160,6 @@ fn run() -> Result<(), String> {
         }
         None => None,
     };
-
-    let want_surface = args.plot.is_some();
-    let mut surface = Vec::with_capacity(if want_surface {
-        args.grid_size * args.grid_size
-    } else {
-        0
-    });
 
     let result = compute_error_surface(
         &agg.x,
@@ -203,9 +173,6 @@ fn run() -> Result<(), String> {
             if let Some(w) = wtr.as_mut() {
                 let _ = w.write_record([x.to_string(), y.to_string(), loss.to_string()]);
             }
-            if want_surface {
-                surface.push(loss);
-            }
         },
     );
 
@@ -214,52 +181,6 @@ fn run() -> Result<(), String> {
     }
     if let Some(p) = &args.output {
         eprintln!("Wrote surface to {p}");
-    }
-
-    // Weighted mean of detector positions by their (averaged) call counts.
-    let total: f64 = agg.counts.iter().sum();
-    let wmx = agg
-        .x
-        .iter()
-        .zip(agg.counts.iter())
-        .map(|(x, c)| x * c)
-        .sum::<f64>()
-        / total;
-    let wmy = agg
-        .y
-        .iter()
-        .zip(agg.counts.iter())
-        .map(|(y, c)| y * c)
-        .sum::<f64>()
-        / total;
-
-    if let Some(plot_path) = &args.plot {
-        let data = PlotData {
-            surface: &surface,
-            grid_size: args.grid_size,
-            xmin,
-            xmax,
-            ymin,
-            ymax,
-            detectors_x: &agg.x,
-            detectors_y: &agg.y,
-            counts: &agg.counts,
-            predicted: (result.x, result.y),
-            weighted_mean: (wmx, wmy),
-            known_roost: args.roost,
-            loss: result.loss,
-        };
-        let config = PlotConfig {
-            plot_height: 560.0,
-            margin_left: 63.0,
-            margin_right: 14.0,
-            margin_top: 40.0,
-            margin_bottom: 52.0,
-            contour_levels: &[0.1, 0.2, 0.3, 0.4],
-            contour_width: 0.75,
-        };
-        render_plot(plot_path, &data, &config)?;
-        eprintln!("Wrote plot to {plot_path}");
     }
 
     println!(
