@@ -16,11 +16,10 @@ geo = "0.28"
 geojson = "0.24"
 csv = "1"
 tiff = { version = "0.9", optional = true }
-image = { version = "0.24", default-features = false, features = ["png"] }
-plotters = { version = "0.3", optional = true }
+image = { version = "0.24", default-features = false, features = ["png"], optional = true }
 
 [features]
-bin = ["tiff", "plotters"]
+bin = ["tiff", "image"]
 
 [[bin]]
 name = "resistance-pipeline"
