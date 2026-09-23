@@ -554,6 +554,7 @@ fn run() -> io::Result<()> {
         &lamps,
         &params,
         None,
+        None,
     );
 
     let count_non_zero = |label: &str, data: &[f64]| {

@@ -127,6 +127,10 @@ pub fn combine_and_squash(
 // * lamps: a 2D array of f64 values representing the lamp locations and properties
 // * params: a ResistanceParams struct containing the parameters for the resistance calculations
 // * landscape_conductance_override: an optional 2D array of f64 values representing the landscape conductance to override the default calculation
+// * lightmap: an optional 2D array of f64 values representing a pre-computed
+//   irradiance/light map. When present, it replaces the raycasted irradiance
+//   from `lamps`; it is normalised and scaled to resistance via
+//   `irradiance_to_resistance` (see below). Must be `m * n` elements when set.
 // # Returns
 // A ResistanceOutput struct containing the resistance rasters and other outputs from the pipeline
 pub fn run_resistance_pipeline(
@@ -140,6 +144,7 @@ pub fn run_resistance_pipeline(
     lamps: &[f64],
     params: &ResistanceParams,
     landscape_conductance_override: Option<&[f64]>,
+    lightmap: Option<&[f64]>,
 ) -> ResistanceOutput {
     let m = params.nrows;
     let n = params.ncols;
@@ -197,7 +202,14 @@ pub fn run_resistance_pipeline(
         params.linear_xmax,
     );
 
-    let mut lamp_res = if lamps.len() >= 3 {
+    let mut lamp_res = if let Some(lightmap) = lightmap {
+        // Pre-computed light map: skip the raycasted irradiance and just
+        // normalise (max -> 1) and scale by the lamp resistance factor.
+        debug_assert_eq!(lightmap.len(), total, "lightmap must be m * n");
+        let mut lr = lightmap.to_vec();
+        irradiance_to_resistance(&mut lr, m, n, params.lamp_resmax, params.lamp_xmax);
+        lr
+    } else if lamps.len() >= 3 {
         let irradiance = irradiance_run(
             lamps,
             &surfs.soft_surf,
@@ -311,7 +323,7 @@ mod tests {
 
         let output = run_resistance_pipeline(
             &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &[],
-            &params, None,
+            &params, None, None,
         );
 
         assert_eq!(output.total_res.len(), total);
@@ -330,10 +342,42 @@ mod tests {
 
         let output = run_resistance_pipeline(
             &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &lamps,
-            &params, None,
+            &params, None, None,
         );
 
         assert!(output.lamp_res.iter().any(|&v| v > 0.0), "lamp should produce non-zero resistance");
+    }
+
+    #[test]
+    fn test_lightmap_path() {
+        let total = 25;
+        let zeros = vec![0.0f64; total];
+        let dtm = vec![1.0f64; total];
+        let dsm = vec![2.0f64; total];
+        let lcm = vec![1.0f64; total];
+        // Brightest cell in the middle; everything else dimmer.
+        let mut lightmap = vec![0.1f64; total];
+        lightmap[2 * 5 + 2] = 10.0;
+        let params = make_params();
+
+        let output = run_resistance_pipeline(
+            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &[],
+            &params, None, Some(&lightmap),
+        );
+
+        let max = output
+            .lamp_res
+            .iter()
+            .cloned()
+            .fold(0.0f64, f64::max);
+        assert!(
+            (max - params.lamp_resmax).abs() < 1e-3,
+            "brightest light-map cell should map to lamp_resmax"
+        );
+        assert!(
+            output.lamp_res.iter().all(|&v| v >= 0.0),
+            "light-map resistance should be non-negative"
+        );
     }
 
     #[test]
