@@ -233,10 +233,45 @@ pub fn run_resistance_pipeline_browser(
     let lcm = vec![0.0f64; params.nrows * params.ncols];
     let output = resistance::pipeline::run_resistance_pipeline(
         &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
-
-        &generic_resistance, &lamps, &params, Some(&landscape_conductance),
+        &generic_resistance, &lamps, &params, Some(&landscape_conductance), None,
     );
+    resistance_output_to_json(&output)
+}
 
+/// Like [`run_resistance_pipeline_browser`], but skips the raycasted irradiance
+/// and instead derives lamp resistance from a pre-computed light map (an
+/// irradiance raster already aligned to the model grid, length `nrows*ncols`).
+/// The light map is normalised and scaled by the lamp resistance factor inside
+/// `run_resistance_pipeline`.
+#[wasm_bindgen]
+pub fn run_resistance_pipeline_browser_with_lightmap(
+    road_binary: Vec<f64>,
+    river_binary: Vec<f64>,
+    building_mask: Vec<f64>,
+    dtm: Vec<f64>,
+    dsm: Vec<f64>,
+    generic_resistance: Vec<f64>,
+    lightmap: Vec<f64>,
+    landscape_conductance: Vec<f64>,
+    params_json: String,
+) -> String {
+    let params: resistance::pipeline::ResistanceParams = match serde_json::from_str(&params_json) {
+        Ok(p) => p,
+        Err(e) => {
+            return serde_json::to_string(&json!({ "error": format!("Invalid params JSON: {}", e) }))
+                .unwrap_or_else(|_| r#"{"error":"Invalid params JSON"}"#.to_string());
+        }
+    };
+    let lcm = vec![0.0f64; params.nrows * params.ncols];
+    let output = resistance::pipeline::run_resistance_pipeline(
+        &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
+        &generic_resistance, &[], &params, Some(&landscape_conductance),
+        Some(&lightmap),
+    );
+    resistance_output_to_json(&output)
+}
+
+fn resistance_output_to_json(output: &resistance::pipeline::ResistanceOutput) -> String {
     let mut map = serde_json::Map::new();
     map.insert("total_res".to_string(),    serde_json::Value::String(f64_to_base64(&output.total_res)));
     map.insert("lamp_res".to_string(),     serde_json::Value::String(f64_to_base64(&output.lamp_res)));
