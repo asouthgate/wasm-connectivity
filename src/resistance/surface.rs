@@ -13,14 +13,21 @@ pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, nco
     let mut hard_surf = vec![0.0f64; total];
 
     for i in 0..total {
-        let dtm_v = if dtm[i].is_finite() { dtm[i] } else { 0.0 };
-        let dsm_v = if dsm[i].is_finite() { dsm[i] } else { 0.0 };
-        let sv = dsm_v - dtm_v;
+        if !dtm[i].is_finite() || !dsm[i].is_finite() {
+            surf[i] = f64::NAN;
+            soft_surf[i] = f64::NAN;
+            hard_surf[i] = f64::NAN;
+            continue;
+        }
+        let sv = dsm[i] - dtm[i];
         surf[i] = sv;
         soft_surf[i] = sv;
     }
 
     for i in 0..total {
+        if !surf[i].is_finite() {
+            continue;
+        }
         if buildings[i].is_finite() && buildings[i] > 0.0 {
             soft_surf[i] = 0.0;
             hard_surf[i] = if buildings[i] > 1.0 {
@@ -144,6 +151,21 @@ mod tests {
         assert!(result.hard_surf[0] > 0.0);
         assert!(result.soft_surf[0] < 0.001);
         assert!(result.soft_surf[3] > 0.0);
+    }
+
+    #[test]
+    fn test_surface_na_propagation() {
+        let nrows = 1;
+        let ncols = 3;
+        let dtm = vec![10.0, f64::NAN, 10.0];
+        let dsm = vec![15.0, 15.0, f64::NAN];
+        let buildings = vec![0.0; 3];
+        let result = calc_surfs(&dtm, &dsm, &buildings, nrows, ncols);
+        assert!(result.soft_surf[1].is_nan(), "dtm NA should yield NA soft_surf");
+        assert!(result.soft_surf[2].is_nan(), "dsm NA should yield NA soft_surf");
+        assert!(result.hard_surf[1].is_nan(), "dtm NA should yield NA hard_surf");
+        assert!(result.hard_surf[2].is_nan(), "dsm NA should yield NA hard_surf");
+        assert!((result.soft_surf[0] - 5.0).abs() < 0.01);
     }
 
     #[test]
