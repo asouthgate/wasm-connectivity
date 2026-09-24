@@ -1,4 +1,5 @@
 use super::distance::distance_transform_with_buffer;
+use super::is_missing;
 
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
@@ -13,7 +14,7 @@ pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, nco
     let mut hard_surf = vec![0.0f64; total];
 
     for i in 0..total {
-        if !dtm[i].is_finite() || !dsm[i].is_finite() {
+        if is_missing(dtm[i]) || is_missing(dsm[i]) {
             surf[i] = f64::NAN;
             soft_surf[i] = f64::NAN;
             hard_surf[i] = f64::NAN;
@@ -52,64 +53,56 @@ pub struct LidarOutput {
     pub unmanhedge: Vec<f64>,
     pub tree: Vec<f64>,
     pub distance_rasters: Vec<(Vec<f64>, f64)>,
+    pub missing: Vec<bool>,
 }
 
 pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize, pixw: f64) -> LidarOutput {
     let total = nrows * ncols;
     let buf_cells = (10.0 / pixw).max(1.0);
 
-    let mut manhedge = vec![0.0f64; total];
-    let mut unmanhedge = vec![0.0f64; total];
-    let mut tree = vec![0.0f64; total];
+    let missing: Vec<bool> = soft_surf.iter().map(|&h| is_missing(h)).collect();
+
+    let mut manhedge = vec![f64::NAN; total];
+    let mut unmanhedge = vec![f64::NAN; total];
+    let mut tree = vec![f64::NAN; total];
 
     for i in 0..total {
-        let h = soft_surf[i];
-        if !h.is_finite() {
+        if missing[i] {
             continue;
         }
-        if h > 1.0 && h < 3.0 {
-            manhedge[i] = 1.0;
-        }
-        if h > 3.0 && h < 6.0 {
-            unmanhedge[i] = 1.0;
-        }
-        if h >= 6.0 {
-            tree[i] = 1.0;
-        }
+        let h = soft_surf[i];
+        manhedge[i] = if h > 1.0 && h < 3.0 { 1.0 } else { 0.0 };
+        unmanhedge[i] = if h > 3.0 && h < 6.0 { 1.0 } else { 0.0 };
+        tree[i] = if h >= 6.0 { 1.0 } else { 0.0 };
     }
 
-    let mh_has_na = manhedge.iter().any(|&v| v == 0.0 || v.is_nan());
-    let mh_has_features = manhedge.iter().any(|&v| v == 1.0);
+    let compute_dist = |mask: &[f64]| -> Vec<f64> {
+        let has_features = mask.iter().any(|&v| v == 1.0);
+        let has_empty = mask.iter().any(|&v| v == 0.0);
 
-    let mh_dist = if !mh_has_na {
-        vec![0.0; total]
-    } else if !mh_has_features {
-        vec![f64::NAN; total]
-    } else {
-        distance_transform_with_buffer(&manhedge, nrows, ncols, buf_cells)
+        if !has_features {
+            // No features anywhere: valid cells have no contribution (NaN),
+            // missing cells stay NaN.
+            vec![f64::NAN; total]
+        } else if !has_empty {
+            // Every non-missing cell is a feature: distance 0; missing stays NaN.
+            mask.iter()
+                .map(|&v| if v.is_nan() { f64::NAN } else { 0.0 })
+                .collect()
+        } else {
+            let mut d = distance_transform_with_buffer(mask, nrows, ncols, buf_cells);
+            for i in 0..total {
+                if missing[i] {
+                    d[i] = f64::NAN;
+                }
+            }
+            d
+        }
     };
 
-    let umh_has_na = unmanhedge.iter().any(|&v| v == 0.0 || v.is_nan());
-    let umh_has_features = unmanhedge.iter().any(|&v| v == 1.0);
-
-    let umh_dist = if !umh_has_na {
-        vec![0.0; total]
-    } else if !umh_has_features {
-        vec![f64::NAN; total]
-    } else {
-        distance_transform_with_buffer(&unmanhedge, nrows, ncols, buf_cells)
-    };
-
-    let t_has_na = tree.iter().any(|&v| v == 0.0 || v.is_nan());
-    let t_has_features = tree.iter().any(|&v| v == 1.0);
-
-    let tree_dist = if !t_has_na {
-        vec![0.0; total]
-    } else if !t_has_features {
-        vec![f64::NAN; total]
-    } else {
-        distance_transform_with_buffer(&tree, nrows, ncols, buf_cells)
-    };
+    let mh_dist = compute_dist(&manhedge);
+    let umh_dist = compute_dist(&unmanhedge);
+    let tree_dist = compute_dist(&tree);
 
     let distance_rasters = vec![
         (umh_dist, 1.0),
@@ -122,6 +115,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize, pixw: f
         unmanhedge,
         tree,
         distance_rasters,
+        missing,
     }
 }
 
@@ -169,6 +163,22 @@ mod tests {
     }
 
     #[test]
+    fn test_surface_nodata_sentinel_propagation() {
+        let nrows = 1;
+        let ncols = 3;
+        let nodata = -9999.0;
+        let dtm = vec![10.0, nodata, 10.0];
+        let dsm = vec![15.0, 15.0, nodata];
+        let buildings = vec![0.0; 3];
+        let result = calc_surfs(&dtm, &dsm, &buildings, nrows, ncols);
+        assert!(result.soft_surf[1].is_nan(), "dtm nodata should yield NA soft_surf");
+        assert!(result.soft_surf[2].is_nan(), "dsm nodata should yield NA soft_surf");
+        assert!(result.hard_surf[1].is_nan(), "dtm nodata should yield NA hard_surf");
+        assert!(result.hard_surf[2].is_nan(), "dsm nodata should yield NA hard_surf");
+        assert!((result.soft_surf[0] - 5.0).abs() < 0.01);
+    }
+
+    #[test]
     fn test_lidar_classification() {
         let nrows = 5;
         let ncols = 5;
@@ -183,5 +193,9 @@ mod tests {
         assert!(result.unmanhedge[2] == 1.0, "4m → unmanhedge");
         assert!(result.tree[3] == 1.0, "7m → tree");
         assert!(result.manhedge[0] == 0.0, "0.3m → not manhedge");
+        assert!(result.manhedge[4].is_nan(), "NA soft_surf → NA manhedge");
+        assert!(result.tree[4].is_nan(), "NA soft_surf → NA tree");
+        assert!(result.missing[4], "NA soft_surf → missing");
+        assert!(!result.missing[0], "finite soft_surf → not missing");
     }
 }
