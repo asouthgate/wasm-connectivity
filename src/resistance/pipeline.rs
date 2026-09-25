@@ -412,11 +412,11 @@ mod tests {
             &params, None, None,
         );
 
-        assert!(output.soft_surf[3].is_nan(), "NA DTM/DSM → NA soft_surf");
-        assert!(output.hard_surf[3].is_nan(), "NA DTM/DSM → NA hard_surf");
-        assert!(output.landscape_res[3].is_nan(), "NA DTM/DSM → NA landscape_res");
-        assert!(output.linear_res[3].is_nan(), "NA DTM/DSM → NA linear_res");
-        assert!(output.total_res[3].is_nan(), "NA DTM/DSM → NA total_res");
+        assert!(output.soft_surf[3].is_nan(), "NA DTM/DSM -> NA soft_surf");
+        assert!(output.hard_surf[3].is_nan(), "NA DTM/DSM -> NA hard_surf");
+        assert!(output.landscape_res[3].is_nan(), "NA DTM/DSM -> NA landscape_res");
+        assert!(output.linear_res[3].is_nan(), "NA DTM/DSM -> NA linear_res");
+        assert!(output.total_res[3].is_nan(), "NA DTM/DSM -> NA total_res");
         assert!(output.soft_surf[0].is_finite(), "valid cell stays finite");
     }
 
