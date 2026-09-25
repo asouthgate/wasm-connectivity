@@ -172,13 +172,13 @@ mod tests {
         soft[3] = 7.0;
         soft[4] = f64::NAN;
         let result = prep_lidar_rasters(&soft, nrows, ncols, 10.0);
-        assert!(result.manhedge[1] == 1.0, "2m → manhedge");
-        assert!(result.unmanhedge[2] == 1.0, "4m → unmanhedge");
-        assert!(result.tree[3] == 1.0, "7m → tree");
-        assert!(result.manhedge[0] == 0.0, "0.3m → not manhedge");
-        assert!(result.manhedge[4].is_nan(), "NA soft_surf → NA manhedge");
-        assert!(result.tree[4].is_nan(), "NA soft_surf → NA tree");
-        assert!(result.missing[4], "NA soft_surf → missing");
-        assert!(!result.missing[0], "finite soft_surf → not missing");
+        assert!(result.manhedge[1] == 1.0, "2m -> manhedge");
+        assert!(result.unmanhedge[2] == 1.0, "4m -> unmanhedge");
+        assert!(result.tree[3] == 1.0, "7m -> tree");
+        assert!(result.manhedge[0] == 0.0, "0.3m -> not manhedge");
+        assert!(result.manhedge[4].is_nan(), "NA soft_surf -> NA manhedge");
+        assert!(result.tree[4].is_nan(), "NA soft_surf -> NA tree");
+        assert!(result.missing[4], "NA soft_surf -> missing");
+        assert!(!result.missing[0], "finite soft_surf -> not missing");
     }
 }
