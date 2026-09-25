@@ -18,19 +18,26 @@ pub fn cal_road_resistance(
     resmax: f64,
     xmax: f64,
 ) -> Vec<f64> {
-    let total = nrows * ncols;
     let has_roads = road_binary.iter().any(|&v| v != 0.0 && v.is_finite());
 
     if !has_roads {
-        return vec![0.0f64; total];
+        // No road features: valid (empty) cells have zero road resistance;
+        // missing (NaN) cells stay NaN.
+        return road_binary
+            .iter()
+            .map(|&v| if v.is_finite() { 0.0 } else { f64::NAN })
+            .collect();
     }
 
     let road_distance = euclidean_distance_transform(road_binary, nrows, ncols);
 
     road_distance
         .iter()
-        .map(|&d| {
-            if !d.is_finite() || d > buffer {
+        .enumerate()
+        .map(|(i, &d)| {
+            if !road_binary[i].is_finite() {
+                f64::NAN
+            } else if !d.is_finite() || d > buffer {
                 0.0
             } else {
                 ((1.0 - d / buffer) * 0.5 + 0.5).powf(xmax) * resmax
@@ -65,5 +72,19 @@ mod tests {
         assert!(result[road_idx] > 0.0, "at road cell should have resistance");
         let expected = ((1.0 - 0.0 / buffer) * 0.5 + 0.5).powf(xmax) * resmax;
         assert!((result[road_idx] - expected).abs() < 0.01, "at road, d=0 → res={}", expected);
+    }
+
+    #[test]
+    fn test_road_missing() {
+        let nrows = 1;
+        let ncols = 4;
+        let mut binary = vec![0.0f64; 4];
+        binary[0] = 1.0;
+        binary[2] = f64::NAN;
+        let result = cal_road_resistance(&binary, nrows, ncols, 5.0, 10.0, 5.0);
+        assert!(result[0] > 0.0);
+        assert!(result[1].is_finite());
+        assert!(result[2].is_nan(), "missing road data → NaN");
+        assert!(result[3].is_finite());
     }
 }

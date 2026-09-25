@@ -194,6 +194,7 @@ pub fn run_resistance_pipeline(
     let lidar = prep_lidar_rasters(&surfs.soft_surf, m, n, params.pixw);
     let mut linear_res = get_linear_resistance(
         &lidar.distance_rasters,
+        &lidar.missing,
         m,
         n,
         params.linear_buffer,
@@ -231,7 +232,7 @@ pub fn run_resistance_pipeline(
 
     let gen_res: Vec<f64> = generic_resistance
         .iter()
-        .map(|&v| if v.is_finite() { v } else { 0.0 })
+        .map(|&v| if v.is_finite() { v } else { f64::NAN })
         .collect();
 
     let dsm_na: Vec<bool> = dsm.iter().map(|&v| !v.is_finite()).collect();
@@ -393,5 +394,49 @@ mod tests {
             "squashed value should be in [1,10000]"
         );
         assert!((result[3] - 10000.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_nan_propagation() {
+        let total = 25;
+        let zeros = vec![0.0f64; total];
+        let mut dtm = vec![1.0f64; total];
+        let mut dsm = vec![2.0f64; total];
+        let lcm = vec![1.0f64; total];
+        dtm[3] = f64::NAN;
+        dsm[3] = f64::NAN;
+        let params = make_params();
+
+        let output = run_resistance_pipeline(
+            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &[],
+            &params, None, None,
+        );
+
+        assert!(output.soft_surf[3].is_nan(), "NA DTM/DSM -> NA soft_surf");
+        assert!(output.hard_surf[3].is_nan(), "NA DTM/DSM -> NA hard_surf");
+        assert!(output.landscape_res[3].is_nan(), "NA DTM/DSM -> NA landscape_res");
+        assert!(output.linear_res[3].is_nan(), "NA DTM/DSM -> NA linear_res");
+        assert!(output.total_res[3].is_nan(), "NA DTM/DSM -> NA total_res");
+        assert!(output.soft_surf[0].is_finite(), "valid cell stays finite");
+    }
+
+    #[test]
+    fn test_generic_resistance_nan() {
+        let total = 25;
+        let zeros = vec![0.0f64; total];
+        let dtm = vec![1.0f64; total];
+        let dsm = vec![2.0f64; total];
+        let lcm = vec![1.0f64; total];
+        let mut generic = vec![5.0f64; total];
+        generic[7] = f64::NAN;
+        let params = make_params();
+
+        let output = run_resistance_pipeline(
+            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &generic, &[],
+            &params, None, None,
+        );
+
+        assert!(output.generic_res[7].is_nan(), "NA generic → NA generic_res");
+        assert!(output.generic_res[0].is_finite());
     }
 }

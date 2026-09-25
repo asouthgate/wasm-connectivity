@@ -49,6 +49,12 @@ fn raycast(
         return;
     }
 
+    // Skip lamps on missing terrain: an unknown base elevation would turn the
+    // whole raycast into NaN and swallow valid pixels within the cutoff radius.
+    if !terr[ri_lamp * n + cj_lamp].is_finite() || !z.is_finite() {
+        return;
+    }
+
     // compute the pixel cutoff distance and bounds
     let px_cutoff = (cutoff / pixw).ceil() as isize;
     let minj = if cj_lamp as isize - px_cutoff < 0 {
@@ -299,6 +305,29 @@ mod tests {
         assert!(
             open_path > 0.0,
             "open path should get irradiance"
+        );
+    }
+
+    #[test]
+    fn test_irradiance_lamp_on_nodata() {
+        let m = 5;
+        let n = 5;
+        let size = m * n;
+        let mut terr = vec![0.0f64; size];
+        terr[2 * n + 2] = f64::NAN;
+        let soft = vec![0.0f64; size];
+        let hard = vec![0.0f64; size];
+        let lamps = vec![2.0, 2.0, 10.0];
+
+        let result = irradiance_run(&lamps, &soft, &hard, &terr, m, n, 1.0, 100.0, 0.0, 0.5);
+
+        assert!(
+            result.iter().all(|&v| v.is_finite()),
+            "lamp on NA terrain must not produce NaN"
+        );
+        assert!(
+            result.iter().all(|&v| v == 0.0),
+            "lamp on NA terrain should be skipped entirely"
         );
     }
 }

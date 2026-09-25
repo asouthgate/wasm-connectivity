@@ -20,6 +20,7 @@
 // A 2D array of f64 values representing the linear resistance for each pixel
 pub fn get_linear_resistance(
     distance_rasters: &[(Vec<f64>, f64)],
+    missing: &[bool],
     nrows: usize,
     ncols: usize,
     buffer: f64,
@@ -29,11 +30,19 @@ pub fn get_linear_resistance(
 ) -> Vec<f64> {
     let total = nrows * ncols;
     let mut resistance = vec![1.0f64; total];
+    for i in 0..total {
+        if missing[i] {
+            resistance[i] = f64::NAN;
+        }
+    }
 
     for (dist, ranking) in distance_rasters {
         let rbuff = ((0.5 + 0.5 * (ranking / rankmax)).powf(xmax) * resmax) + 1.0;
 
         for i in 0..total {
+            if missing[i] {
+                continue;
+            }
             let d = dist[i];
             if !d.is_finite() {
                 continue;
@@ -63,7 +72,8 @@ mod tests {
         let dist = vec![0.0f64; 9];
         let ranking = 4.0f64;
         let rasters = vec![(dist, ranking)];
-        let result = get_linear_resistance(&rasters, nrows, ncols, 10.0, 4.0, 22000.0, 3.0);
+        let missing = vec![false; 9];
+        let result = get_linear_resistance(&rasters, &missing, nrows, ncols, 10.0, 4.0, 22000.0, 3.0);
         assert!(result[0] >= 1.0);
     }
 
@@ -74,7 +84,21 @@ mod tests {
         let d1 = vec![0.0, 100.0, 100.0, 100.0];
         let d2 = vec![100.0, 0.0, 100.0, 100.0];
         let rasters = vec![(d1, 4.0), (d2, 1.0)];
-        let result = get_linear_resistance(&rasters, nrows, ncols, 10.0, 4.0, 22000.0, 3.0);
+        let missing = vec![false; 4];
+        let result = get_linear_resistance(&rasters, &missing, nrows, ncols, 10.0, 4.0, 22000.0, 3.0);
         assert!(result[1] > result[0], "rank 4 far-field contribution should make cell 1 higher than cell 0");
+    }
+
+    #[test]
+    fn test_linear_resistance_missing() {
+        let nrows = 1;
+        let ncols = 3;
+        let d1 = vec![0.0, 100.0, 100.0];
+        let rasters = vec![(d1, 4.0)];
+        let missing = vec![false, true, false];
+        let result = get_linear_resistance(&rasters, &missing, nrows, ncols, 10.0, 4.0, 22000.0, 3.0);
+        assert!(result[0] >= 1.0);
+        assert!(result[1].is_nan(), "missing cell should stay NA");
+        assert!(result[2].is_finite());
     }
 }
