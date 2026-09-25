@@ -1,5 +1,4 @@
 use super::distance::distance_transform_with_buffer;
-use super::is_missing;
 
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
@@ -14,7 +13,7 @@ pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, nco
     let mut hard_surf = vec![0.0f64; total];
 
     for i in 0..total {
-        if is_missing(dtm[i]) || is_missing(dsm[i]) {
+        if !dtm[i].is_finite() || !dsm[i].is_finite() {
             surf[i] = f64::NAN;
             soft_surf[i] = f64::NAN;
             hard_surf[i] = f64::NAN;
@@ -60,7 +59,7 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize, pixw: f
     let total = nrows * ncols;
     let buf_cells = (10.0 / pixw).max(1.0);
 
-    let missing: Vec<bool> = soft_surf.iter().map(|&h| is_missing(h)).collect();
+    let missing: Vec<bool> = soft_surf.iter().map(|&h| !h.is_finite()).collect();
 
     let mut manhedge = vec![f64::NAN; total];
     let mut unmanhedge = vec![f64::NAN; total];
@@ -159,22 +158,6 @@ mod tests {
         assert!(result.soft_surf[2].is_nan(), "dsm NA should yield NA soft_surf");
         assert!(result.hard_surf[1].is_nan(), "dtm NA should yield NA hard_surf");
         assert!(result.hard_surf[2].is_nan(), "dsm NA should yield NA hard_surf");
-        assert!((result.soft_surf[0] - 5.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_surface_nodata_sentinel_propagation() {
-        let nrows = 1;
-        let ncols = 3;
-        let nodata = -9999.0;
-        let dtm = vec![10.0, nodata, 10.0];
-        let dsm = vec![15.0, 15.0, nodata];
-        let buildings = vec![0.0; 3];
-        let result = calc_surfs(&dtm, &dsm, &buildings, nrows, ncols);
-        assert!(result.soft_surf[1].is_nan(), "dtm nodata should yield NA soft_surf");
-        assert!(result.soft_surf[2].is_nan(), "dsm nodata should yield NA soft_surf");
-        assert!(result.hard_surf[1].is_nan(), "dtm nodata should yield NA hard_surf");
-        assert!(result.hard_surf[2].is_nan(), "dsm nodata should yield NA hard_surf");
         assert!((result.soft_surf[0] - 5.0).abs() < 0.01);
     }
 

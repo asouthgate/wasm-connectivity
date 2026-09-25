@@ -1,5 +1,4 @@
 use super::irradiance::{irradiance_run, irradiance_to_resistance};
-use super::is_missing;
 use super::landscape::{get_landscape_resistance_from_conductance, get_landscape_resistance_lcm};
 use super::linear::get_linear_resistance;
 use super::road::cal_road_resistance;
@@ -233,12 +232,12 @@ pub fn run_resistance_pipeline(
 
     let gen_res: Vec<f64> = generic_resistance
         .iter()
-        .map(|&v| if is_missing(v) { f64::NAN } else { v })
+        .map(|&v| if v.is_finite() { v } else { f64::NAN })
         .collect();
 
-    let dsm_na: Vec<bool> = dsm.iter().map(|&v| is_missing(v)).collect();
-    let dtm_na: Vec<bool> = dtm.iter().map(|&v| is_missing(v)).collect();
-    let lcm_na: Vec<bool> = lcm.iter().map(|&v| is_missing(v)).collect();
+    let dsm_na: Vec<bool> = dsm.iter().map(|&v| !v.is_finite()).collect();
+    let dtm_na: Vec<bool> = dtm.iter().map(|&v| !v.is_finite()).collect();
+    let lcm_na: Vec<bool> = lcm.iter().map(|&v| !v.is_finite()).collect();
 
     for i in 0..total {
         if dsm_na[i] || dtm_na[i] || lcm_na[i] {
@@ -398,15 +397,14 @@ mod tests {
     }
 
     #[test]
-    fn test_nodata_sentinel_propagation() {
+    fn test_nan_propagation() {
         let total = 25;
         let zeros = vec![0.0f64; total];
         let mut dtm = vec![1.0f64; total];
         let mut dsm = vec![2.0f64; total];
         let lcm = vec![1.0f64; total];
-        let nodata = -9999.0;
-        dtm[3] = nodata;
-        dsm[3] = nodata;
+        dtm[3] = f64::NAN;
+        dsm[3] = f64::NAN;
         let params = make_params();
 
         let output = run_resistance_pipeline(
@@ -414,23 +412,23 @@ mod tests {
             &params, None, None,
         );
 
-        assert!(output.soft_surf[3].is_nan(), "nodata DTM/DSM → NA soft_surf");
-        assert!(output.hard_surf[3].is_nan(), "nodata DTM/DSM → NA hard_surf");
-        assert!(output.landscape_res[3].is_nan(), "nodata DTM/DSM → NA landscape_res");
-        assert!(output.linear_res[3].is_nan(), "nodata DTM/DSM → NA linear_res");
-        assert!(output.total_res[3].is_nan(), "nodata DTM/DSM → NA total_res");
+        assert!(output.soft_surf[3].is_nan(), "NA DTM/DSM → NA soft_surf");
+        assert!(output.hard_surf[3].is_nan(), "NA DTM/DSM → NA hard_surf");
+        assert!(output.landscape_res[3].is_nan(), "NA DTM/DSM → NA landscape_res");
+        assert!(output.linear_res[3].is_nan(), "NA DTM/DSM → NA linear_res");
+        assert!(output.total_res[3].is_nan(), "NA DTM/DSM → NA total_res");
         assert!(output.soft_surf[0].is_finite(), "valid cell stays finite");
     }
 
     #[test]
-    fn test_generic_resistance_nodata() {
+    fn test_generic_resistance_nan() {
         let total = 25;
         let zeros = vec![0.0f64; total];
         let dtm = vec![1.0f64; total];
         let dsm = vec![2.0f64; total];
         let lcm = vec![1.0f64; total];
         let mut generic = vec![5.0f64; total];
-        generic[7] = -9999.0;
+        generic[7] = f64::NAN;
         let params = make_params();
 
         let output = run_resistance_pipeline(
@@ -438,7 +436,7 @@ mod tests {
             &params, None, None,
         );
 
-        assert!(output.generic_res[7].is_nan(), "nodata generic → NA generic_res");
+        assert!(output.generic_res[7].is_nan(), "NA generic → NA generic_res");
         assert!(output.generic_res[0].is_finite());
     }
 }

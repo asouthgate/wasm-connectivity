@@ -19,25 +19,26 @@ pub fn cal_river_resistance(
     resmax: f64,
     xmax: f64,
 ) -> Vec<f64> {
-    let total = nrows * ncols;
     let has_rivers = river_binary.iter().any(|&v| v != 0.0 && v.is_finite());
 
     if !has_rivers {
-        return vec![resmax; total];
+        // No river features: valid (empty) cells have zero river resistance;
+        // missing (NaN) cells stay NaN.
+        return river_binary
+            .iter()
+            .map(|&v| if v.is_finite() { 0.0 } else { f64::NAN })
+            .collect();
     }
 
-    let mut river_distance = euclidean_distance_transform(river_binary, nrows, ncols);
-
-    for v in river_distance.iter_mut() {
-        if !v.is_finite() {
-            *v = 0.0;
-        }
-    }
+    let river_distance = euclidean_distance_transform(river_binary, nrows, ncols);
 
     river_distance
         .iter()
-        .map(|&d| {
-            if d > buffer {
+        .enumerate()
+        .map(|(i, &d)| {
+            if !river_binary[i].is_finite() {
+                f64::NAN
+            } else if !d.is_finite() || d > buffer {
                 resmax
             } else {
                 (d / buffer).powf(xmax) * resmax
@@ -53,7 +54,7 @@ mod tests {
     #[test]
     fn test_no_rivers() {
         let result = cal_river_resistance(&vec![0.0f64; 25], 5, 5, 10.0, 2000.0, 4.0);
-        assert!(result.iter().all(|&v| (v - 2000.0).abs() < 0.01));
+        assert!(result.iter().all(|&v| v == 0.0));
     }
 
     #[test]
@@ -64,5 +65,19 @@ mod tests {
         binary[2 * ncols + 2] = 1.0;
         let result = cal_river_resistance(&binary, nrows, ncols, 10.0, 2000.0, 4.0);
         assert!((result[2 * ncols + 2] - 0.0).abs() < 0.01, "in river: zero resistance");
+    }
+
+    #[test]
+    fn test_river_missing() {
+        let nrows = 1;
+        let ncols = 4;
+        let mut binary = vec![0.0f64; 4];
+        binary[0] = 1.0;
+        binary[2] = f64::NAN;
+        let result = cal_river_resistance(&binary, nrows, ncols, 10.0, 2000.0, 4.0);
+        assert!(result[0] >= 0.0);
+        assert!(result[1].is_finite());
+        assert!(result[2].is_nan(), "missing river data → NaN");
+        assert!(result[3].is_finite());
     }
 }
