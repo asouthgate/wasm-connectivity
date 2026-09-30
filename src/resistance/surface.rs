@@ -1,4 +1,4 @@
-use super::distance::distance_transform_with_buffer;
+use super::distance::euclidean_distance_transform;
 
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
@@ -47,6 +47,10 @@ pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, nco
     }
 }
 
+// R reference uses ``max_d = 999999999999`` for the "no features" case, so a
+// missing feature class resolves to the far-field resistance rather than NaN.
+const MAX_D: f64 = 1.0e12;
+
 pub struct LidarOutput {
     pub manhedge: Vec<f64>,
     pub unmanhedge: Vec<f64>,
@@ -55,9 +59,8 @@ pub struct LidarOutput {
     pub missing: Vec<bool>,
 }
 
-pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize, pixw: f64) -> LidarOutput {
+pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize) -> LidarOutput {
     let total = nrows * ncols;
-    let buf_cells = (10.0 / pixw).max(1.0);
 
     let missing: Vec<bool> = soft_surf.iter().map(|&h| !h.is_finite()).collect();
 
@@ -80,16 +83,18 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize, pixw: f
         let has_empty = mask.iter().any(|&v| v == 0.0);
 
         if !has_features {
-            // No features anywhere: valid cells have no contribution (NaN),
-            // missing cells stay NaN.
-            vec![f64::NAN; total]
+            // R reference: no features anywhere -> max distance (far-field
+            // resistance); missing cells stay NaN.
+            mask.iter()
+                .map(|&v| if v.is_nan() { f64::NAN } else { MAX_D })
+                .collect()
         } else if !has_empty {
             // Every non-missing cell is a feature: distance 0; missing stays NaN.
             mask.iter()
                 .map(|&v| if v.is_nan() { f64::NAN } else { 0.0 })
                 .collect()
         } else {
-            let mut d = distance_transform_with_buffer(mask, nrows, ncols, buf_cells);
+            let mut d = euclidean_distance_transform(mask, nrows, ncols);
             for i in 0..total {
                 if missing[i] {
                     d[i] = f64::NAN;
@@ -99,15 +104,14 @@ pub fn prep_lidar_rasters(soft_surf: &[f64], nrows: usize, ncols: usize, pixw: f
         }
     };
 
-    let mh_dist = compute_dist(&manhedge);
     let umh_dist = compute_dist(&unmanhedge);
     let tree_dist = compute_dist(&tree);
+    let mh_dist = compute_dist(&manhedge);
 
-    let distance_rasters = vec![
-        (umh_dist, 1.0),
-        (tree_dist, 2.0),
-        (mh_dist, 4.0),
-    ];
+    // Mirrors the R reference's intended loop ``for (i in 1:nrow(distance_rasters))``,
+    // which processes all three feature classes with their rankings:
+    // unmanaged hedge = 1, tree = 2, managed hedge = 4.
+    let distance_rasters = vec![(umh_dist, 1.0), (tree_dist, 2.0), (mh_dist, 4.0)];
 
     LidarOutput {
         manhedge,
@@ -171,7 +175,7 @@ mod tests {
         soft[2] = 4.0;
         soft[3] = 7.0;
         soft[4] = f64::NAN;
-        let result = prep_lidar_rasters(&soft, nrows, ncols, 10.0);
+        let result = prep_lidar_rasters(&soft, nrows, ncols);
         assert!(result.manhedge[1] == 1.0, "2m -> manhedge");
         assert!(result.unmanhedge[2] == 1.0, "4m -> unmanhedge");
         assert!(result.tree[3] == 1.0, "7m -> tree");
