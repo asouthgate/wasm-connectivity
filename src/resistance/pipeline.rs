@@ -47,10 +47,10 @@ pub struct ResistanceOutput {
     pub ncols: usize,
 }
 
-const SQUASH_MIN: f64 = 1.0;
-const SQUASH_MAX: f64 = 10000.0;
-
-// Combine the resistance rasters and squash the values to a specified range
+// Combine the resistance rasters into a single additive resistance raster.
+// Each layer contributes its resistance value; the total is the plain sum of
+// all layers, which is the additive multivariate model fed into Circuitscape.
+//
 // # Arguments
 // * lamp: a 2D array of f64 values representing the lamp resistance
 // * road: a 2D array of f64 values representing the road resistance
@@ -61,8 +61,8 @@ const SQUASH_MAX: f64 = 10000.0;
 // * m: the number of rows in the rasters
 // * n: the number of columns in the rasters
 // # Returns
-// A 2D array of f64 values representing the combined and squashed resistance for each pixel
-pub fn combine_and_squash(
+// A 2D array of f64 values representing the combined resistance for each pixel
+pub fn combine_resistance(
     lamp: &[f64],
     road: &[f64],
     river: &[f64],
@@ -74,35 +74,9 @@ pub fn combine_and_squash(
 ) -> Vec<f64> {
     let sz = m * n;
     let mut total = vec![0.0f64; sz];
-
-    let mut tmin = f64::INFINITY;
-    let mut tmax = f64::NEG_INFINITY;
-
     for i in 0..sz {
-        let v = lamp[i] + road[i] + river[i] + landscape[i] + linear[i] + generic[i] + 1.0;
-        total[i] = v;
-        if v.is_finite() {
-            if v < tmin {
-                tmin = v;
-            }
-            if v > tmax {
-                tmax = v;
-            }
-        }
+        total[i] = lamp[i] + road[i] + river[i] + landscape[i] + linear[i] + generic[i];
     }
-
-    let range = tmax - tmin;
-    if range <= 0.0 || !range.is_finite() {
-        return total;
-    }
-
-    let squashed_range = SQUASH_MAX - SQUASH_MIN;
-    for val in total.iter_mut() {
-        if val.is_finite() {
-            *val = ((*val - tmin) * squashed_range) / range + SQUASH_MIN;
-        }
-    }
-
     total
 }
 
@@ -157,6 +131,7 @@ pub fn run_resistance_pipeline(
         params.road_buffer,
         params.road_resmax,
         params.road_xmax,
+        params.pixw,
     );
 
     let river_res = cal_river_resistance(
@@ -166,6 +141,7 @@ pub fn run_resistance_pipeline(
         params.river_buffer,
         params.river_resmax,
         params.river_xmax,
+        params.pixw,
     );
 
     let surfs = calc_surfs(dtm, dsm, building_mask, m, n);
@@ -191,7 +167,7 @@ pub fn run_resistance_pipeline(
         )
     };
 
-    let lidar = prep_lidar_rasters(&surfs.soft_surf, m, n, params.pixw);
+    let lidar = prep_lidar_rasters(&surfs.soft_surf, m, n);
     let mut linear_res = get_linear_resistance(
         &lidar.distance_rasters,
         &lidar.missing,
@@ -201,6 +177,7 @@ pub fn run_resistance_pipeline(
         params.linear_rankmax,
         params.linear_resmax,
         params.linear_xmax,
+        params.pixw,
     );
 
     let mut lamp_res = if let Some(lightmap) = lightmap {
@@ -249,7 +226,7 @@ pub fn run_resistance_pipeline(
         }
     }
 
-    let total_res = combine_and_squash(
+    let total_res = combine_resistance(
         &lamp_res,
         &road_res,
         &river_res,
@@ -382,18 +359,15 @@ mod tests {
     }
 
     #[test]
-    fn test_combine_and_squash() {
+    fn test_combine_resistance_additive() {
         let m = 2;
         let n = 2;
         let sz = m * n;
         let a = vec![10.0, 20.0, 30.0, 40.0];
+        let b = vec![1.0, 2.0, 3.0, 4.0];
         let z = vec![0.0f64; sz];
-        let result = combine_and_squash(&a, &z, &z, &z, &z, &z, m, n);
-        assert!(
-            result[0] >= 1.0 && result[0] <= 10000.0,
-            "squashed value should be in [1,10000]"
-        );
-        assert!((result[3] - 10000.0).abs() < 0.001);
+        let result = combine_resistance(&a, &b, &z, &z, &z, &z, m, n);
+        assert_eq!(result, vec![11.0, 22.0, 33.0, 44.0]);
     }
 
     #[test]

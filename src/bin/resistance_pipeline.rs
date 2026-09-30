@@ -327,10 +327,20 @@ fn write_asc_files(
     let roost_col = if let Some(e) = roost_easting { ((e - xmin) / pixw) as usize } else { ncols / 2 };
     let roost_row = if let Some(n) = roost_northing { ((ymax - n) / pixw) as usize } else { nrows / 2 };
 
+    // source.asc: the concentric rings are the current sources (1 Amp each);
+    // every other cell is NODATA (NaN -> written as -9999).
     let circles = create_circles_raster(nrows, ncols, roost_row, roost_col, radius, pixw, n_circles);
-    write_asc(&cs_dir.join("source.asc"), &circles, ncols, nrows, xmin, ymin, pixw, -9999.0)?;
+    let mut source = vec![f64::NAN; nrows * ncols];
+    for i in 0..nrows * ncols {
+        if circles[i] > 0.0 {
+            source[i] = 1.0;
+        }
+    }
+    write_asc(&cs_dir.join("source.asc"), &source, ncols, nrows, xmin, ymin, pixw, -9999.0)?;
 
-    let mut ground = vec![0.0f64; nrows * ncols];
+    // ground.asc: the roost is tied to ground (resistance 1); every other cell
+    // is NODATA.
+    let mut ground = vec![f64::NAN; nrows * ncols];
     if roost_row < nrows && roost_col < ncols {
         ground[roost_row * ncols + roost_col] = 1.0;
     }

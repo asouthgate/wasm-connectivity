@@ -13,8 +13,9 @@ pub fn compute_base_conductance(soft_surf: &[f64], lcm: &[f64]) -> Vec<f64> {
         let h_valid = soft_surf[i].is_finite();
         let lcm_valid = lcm[i].is_finite() && lcm[i] >= 0.0;
         if h_valid && lcm_valid {
-            // R reference: grass [-Inf, 0.5) → 4; scrub [0.5, 2.5) → 3; trees [2.5, Inf] → 3
-            let lidar_rank = if soft_surf[i] < 0.5 { 4.0 } else { 3.0 };
+            // R reference (reclassify with default right=TRUE): grass (-Inf, 0.5] → 4;
+            // scrub (0.5, 2.5] → 3; trees (2.5, Inf] → 3.
+            let lidar_rank = if soft_surf[i] <= 0.5 { 4.0 } else { 3.0 };
             conductance[i] = lidar_rank + lcm[i];
         } else {
             conductance[i] = f64::NAN;
@@ -37,6 +38,9 @@ fn ranked_resistance(conductance: &[f64], rankmax: f64, resmax: f64, xmax: f64) 
     conductance
         .iter()
         .map(|&c| {
+            // R reference docstring: "Resistance in interval [0, resmax]".
+            // Ranks at or above rankmax (e.g. buildings, set to max(conductance)+1)
+            // collapse to resmax so the value range stays bounded.
             if c >= rankmax {
                 resmax
             } else {

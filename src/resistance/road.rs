@@ -5,9 +5,10 @@ use super::distance::euclidean_distance_transform;
 // * road_binary: a 2D array of f64 values where non-zero values indicate the presence of a road
 // * nrows: the number of rows in the road raster
 // * ncols: the number of columns in the road raster
-// * buffer: the buffer distance to apply to the road distance values
+// * buffer: the buffer distance (metres) to apply to the road distance values
 // * resmax: the maximum resistance value
 // * xmax: the exponent for the resistance calculation
+// * pixw: the width of a pixel in metres (used to convert the buffer to cells)
 // # Returns
 // A 2D array of f64 values representing the road resistance for each pixel
 pub fn cal_road_resistance(
@@ -17,6 +18,7 @@ pub fn cal_road_resistance(
     buffer: f64,
     resmax: f64,
     xmax: f64,
+    pixw: f64,
 ) -> Vec<f64> {
     let has_roads = road_binary.iter().any(|&v| v != 0.0 && v.is_finite());
 
@@ -31,16 +33,20 @@ pub fn cal_road_resistance(
 
     let road_distance = euclidean_distance_transform(road_binary, nrows, ncols);
 
+    // `road_distance` is expressed in pixels; convert the buffer (metres)
+    // to pixels so the comparison is dimensionally consistent.
+    let buffer_cells = buffer / pixw;
+
     road_distance
         .iter()
         .enumerate()
         .map(|(i, &d)| {
             if !road_binary[i].is_finite() {
                 f64::NAN
-            } else if !d.is_finite() || d > buffer {
+            } else if !d.is_finite() || d > buffer_cells {
                 0.0
             } else {
-                ((1.0 - d / buffer) * 0.5 + 0.5).powf(xmax) * resmax
+                ((1.0 - d / buffer_cells) * 0.5 + 0.5).powf(xmax) * resmax
             }
         })
         .collect()
@@ -53,7 +59,7 @@ mod tests {
     #[test]
     fn test_no_roads() {
         let binary = vec![0.0f64; 25];
-        let result = cal_road_resistance(&binary, 5, 5, 200.0, 10.0, 5.0);
+        let result = cal_road_resistance(&binary, 5, 5, 200.0, 10.0, 5.0, 1.0);
         assert_eq!(result, vec![0.0f64; 25]);
     }
 
@@ -66,12 +72,29 @@ mod tests {
         let buffer = 5.0;
         let resmax = 10.0;
         let xmax = 5.0;
-        let result = cal_road_resistance(&binary, nrows, ncols, buffer, resmax, xmax);
+        let result = cal_road_resistance(&binary, nrows, ncols, buffer, resmax, xmax, 1.0);
 
         let road_idx = 2 * ncols + 2;
         assert!(result[road_idx] > 0.0, "at road cell should have resistance");
         let expected = ((1.0 - 0.0 / buffer) * 0.5 + 0.5).powf(xmax) * resmax;
         assert!((result[road_idx] - expected).abs() < 0.01, "at road, d=0 → res={}", expected);
+    }
+
+    #[test]
+    fn test_road_buffer_in_metres() {
+        // pixw = 1 m, buffer = 5 m -> buffer spans 5 cells. The road at cell 0
+        // yields a ramp over cells 0..5 and zero resistance beyond the buffer.
+        let nrows = 1;
+        let ncols = 8;
+        let mut binary = vec![0.0f64; 8];
+        binary[0] = 1.0;
+        let result = cal_road_resistance(&binary, nrows, ncols, 5.0, 10.0, 2.0, 1.0);
+        let expected_at_road = ((1.0f64 - 0.0) * 0.5 + 0.5).powf(2.0) * 10.0;
+        assert!((result[0] - expected_at_road).abs() < 0.01, "at road: max contribution");
+        let expected_at_edge = ((1.0f64 - 5.0 / 5.0) * 0.5 + 0.5).powf(2.0) * 10.0;
+        assert!((result[5] - expected_at_edge).abs() < 0.01, "at buffer edge: ramp value");
+        assert!((result[6] - 0.0).abs() < 0.01, "beyond buffer: zero resistance");
+        assert!(result[1] < result[0], "resistance decays with distance");
     }
 
     #[test]
@@ -81,7 +104,7 @@ mod tests {
         let mut binary = vec![0.0f64; 4];
         binary[0] = 1.0;
         binary[2] = f64::NAN;
-        let result = cal_road_resistance(&binary, nrows, ncols, 5.0, 10.0, 5.0);
+        let result = cal_road_resistance(&binary, nrows, ncols, 5.0, 10.0, 5.0, 1.0);
         assert!(result[0] > 0.0);
         assert!(result[1].is_finite());
         assert!(result[2].is_nan(), "missing road data → NaN");

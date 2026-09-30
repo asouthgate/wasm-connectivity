@@ -161,34 +161,6 @@ pub fn euclidean_distance_transform(mask: &[f64], nrows: usize, ncols: usize) ->
     result
 }
 
-// Compute the euclidean distance from nearest feature, with a buffer applied
-//
-// # Arguments
-// * mask: a 2D array of f64 values, where non-zero values indicate the presence of a feature.
-// * nrows: the number of rows in the mask
-// * ncols: the number of columns in the mask
-// * buffer_cells: the number of cells to buffer the distance by
-// # Returns
-// A 2D array of f64 values, where each value is the euclidean distance from the nearest feature in the mask, minus the buffer_cells value.
-// If a pixel is not reachable from any feature, the distance will be NaN.
-pub fn distance_transform_with_buffer(
-    mask: &[f64],
-    nrows: usize,
-    ncols: usize,
-    buffer_cells: f64,
-) -> Vec<f64> {
-    let dist = euclidean_distance_transform(mask, nrows, ncols);
-    dist.iter()
-        .map(|&d| {
-            if d.is_finite() {
-                (d - buffer_cells).max(0.0)
-            } else {
-                d
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
