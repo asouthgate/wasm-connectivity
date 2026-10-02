@@ -4,10 +4,6 @@
 // with a buffer applied to the distance values.
 // The resistance is also influenced by the ranking of the features,
 // with higher ranked features contributing more to the resistance.
-// The biological meaning of this resistance is that linear features
-// such as roads, rivers, or other barriers can impede movement or dispersal
-// of organisms across the landscape, and the resistance value quantifies
-// the degree of impedance based on distance and feature ranking.
 //
 // # Arguments
 // * distance_rasters: a vector of tuples
