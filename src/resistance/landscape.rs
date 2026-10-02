@@ -81,7 +81,7 @@ fn ranked_resistance(conductance: &[f64], rankmax: f64, resmax: f64, xmax: f64) 
 // * rankmax: the maximum rank value (Vmax); buildings are set to this rank
 fn apply_building_max(conductance: &mut [f64], buildings: &[f64], rankmax: f64) {
     for i in 0..conductance.len() {
-        if conductance[i].is_finite() && buildings[i].is_finite() && buildings[i] > 0.0 {
+        if buildings[i].is_finite() && buildings[i] > 0.0 {
             conductance[i] = rankmax;
         }
     }
@@ -177,5 +177,17 @@ mod tests {
         assert!(ranks[2].is_nan(), "class > 21 is invalid");
         assert!(ranks[3].is_nan(), "NaN input stays NaN");
         assert_eq!(ranks[4], 4.0, "valid class still reclassifies");
+    }
+
+    #[test]
+    fn test_building_overrides_nan_lcm() {
+        // Empty raster coverage (NaN LCM) must still yield a finite, Rmax
+        // resistance where a building is present, so Circuitscape has valid
+        // habitat cells rather than an entirely-NODATA resistance map.
+        let lcm = vec![f64::NAN; 4];
+        let buildings = vec![1.0, 0.0, 0.0, 0.0];
+        let r = get_landscape_resistance_lcm(&lcm, &buildings, 8.0, 100.0, 5.0);
+        assert!((r[0] - 100.0).abs() < 1e-6, "building cell should map to Rmax");
+        assert!(r[1].is_nan(), "non-building NaN cell stays NaN");
     }
 }
