@@ -158,9 +158,6 @@ pub fn run_resistance_pipeline(
         get_landscape_resistance_lcm(
             lcm,
             building_mask,
-            &surfs.soft_surf,
-            m,
-            n,
             params.landscape_rankmax,
             params.landscape_resmax,
             params.landscape_xmax,

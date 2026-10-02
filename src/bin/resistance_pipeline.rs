@@ -7,8 +7,7 @@ use tiff::decoder::{Decoder, DecodingResult};
 use tiff::encoder::{colortype, TiffEncoder};
 use wasm_connect::geospatial::{rasterize_features, GeoTransform, LayerParams};
 use wasm_connect::resistance::pipeline::{run_resistance_pipeline, ResistanceParams};
-use wasm_connect::resistance::surface::calc_surfs;
-use wasm_connect::resistance::landscape::{compute_base_conductance, get_landscape_resistance_lcm};
+use wasm_connect::resistance::landscape::{compute_base_rank, get_landscape_resistance_lcm};
 
 fn read_tiff_f32(path: &Path) -> io::Result<(Vec<f64>, usize, usize)> {
     let file = fs::File::open(path)?;
@@ -260,26 +259,24 @@ fn run_landscape(work_dir: &Path) -> io::Result<()> {
     let building_mask = read_building_mask_from_disk(work_dir, nrows, ncols, &transform);
 
     let (lcm, _, _) = read_tiff_f32(&work_dir.join("lcm.tif"))?;
-    let (dtm, nrows_dtm, ncols_dtm) = read_tiff_f32(&work_dir.join("dtm.tif"))?;
-    let (dsm, nrows_dsm, _ncols_dsm) = read_tiff_f32(&work_dir.join("dsm.tif"))?;
+    let (_dtm, nrows_dtm, ncols_dtm) = read_tiff_f32(&work_dir.join("dtm.tif"))?;
+    let (_dsm, nrows_dsm, _ncols_dsm) = read_tiff_f32(&work_dir.join("dsm.tif"))?;
     if nrows_dtm != nrows_dsm {
         emit_json_log("ERROR", "DTM and DSM dimensions must match");
         std::process::exit(1);
     }
     let (nrows, ncols) = (nrows_dtm, ncols_dtm);
 
-    let surfs = calc_surfs(&dtm, &dsm, &building_mask, nrows, ncols);
-
     let rankmax = params_json.get("landscape_rankmax").and_then(|v| v.as_f64()).unwrap_or(8.0);
     let resmax = params_json.get("landscape_resmax").and_then(|v| v.as_f64()).unwrap_or(100.0);
     let xmax = params_json.get("landscape_xmax").and_then(|v| v.as_f64()).unwrap_or(5.0);
 
-    let landscape_conductance = compute_base_conductance(&surfs.soft_surf, &lcm);
+    let landscape_conductance = compute_base_rank(&lcm);
     emit_json_log("INFO", "Writing landscape_conductance.tif");
     write_tiff_f32(&work_dir.join("landscape_conductance.tif"), &landscape_conductance, ncols, nrows)?;
 
     let landscape_res = get_landscape_resistance_lcm(
-        &lcm, &building_mask, &surfs.soft_surf, nrows, ncols, rankmax, resmax, xmax,
+        &lcm, &building_mask, rankmax, resmax, xmax,
     );
 
     emit_json_log("INFO", "Writing landscape_res.tif");
