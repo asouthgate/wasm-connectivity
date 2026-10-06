@@ -48,7 +48,7 @@ pub struct Aggregated {
 }
 
 fn clean_header(h: &str) -> String {
-    h.trim().trim_start_matches('\u{feff}').to_string()
+    h.trim().trim_start_matches('\u{feff}').to_ascii_lowercase()
 }
 
 fn header_index(headers: &csv::StringRecord, name: &str) -> Option<usize> {
@@ -281,6 +281,27 @@ date,sunset_time
         assert_eq!(s1.x, 274530.0);
         assert_eq!(s1.y, 66084.0);
         assert_eq!(s1.days, Some(7.0));
+    }
+
+    #[test]
+    fn parses_headers_case_insensitively() {
+        let det = read_detectors(
+            "DETECTOR,X,Y,N_ACTIVE_DAYS\nS1,274530,66084,7\nb2,274282,66079,2\n",
+        )
+        .unwrap();
+        assert_eq!(det.len(), 2);
+        assert_eq!(det["S1"].x, 274530.0);
+        assert_eq!(det["b2"].y, 66079.0);
+
+        let counts = count_calls(
+            "DETECTOR,DATE,TIME\nS1,26/06/2016,21:00:00\n",
+            None,
+        )
+        .unwrap();
+        assert_eq!(counts["S1"], 1);
+
+        let sunset = read_sunset("DATE,SUNSET_TIME\n26/06/2016,21:00:00\n").unwrap();
+        assert!(sunset.contains_key(&(26, 6, 2016)));
     }
 
     #[test]
