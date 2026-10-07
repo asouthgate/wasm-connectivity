@@ -20,6 +20,7 @@ image = { version = "0.24", default-features = false, features = ["png"], option
 
 [features]
 bin = ["tiff", "image"]
+memory-story = []
 
 [[bin]]
 name = "resistance-pipeline"
@@ -30,6 +31,11 @@ required-features = ["bin"]
 name = "prof-solve"
 path = "src/bin/prof_solve.rs"
 required-features = ["bin"]
+
+[[bin]]
+name = "mem-story"
+path = "src/bin/mem_story.rs"
+required-features = ["bin", "memory-story"]
 
 [[bin]]
 name = "roost-locate"

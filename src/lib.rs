@@ -1,6 +1,7 @@
 pub mod circuit;
 pub mod geospatial;
 pub mod linalg;
+pub mod memory;
 pub mod raster;
 pub mod resistance;
 pub mod roost;

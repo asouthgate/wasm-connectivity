@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use crate::linalg::pcg as solver;
 use crate::linalg::multigrid::MgPreconditioner;
+use crate::memory;
 
 pub mod cache;
 pub mod current;
@@ -134,6 +135,7 @@ pub fn solve_raster_cached(
     rebuild_laplacian: bool,
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
+    memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
 
     let (laplacian, cell_to_node, num_nodes, prior_voltages) =
@@ -146,7 +148,7 @@ pub fn solve_raster_cached(
     );
 
     let grounds_present;
-    let (a, mut b) = match ground_mode {
+    let (a, mut s) = match ground_mode {
         GroundMode::Neumann => {
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             grounds_present = g.iter().any(|&x| x > 0.0);
@@ -165,32 +167,35 @@ pub fn solve_raster_cached(
             } else {
                 laplacian
             };
-            let mut b = current_global;
-            zero_ground_rhs(&mut b, &gns);
-            (a, b)
+            let mut s = current_global;
+            zero_ground_rhs(&mut s, &gns);
+            (a, s)
         }
     };
 
     // Mean removal is only needed for singular (ground-free) systems.
     if remove_average && !grounds_present {
-        let sum: f64 = b.iter().sum();
+        let sum: f64 = s.iter().sum();
         if sum.abs() > 1e-15 {
             let mean = sum / num_nodes as f64;
-            for v in &mut b {
+            for v in &mut s {
                 *v -= mean;
             }
         }
     }
 
+    memory::record_fine_laplacian(&a);
+    memory::record_cg_vectors(num_nodes);
+
     let prior_seed = prior_voltages.as_deref().filter(|v| v.len() == num_nodes);
-    let res = solver::cg_solve(&a, &b, max_iter, tol, prior_seed);
+    let res = solver::cg_solve(&a, &s, max_iter, tol, prior_seed);
 
     let out = build_raster_output(
-        &res.x, resistance_data, ground_data,
+        &res.v, resistance_data, ground_data,
         &cell_to_node, nrows, ncols, nodata, ground_mode,
     );
 
-    cache::store_last_voltages(&res.x);
+    cache::store_last_voltages(&res.v);
 
     AnnotatedOutput { output: out, total_iters: res.iters }
 }
@@ -319,6 +324,7 @@ pub fn solve_raster_sources_mg(
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
     // Fill nodata → every cell is a node → rectangular grid
+    memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
 
     let (cell_to_node, num_nodes, _edges, laplacian) =
@@ -333,7 +339,7 @@ pub fn solve_raster_sources_mg(
     // pins ground nodes at V=0. The MG hierarchy is built from the same
     // matrix, so Galerkin coarsening propagates ground effects to all levels.
     let grounds_present;
-    let (a, mut b) = match ground_mode {
+    let (a, mut s) = match ground_mode {
         GroundMode::Neumann => {
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             grounds_present = g.iter().any(|&x| x > 0.0);
@@ -352,29 +358,32 @@ pub fn solve_raster_sources_mg(
             } else {
                 laplacian
             };
-            let mut b = current_global;
-            zero_ground_rhs(&mut b, &gns);
-            (a, b)
+            let mut s = current_global;
+            zero_ground_rhs(&mut s, &gns);
+            (a, s)
         }
     };
+
+    memory::record_fine_laplacian(&a);
+    memory::record_cg_vectors(num_nodes);
 
     let mg = MgPreconditioner::build_from_laplacian(&a, nrows, ncols, 8);
 
     // Mean removal is only needed for singular (ground-free) systems; with
     // grounds the system is anchored and Julia solves b as-is.
     if remove_average && !grounds_present {
-        let sum: f64 = b.iter().sum();
+        let sum: f64 = s.iter().sum();
         if sum.abs() > 1e-15 {
             let mean = sum / num_nodes as f64;
-            for v in &mut b {
+            for v in &mut s {
                 *v -= mean;
             }
         }
     }
-    let res = solver::cg_solve_precond(&a, &b, max_iter, tol, None, &mg);
+    let res = solver::cg_solve_precond(&a, &s, max_iter, tol, None, &mg);
 
     let out = build_raster_output(
-        &res.x, resistance_data, ground_data,
+        &res.v, resistance_data, ground_data,
         &cell_to_node, nrows, ncols, nodata, ground_mode,
     );
 

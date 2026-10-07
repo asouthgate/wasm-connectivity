@@ -1,6 +1,9 @@
 use sprs::CsMat;
 use crate::linalg::pcg::{Preconditioner, mat_vec_mul_slice};
 use crate::linalg::cholesky;
+use crate::memory;
+#[cfg(feature = "memory-story")]
+use crate::memory::GalerkinScratch;
 use std::cell::RefCell;
 
 /// One level of the multigrid hierarchy.
@@ -13,10 +16,13 @@ struct MgLevel {
     prolongation: Option<(Vec<usize>, Vec<usize>, Vec<f64>)>,
 }
 
+/// Per-level scratch vectors used by the V-cycle:
+/// `e` (error approximation), `d_prime` (residual of the error system),
+/// `d` (the level's right-hand side).
 struct LevelWorkspace {
-    z: Vec<f64>,
-    r: Vec<f64>,
-    rhs: Vec<f64>,
+    e: Vec<f64>,
+    d_prime: Vec<f64>,
+    d: Vec<f64>,
 }
 
 /// Multigrid preconditioner: applies one V-cycle as `M⁻¹·r`.
@@ -245,6 +251,7 @@ impl MgPreconditioner {
             let c = &levels[coarsest_idx];
             c.nrows * c.ncols
         };
+        memory::record_coarse_dense(cnodes);
         let dense = cholesky::sparse_to_dense(&levels[coarsest_idx].laplacian, cnodes);
         match cholesky::cholesky_decompose(&dense, cnodes) {
             Some(l) => {
@@ -256,13 +263,57 @@ impl MgPreconditioner {
             }
         }
 
+        #[cfg(feature = "memory-story")]
+        {
+            for (i, lvl) in levels.iter().enumerate() {
+                let nodes = lvl.nrows * lvl.ncols;
+                let nnz = lvl.laplacian.nnz();
+                let lap_bytes = memory::csmat_bytes(&lvl.laplacian);
+                let prolongation_bytes = lvl
+                    .prolongation
+                    .as_ref()
+                    .map(|(rows, _, _)| memory::triplets_bytes(rows.len()))
+                    .unwrap_or(0);
+                let cholesky_bytes = lvl
+                    .cholesky_l
+                    .as_ref()
+                    .map(|l| memory::vec_f64_bytes(l.len()))
+                    .unwrap_or(0);
+
+                let scratch = if i == 0 {
+                    GalerkinScratch::default()
+                } else {
+                    let (rows, _, _) = lvl.prolongation.as_ref().unwrap();
+                    let nnz_p = rows.len() as u64;
+                    let fine_n = levels[i - 1].nrows * levels[i - 1].ncols;
+                    let u = memory::usize_size();
+                    GalerkinScratch {
+                        symbolic_seen_bytes: memory::vec_usize_bytes(nodes),
+                        symbolic_row_nnz_bytes: memory::vec_usize_bytes(nodes),
+                        numeric_seen_bytes: memory::vec_usize_bytes(nodes),
+                        numeric_pos_bytes: memory::vec_usize_bytes(nodes),
+                        numeric_row_count_bytes: memory::vec_usize_bytes(nodes),
+                        numeric_indptr_bytes: memory::vec_usize_bytes(nodes + 1),
+                        numeric_cols_bytes: memory::vec_usize_bytes(nnz),
+                        numeric_vals_bytes: memory::vec_f64_bytes(nnz),
+                        p_csr_bytes: (fine_n as u64 + 1) * u + nnz_p * (u + 8),
+                        p_csc_bytes: (nodes as u64 + 1) * u + nnz_p * (u + 8),
+                    }
+                };
+
+                memory::record_level(
+                    i, nodes, nnz, lap_bytes, prolongation_bytes, cholesky_bytes, scratch,
+                );
+            }
+        }
+
         // Pre-allocate scratch workspaces
         let workspaces = levels.iter().map(|lvl| {
             let n = lvl.nrows * lvl.ncols;
             LevelWorkspace {
-                z: vec![0.0; n],
-                r: vec![0.0; n],
-                rhs: vec![0.0; n],
+                e: vec![0.0; n],
+                d_prime: vec![0.0; n],
+                d: vec![0.0; n],
             }
         }).collect();
 
@@ -274,19 +325,19 @@ impl MgPreconditioner {
         }
     }
 
-    fn v_cycle(&self, workspaces: &RefCell<Vec<LevelWorkspace>>, b: &[f64], level: usize) {
+    fn v_cycle(&self, workspaces: &RefCell<Vec<LevelWorkspace>>, d: &[f64], level: usize) {
         let lvl = &self.levels[level];
         let n = lvl.nrows * lvl.ncols;
 
         // solve lowest case
         if level == self.levels.len() - 1 {
             if let Some(ref l) = lvl.cholesky_l {
-                let x = crate::linalg::cholesky::cholesky_solve(l, b, n);
-                workspaces.borrow_mut()[level].z.copy_from_slice(&x);
+                let e = crate::linalg::cholesky::cholesky_solve(l, d, n);
+                workspaces.borrow_mut()[level].e.copy_from_slice(&e);
             } else {
                 let mut ws = workspaces.borrow_mut();
-                let res = crate::linalg::pcg::cg_solve(&lvl.laplacian, b, 50, 1e-3, Some(&ws[level].z));
-                ws[level].z.copy_from_slice(&res.x);
+                let res = crate::linalg::pcg::cg_solve(&lvl.laplacian, d, 50, 1e-3, Some(&ws[level].e));
+                ws[level].e.copy_from_slice(&res.v);
             }
             return;
         }
@@ -294,9 +345,9 @@ impl MgPreconditioner {
         // start by filling with zeroes
         { // create a new scope to drop the borrow before the next borrow_mut
             let mut ws = workspaces.borrow_mut();
-            ws[level].z.fill(0.0);
-            if b.as_ptr() != ws[level].rhs.as_ptr() {
-                ws[level].rhs.copy_from_slice(b);
+            ws[level].e.fill(0.0);
+            if d.as_ptr() != ws[level].d.as_ptr() {
+                ws[level].d.copy_from_slice(d);
             }
         }
 
@@ -305,31 +356,31 @@ impl MgPreconditioner {
             let mut ws = workspaces.borrow_mut();
             unsafe {
                 let ptr = ws.as_mut_ptr().add(level);
-                let z = std::slice::from_raw_parts_mut((*ptr).z.as_mut_ptr(), n);
-                let rhs = std::slice::from_raw_parts((*ptr).rhs.as_ptr(), n);
-                symmetric_gauss_seidel_smooth(&lvl.laplacian, z, rhs, self.omega);
+                let e = std::slice::from_raw_parts_mut((*ptr).e.as_mut_ptr(), n);
+                let d = std::slice::from_raw_parts((*ptr).d.as_ptr(), n);
+                symmetric_gauss_seidel_smooth(&lvl.laplacian, e, d, self.omega);
             }
             drop(ws);
         }
 
-        // compute the residual error rr = r - L_l * z 
+        // compute the residual error d' = d - L_l * e
         {
             let mut ws = workspaces.borrow_mut();
             unsafe {
                 let ptr = ws.as_mut_ptr().add(level);
-                let z = std::slice::from_raw_parts((*ptr).z.as_ptr(), n);
-                let r = std::slice::from_raw_parts_mut((*ptr).r.as_mut_ptr(), n);
-                let rhs = std::slice::from_raw_parts((*ptr).rhs.as_ptr(), n);
-                mat_vec_mul_slice(&lvl.laplacian, z, r);
+                let e = std::slice::from_raw_parts((*ptr).e.as_ptr(), n);
+                let d_prime = std::slice::from_raw_parts_mut((*ptr).d_prime.as_mut_ptr(), n);
+                let d = std::slice::from_raw_parts((*ptr).d.as_ptr(), n);
+                mat_vec_mul_slice(&lvl.laplacian, e, d_prime);
                 for i in 0..n {
-                    r[i] = rhs[i] - r[i]; // rr = r - L_l * z
+                    d_prime[i] = d[i] - d_prime[i]; // d' = d - L_l * e
                 }
             }
         }
 
-        // Apply restriction to the next level's rhs: r_coarse = P^T * r_fine
-        let next_b_ptr: *const f64;
-        let next_b_len: usize;
+        // Apply restriction to the next level's d: d_coarse = P^T * d'_fine
+        let next_d_ptr: *const f64;
+        let next_d_len: usize;
         {
             let mut ws = workspaces.borrow_mut();
             let ws_slice = ws.as_mut_slice();
@@ -337,14 +388,14 @@ impl MgPreconditioner {
             let fine_ws = &left[level];
             let coarse_ws = &mut right[0];
             let (p_rows, p_cols, p_vals) = self.levels[level + 1].prolongation.as_ref().unwrap();
-            coarse_ws.rhs.fill(0.0);
-            restrict_sparse(p_rows, p_cols, p_vals, &fine_ws.r, &mut coarse_ws.rhs);
-            next_b_ptr = coarse_ws.rhs.as_ptr();
-            next_b_len = coarse_ws.rhs.len();
+            coarse_ws.d.fill(0.0);
+            restrict_sparse(p_rows, p_cols, p_vals, &fine_ws.d_prime, &mut coarse_ws.d);
+            next_d_ptr = coarse_ws.d.as_ptr();
+            next_d_len = coarse_ws.d.len();
         }
 
-        let next_b: &[f64] = unsafe { std::slice::from_raw_parts(next_b_ptr, next_b_len) };
-        self.v_cycle(workspaces, next_b, level + 1);
+        let next_d: &[f64] = unsafe { std::slice::from_raw_parts(next_d_ptr, next_d_len) };
+        self.v_cycle(workspaces, next_d, level + 1);
 
         let next_lvl = &self.levels[level + 1];
         {
@@ -354,10 +405,10 @@ impl MgPreconditioner {
             let fine_ws = &mut left[level];
             let coarse_ws = &right[0];
             let (p_rows, p_cols, p_vals) = next_lvl.prolongation.as_ref().unwrap();
-            fine_ws.r.fill(0.0);
-            prolongate_sparse(p_rows, p_cols, p_vals, &coarse_ws.z, &mut fine_ws.r);
+            fine_ws.d_prime.fill(0.0);
+            prolongate_sparse(p_rows, p_cols, p_vals, &coarse_ws.e, &mut fine_ws.d_prime);
             for i in 0..n {
-                fine_ws.z[i] += fine_ws.r[i];
+                fine_ws.e[i] += fine_ws.d_prime[i];
             }
         }
 
@@ -365,9 +416,9 @@ impl MgPreconditioner {
             let mut ws = workspaces.borrow_mut();
             unsafe {
                 let ptr = ws.as_mut_ptr().add(level);
-                let z = std::slice::from_raw_parts_mut((*ptr).z.as_mut_ptr(), n);
-                let rhs = std::slice::from_raw_parts((*ptr).rhs.as_ptr(), n);
-                symmetric_gauss_seidel_smooth(&lvl.laplacian, z, rhs, self.omega);
+                let e = std::slice::from_raw_parts_mut((*ptr).e.as_mut_ptr(), n);
+                let d = std::slice::from_raw_parts((*ptr).d.as_ptr(), n);
+                symmetric_gauss_seidel_smooth(&lvl.laplacian, e, d, self.omega);
             }
             drop(ws);
         }
@@ -375,22 +426,22 @@ impl MgPreconditioner {
 }
 
 impl Preconditioner for MgPreconditioner {
-    fn apply(&self, r: &[f64], z: &mut Vec<f64>) {
+    fn apply(&self, r: &[f64], e0: &mut Vec<f64>) {
         self.v_cycle(&self.workspaces, r, 0);
 
         let ws = self.workspaces.borrow_mut();
-        z.resize(r.len(), 0.0);
-        z.copy_from_slice(&ws[0].z);
+        e0.resize(r.len(), 0.0);
+        e0.copy_from_slice(&ws[0].e);
     }
 }
 
 fn symmetric_gauss_seidel_smooth(
     laplacian: &CsMat<f64>,
-    x: &mut [f64],
-    b: &[f64],
+    e: &mut [f64],
+    d: &[f64],
     omega: f64,
 ) {
-    let n = b.len();
+    let n = d.len();
     // Forward sweep
     for row in 0..n {
         if let Some(rv) = laplacian.outer_view(row) {
@@ -400,12 +451,12 @@ fn symmetric_gauss_seidel_smooth(
                 if col == row {
                     diag = val;
                 } else {
-                    off_diag_sum += val * x[col];
+                    off_diag_sum += val * e[col];
                 }
             }
             if diag.abs() > 1e-15 {
-                let new_x = (b[row] - off_diag_sum) / diag;
-                x[row] = (1.0 - omega) * x[row] + omega * new_x;
+                let new_e = (d[row] - off_diag_sum) / diag;
+                e[row] = (1.0 - omega) * e[row] + omega * new_e;
             }
         }
     }
@@ -418,12 +469,12 @@ fn symmetric_gauss_seidel_smooth(
                 if col == row {
                     diag = val;
                 } else {
-                    off_diag_sum += val * x[col];
+                    off_diag_sum += val * e[col];
                 }
             }
             if diag.abs() > 1e-15 {
-                let new_x = (b[row] - off_diag_sum) / diag;
-                x[row] = (1.0 - omega) * x[row] + omega * new_x;
+                let new_e = (d[row] - off_diag_sum) / diag;
+                e[row] = (1.0 - omega) * e[row] + omega * new_e;
             }
         }
     }

@@ -56,6 +56,9 @@ pub fn store(
     ncols: usize,
     nodata: f64,
 ) {
+    crate::memory::record_cache_laplacian(&laplacian);
+    crate::memory::record_cache_cell_to_node(cell_to_node.len());
+
     CACHE.with(|c| {
         let preserved = c.borrow().as_ref().and_then(|b| {
             if (b.nrows, b.ncols, b.nodata, b.last_voltages.len()) == (nrows, ncols, nodata, num_nodes) {
@@ -92,6 +95,7 @@ pub fn peek_meta() -> Option<(usize, usize, f64)> {
 
 /// Replaces the cached last-voltage vector. No-op if no cache is present.
 pub fn store_last_voltages(voltages: &[f64]) {
+    crate::memory::record_cache_last_voltages(voltages.len());
     CACHE.with(|c| {
         if let Some(b) = c.borrow_mut().as_mut() {
             b.last_voltages.clear();
