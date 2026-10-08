@@ -1,12 +1,13 @@
 use sprs::CsMat;
-use crate::linalg::pcg::{Preconditioner, mat_vec_mul_slice};
+use crate::linalg::pcg::Preconditioner;
 use crate::linalg::cholesky;
+use crate::linalg::operator::{FineOperator, Operator};
 use crate::memory;
 #[cfg(feature = "memory-story")]
 use crate::memory::GalerkinScratch;
 use std::cell::RefCell;
 
-/// One level of the multigrid hierarchy.
+/// One (coarse) level of the multigrid hierarchy.
 struct MgLevel {
     laplacian: CsMat<f64>,
     nrows: usize,
@@ -26,11 +27,16 @@ struct LevelWorkspace {
 }
 
 /// Multigrid preconditioner: applies one V-cycle as `M⁻¹·r`.
-pub struct MgPreconditioner {
-    levels: Vec<MgLevel>,
+///
+/// Level 0 (the fine grid) is an [`Operator`]: either a materialised CSR
+/// matrix or a matrix-free stencil. Deeper levels are materialised coarse
+/// Laplacians produced by Galerkin coarsening.
+pub struct MgPreconditioner<'a> {
+    fine: FineOperator<'a>,
+    coarse: Vec<MgLevel>,
     nu: usize,
     omega: f64,
-    workspaces: RefCell<Vec<LevelWorkspace>>, 
+    workspaces: RefCell<Vec<LevelWorkspace>>,
 }
 
 /// Build a sparse prolongation matrix P: coarse → fine.
@@ -103,9 +109,9 @@ fn restrict_sparse(rows: &[usize], cols: &[usize], vals: &[f64], fine: &[f64], c
 /// Galerkin coarse operator: `L_coarse = P^T * L_fine * P`.
 ///
 /// Why we roll by hand? Because `P^T * L_fine * P` is 
-// sparse-sparse-sparse product, and the intermediate `L_fine * P` is 
-// much denser than the output and wastes several hundred MB for 1000x1000
-//
+/// sparse-sparse-sparse product, and the intermediate `L_fine * P` is 
+/// much denser than the output and wastes several hundred MB for 1000x1000
+///
 /// Two-pass: pass 1 compute indices, step2 fill values
 fn galerkin_coarsen(fine_lap: &CsMat<f64>, p: &CsMat<f64>, coarse_n: usize) -> CsMat<f64> {
     let p_csc = p.to_csc();
@@ -172,45 +178,102 @@ fn galerkin_coarsen(fine_lap: &CsMat<f64>, p: &CsMat<f64>, coarse_n: usize) -> C
     CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
 }
 
-impl MgPreconditioner {
-    /// Build a multigrid hierarchy directly from a fine-grid system matrix.
-    ///
-    /// The matrix is used as-is for level 0 and Galerkin-coarsened
-    /// (`A_coarse = Pᵀ · A · P`) for deeper levels
+/// Galerkin coarsening that reads the fine operator on the fly (via
+/// [`Operator::for_each_entry`]) rather than from a materialised `CsMat`.
+/// Used only for the level 0 → level 1 transition, so the fine Laplacian
+/// never has to be built.
+fn galerkin_coarsen_operator(fine: &dyn Operator, p: &CsMat<f64>, coarse_n: usize) -> CsMat<f64> {
+    let p_csc = p.to_csc();
+
+    let mut seen = vec![usize::MAX; coarse_n];
+    let mut row_nnz = vec![0usize; coarse_n];
+    for i in 0..coarse_n {
+        let Some(pcol) = p_csc.outer_view(i) else { continue };
+        for (a, _) in pcol.iter() {
+            fine.for_each_entry(a, &mut |b, _| {
+                if let Some(pb) = p.outer_view(b) {
+                    for (j, _) in pb.iter() {
+                        if seen[j] != i {
+                            seen[j] = i;
+                            row_nnz[i] += 1;
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    let mut indptr = vec![0usize; coarse_n + 1];
+    for i in 0..coarse_n {
+        indptr[i + 1] = indptr[i] + row_nnz[i];
+    }
+    let nnz = indptr[coarse_n];
+
+    let mut seen = vec![usize::MAX; coarse_n];
+    let mut pos = vec![0usize; coarse_n];
+    let mut row_count = vec![0usize; coarse_n];
+    let mut cols = vec![0usize; nnz];
+    let mut vals = vec![0.0f64; nnz];
+    for i in 0..coarse_n {
+        let Some(pcol) = p_csc.outer_view(i) else { continue };
+        for (a, &p_ai) in pcol.iter() {
+            fine.for_each_entry(a, &mut |b, l_ab| {
+                if let Some(pb) = p.outer_view(b) {
+                    for (j, &p_bj) in pb.iter() {
+                        let slot = if seen[j] != i {
+                            seen[j] = i;
+                            let s = indptr[i] + row_count[i];
+                            row_count[i] += 1;
+                            pos[j] = s;
+                            cols[s] = j;
+                            vals[s] = 0.0;
+                            s
+                        } else {
+                            pos[j]
+                        };
+                        vals[slot] += p_ai * l_ab * p_bj;
+                    }
+                }
+            });
+        }
+    }
+
+    CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
+}
+
+impl MgPreconditioner<'static> {
+    /// Build a multigrid hierarchy from a materialised fine-grid matrix.
     pub fn build_from_laplacian(
         a: &CsMat<f64>,
         nrows: usize,
         ncols: usize,
         max_levels: usize,
     ) -> Self {
-        Self::from_laplacian_impl(a, nrows, ncols, max_levels)
+        Self::build_from_operator(FineOperator::Explicit(a.clone()), nrows, ncols, max_levels)
     }
+}
 
-    fn from_laplacian_impl(
-        a: &CsMat<f64>,
+impl<'a> MgPreconditioner<'a> {
+    /// Build a multigrid hierarchy from a fine-grid operator (materialised or
+    /// matrix-free). Deeper levels are Galerkin-coarsened and materialised.
+    pub fn build_from_operator(
+        fine: FineOperator<'a>,
         nrows: usize,
         ncols: usize,
         max_levels: usize,
     ) -> Self {
         debug_assert_eq!(
-            a.rows(), nrows * ncols,
+            fine.n(),
+            nrows * ncols,
             "MG hierarchy expects all cells as nodes, got {} vs {}",
-            a.rows(), nrows * ncols
+            fine.n(),
+            nrows * ncols
         );
 
-        let mut levels = Vec::new();
+        let mut coarse: Vec<MgLevel> = Vec::new();
         let (mut nr, mut nc) = (nrows, ncols);
 
-        levels.push(MgLevel {
-            laplacian: a.clone(),
-            nrows: nr,
-            ncols: nc,
-            cholesky_l: None,
-            prolongation: None,
-        });
-
-        // Build deeper levels using Galerkin coarsening
-        while levels.len() < max_levels {
+        while 1 + coarse.len() < max_levels {
             let fine_nr = nr;
             let fine_nc = nc;
             let next_nr = fine_nr / 2;
@@ -219,21 +282,28 @@ impl MgPreconditioner {
                 break;
             }
 
-            let fine_lap = &levels.last().unwrap().laplacian;
+            let coarse_n = next_nr * next_nc;
             let (p_rows, p_cols, p_vals) =
                 build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc);
             let fine_n = fine_nr * fine_nc;
-            let coarse_n = next_nr * next_nc;
 
             // Build prolongation as a sparse matrix for Galerkin
-            let p_tri = sprs::TriMat::from_triplets((fine_n, coarse_n), p_rows.clone(), p_cols.clone(), p_vals.clone());
+            let p_tri = sprs::TriMat::from_triplets(
+                (fine_n, coarse_n),
+                p_rows.clone(),
+                p_cols.clone(),
+                p_vals.clone(),
+            );
             let p = p_tri.to_csr();
 
-            // Galerkin: L_coarse = P^T * L_fine * P (fused, no intermediate)
-            let mut laplacian = galerkin_coarsen(fine_lap, &p, coarse_n);
+            let mut laplacian = if coarse.is_empty() {
+                galerkin_coarsen_operator(&fine, &p, coarse_n)
+            } else {
+                galerkin_coarsen(&coarse.last().unwrap().laplacian, &p, coarse_n)
+            };
             crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
 
-            levels.push(MgLevel {
+            coarse.push(MgLevel {
                 laplacian,
                 nrows: next_nr,
                 ncols: next_nc,
@@ -246,26 +316,18 @@ impl MgPreconditioner {
         }
 
         // Compute Cholesky factorization on the coarsest level
-        let coarsest_idx = levels.len() - 1;
-        let cnodes = {
-            let c = &levels[coarsest_idx];
-            c.nrows * c.ncols
-        };
-        memory::record_coarse_dense(cnodes);
-        let dense = cholesky::sparse_to_dense(&levels[coarsest_idx].laplacian, cnodes);
-        match cholesky::cholesky_decompose(&dense, cnodes) {
-            Some(l) => {
-                levels[coarsest_idx].cholesky_l = Some(l);
-            }
-            None => {
-                // Cholesky failed (non-SPD coarsest level); the V-cycle falls
-                // back to a few Jacobi-preconditioned CG iterations.
+        if let Some(coarsest) = coarse.last_mut() {
+            let cnodes = coarsest.nrows * coarsest.ncols;
+            memory::record_coarse_dense(cnodes);
+            let dense = cholesky::sparse_to_dense(&coarsest.laplacian, cnodes);
+            if let Some(l) = cholesky::cholesky_decompose(&dense, cnodes) {
+                coarsest.cholesky_l = Some(l);
             }
         }
 
         #[cfg(feature = "memory-story")]
         {
-            for (i, lvl) in levels.iter().enumerate() {
+            for (k, lvl) in coarse.iter().enumerate() {
                 let nodes = lvl.nrows * lvl.ncols;
                 let nnz = lvl.laplacian.nnz();
                 let lap_bytes = memory::csmat_bytes(&lvl.laplacian);
@@ -280,57 +342,92 @@ impl MgPreconditioner {
                     .map(|l| memory::vec_f64_bytes(l.len()))
                     .unwrap_or(0);
 
-                let scratch = if i == 0 {
-                    GalerkinScratch::default()
+                let (rows, _, _) = lvl.prolongation.as_ref().unwrap();
+                let nnz_p = rows.len() as u64;
+                let fine_n = if k == 0 {
+                    nrows * ncols
                 } else {
-                    let (rows, _, _) = lvl.prolongation.as_ref().unwrap();
-                    let nnz_p = rows.len() as u64;
-                    let fine_n = levels[i - 1].nrows * levels[i - 1].ncols;
-                    let u = memory::usize_size();
-                    GalerkinScratch {
-                        symbolic_seen_bytes: memory::vec_usize_bytes(nodes),
-                        symbolic_row_nnz_bytes: memory::vec_usize_bytes(nodes),
-                        numeric_seen_bytes: memory::vec_usize_bytes(nodes),
-                        numeric_pos_bytes: memory::vec_usize_bytes(nodes),
-                        numeric_row_count_bytes: memory::vec_usize_bytes(nodes),
-                        numeric_indptr_bytes: memory::vec_usize_bytes(nodes + 1),
-                        numeric_cols_bytes: memory::vec_usize_bytes(nnz),
-                        numeric_vals_bytes: memory::vec_f64_bytes(nnz),
-                        p_csr_bytes: (fine_n as u64 + 1) * u + nnz_p * (u + 8),
-                        p_csc_bytes: (nodes as u64 + 1) * u + nnz_p * (u + 8),
-                    }
+                    coarse[k - 1].nrows * coarse[k - 1].ncols
+                };
+                let u = memory::usize_size();
+                let scratch = GalerkinScratch {
+                    symbolic_seen_bytes: memory::vec_usize_bytes(nodes),
+                    symbolic_row_nnz_bytes: memory::vec_usize_bytes(nodes),
+                    numeric_seen_bytes: memory::vec_usize_bytes(nodes),
+                    numeric_pos_bytes: memory::vec_usize_bytes(nodes),
+                    numeric_row_count_bytes: memory::vec_usize_bytes(nodes),
+                    numeric_indptr_bytes: memory::vec_usize_bytes(nodes + 1),
+                    numeric_cols_bytes: memory::vec_usize_bytes(nnz),
+                    numeric_vals_bytes: memory::vec_f64_bytes(nnz),
+                    p_csr_bytes: (fine_n as u64 + 1) * u + nnz_p * (u + 8),
+                    p_csc_bytes: (nodes as u64 + 1) * u + nnz_p * (u + 8),
                 };
 
                 memory::record_level(
-                    i, nodes, nnz, lap_bytes, prolongation_bytes, cholesky_bytes, scratch,
+                    k + 1,
+                    nodes,
+                    nnz,
+                    lap_bytes,
+                    prolongation_bytes,
+                    cholesky_bytes,
+                    scratch,
                 );
             }
         }
 
-        // Pre-allocate scratch workspaces
-        let workspaces = levels.iter().map(|lvl| {
+        // Pre-allocate scratch workspaces (one per level: fine + coarse)
+        let mut workspaces = Vec::with_capacity(1 + coarse.len());
+        workspaces.push(LevelWorkspace {
+            e: vec![0.0; nrows * ncols],
+            d_prime: vec![0.0; nrows * ncols],
+            d: vec![0.0; nrows * ncols],
+        });
+        for lvl in &coarse {
             let n = lvl.nrows * lvl.ncols;
-            LevelWorkspace {
+            workspaces.push(LevelWorkspace {
                 e: vec![0.0; n],
                 d_prime: vec![0.0; n],
                 d: vec![0.0; n],
-            }
-        }).collect();
+            });
+        }
 
         Self {
-            levels,
+            fine,
+            coarse,
             nu: 2,
             omega: 0.67,
             workspaces: RefCell::new(workspaces),
         }
     }
 
+    /// The fine-grid operator (level 0).
+    pub fn fine_operator(&self) -> &dyn Operator {
+        &self.fine
+    }
+
+    fn level_n(&self, level: usize) -> usize {
+        if level == 0 {
+            self.fine.n()
+        } else {
+            let lvl = &self.coarse[level - 1];
+            lvl.nrows * lvl.ncols
+        }
+    }
+
+    fn level_operator(&self, level: usize) -> &dyn Operator {
+        if level == 0 {
+            &self.fine
+        } else {
+            &self.coarse[level - 1].laplacian
+        }
+    }
+
     fn v_cycle(&self, workspaces: &RefCell<Vec<LevelWorkspace>>, d: &[f64], level: usize) {
-        let lvl = &self.levels[level];
-        let n = lvl.nrows * lvl.ncols;
+        let n = self.level_n(level);
 
         // solve lowest case
-        if level == self.levels.len() - 1 {
+        if level == self.coarse.len() {
+            let lvl = self.coarse.last().unwrap();
             if let Some(ref l) = lvl.cholesky_l {
                 let e = crate::linalg::cholesky::cholesky_solve(l, d, n);
                 workspaces.borrow_mut()[level].e.copy_from_slice(&e);
@@ -353,25 +450,27 @@ impl MgPreconditioner {
 
         // smooth
         for _ in 0..self.nu {
+            let op = self.level_operator(level);
             let mut ws = workspaces.borrow_mut();
             unsafe {
                 let ptr = ws.as_mut_ptr().add(level);
                 let e = std::slice::from_raw_parts_mut((*ptr).e.as_mut_ptr(), n);
                 let d = std::slice::from_raw_parts((*ptr).d.as_ptr(), n);
-                symmetric_gauss_seidel_smooth(&lvl.laplacian, e, d, self.omega);
+                symmetric_gauss_seidel_smooth(op, e, d, self.omega);
             }
             drop(ws);
         }
 
         // compute the residual error d' = d - L_l * e
         {
+            let op = self.level_operator(level);
             let mut ws = workspaces.borrow_mut();
             unsafe {
                 let ptr = ws.as_mut_ptr().add(level);
                 let e = std::slice::from_raw_parts((*ptr).e.as_ptr(), n);
                 let d_prime = std::slice::from_raw_parts_mut((*ptr).d_prime.as_mut_ptr(), n);
                 let d = std::slice::from_raw_parts((*ptr).d.as_ptr(), n);
-                mat_vec_mul_slice(&lvl.laplacian, e, d_prime);
+                op.matvec(e, d_prime);
                 for i in 0..n {
                     d_prime[i] = d[i] - d_prime[i]; // d' = d - L_l * e
                 }
@@ -387,7 +486,7 @@ impl MgPreconditioner {
             let (left, right) = ws_slice.split_at_mut(level + 1);
             let fine_ws = &left[level];
             let coarse_ws = &mut right[0];
-            let (p_rows, p_cols, p_vals) = self.levels[level + 1].prolongation.as_ref().unwrap();
+            let (p_rows, p_cols, p_vals) = self.coarse[level].prolongation.as_ref().unwrap();
             coarse_ws.d.fill(0.0);
             restrict_sparse(p_rows, p_cols, p_vals, &fine_ws.d_prime, &mut coarse_ws.d);
             next_d_ptr = coarse_ws.d.as_ptr();
@@ -397,14 +496,13 @@ impl MgPreconditioner {
         let next_d: &[f64] = unsafe { std::slice::from_raw_parts(next_d_ptr, next_d_len) };
         self.v_cycle(workspaces, next_d, level + 1);
 
-        let next_lvl = &self.levels[level + 1];
         {
             let mut ws = workspaces.borrow_mut();
             let ws_slice = ws.as_mut_slice();
             let (left, right) = ws_slice.split_at_mut(level + 1);
             let fine_ws = &mut left[level];
             let coarse_ws = &right[0];
-            let (p_rows, p_cols, p_vals) = next_lvl.prolongation.as_ref().unwrap();
+            let (p_rows, p_cols, p_vals) = self.coarse[level].prolongation.as_ref().unwrap();
             fine_ws.d_prime.fill(0.0);
             prolongate_sparse(p_rows, p_cols, p_vals, &coarse_ws.e, &mut fine_ws.d_prime);
             for i in 0..n {
@@ -413,19 +511,20 @@ impl MgPreconditioner {
         }
 
         for _ in 0..self.nu {
+            let op = self.level_operator(level);
             let mut ws = workspaces.borrow_mut();
             unsafe {
                 let ptr = ws.as_mut_ptr().add(level);
                 let e = std::slice::from_raw_parts_mut((*ptr).e.as_mut_ptr(), n);
                 let d = std::slice::from_raw_parts((*ptr).d.as_ptr(), n);
-                symmetric_gauss_seidel_smooth(&lvl.laplacian, e, d, self.omega);
+                symmetric_gauss_seidel_smooth(op, e, d, self.omega);
             }
             drop(ws);
         }
     }
 }
 
-impl Preconditioner for MgPreconditioner {
+impl<'a> Preconditioner for MgPreconditioner<'a> {
     fn apply(&self, r: &[f64], e0: &mut Vec<f64>) {
         self.v_cycle(&self.workspaces, r, 0);
 
@@ -436,7 +535,7 @@ impl Preconditioner for MgPreconditioner {
 }
 
 fn symmetric_gauss_seidel_smooth(
-    laplacian: &CsMat<f64>,
+    op: &dyn Operator,
     e: &mut [f64],
     d: &[f64],
     omega: f64,
@@ -444,38 +543,34 @@ fn symmetric_gauss_seidel_smooth(
     let n = d.len();
     // Forward sweep
     for row in 0..n {
-        if let Some(rv) = laplacian.outer_view(row) {
-            let mut diag = 0.0;
-            let mut off_diag_sum = 0.0;
-            for (col, &val) in rv.iter() {
-                if col == row {
-                    diag = val;
-                } else {
-                    off_diag_sum += val * e[col];
-                }
+        let mut diag = 0.0;
+        let mut off_diag_sum = 0.0;
+        op.for_each_entry(row, &mut |col, val| {
+            if col == row {
+                diag = val;
+            } else {
+                off_diag_sum += val * e[col];
             }
-            if diag.abs() > 1e-15 {
-                let new_e = (d[row] - off_diag_sum) / diag;
-                e[row] = (1.0 - omega) * e[row] + omega * new_e;
-            }
+        });
+        if diag.abs() > 1e-15 {
+            let new_e = (d[row] - off_diag_sum) / diag;
+            e[row] = (1.0 - omega) * e[row] + omega * new_e;
         }
     }
     // Backward sweep
     for row in (0..n).rev() {
-        if let Some(rv) = laplacian.outer_view(row) {
-            let mut diag = 0.0;
-            let mut off_diag_sum = 0.0;
-            for (col, &val) in rv.iter() {
-                if col == row {
-                    diag = val;
-                } else {
-                    off_diag_sum += val * e[col];
-                }
+        let mut diag = 0.0;
+        let mut off_diag_sum = 0.0;
+        op.for_each_entry(row, &mut |col, val| {
+            if col == row {
+                diag = val;
+            } else {
+                off_diag_sum += val * e[col];
             }
-            if diag.abs() > 1e-15 {
-                let new_e = (d[row] - off_diag_sum) / diag;
-                e[row] = (1.0 - omega) * e[row] + omega * new_e;
-            }
+        });
+        if diag.abs() > 1e-15 {
+            let new_e = (d[row] - off_diag_sum) / diag;
+            e[row] = (1.0 - omega) * e[row] + omega * new_e;
         }
     }
 }
@@ -491,11 +586,122 @@ mod tests {
     }
 
     // Build a bilinear MG hierarchy from a resistance raster (nodata -1.0).
-    fn build_mg(resistance: &[f64], nrows: usize, ncols: usize, max_levels: usize) -> MgPreconditioner {
+    fn build_mg(resistance: &[f64], nrows: usize, ncols: usize, max_levels: usize) -> MgPreconditioner<'static> {
         let filled = crate::raster::fill_nodata(resistance, -1.0);
         let (_cell_to_node, _num_nodes, _edges, laplacian) =
             crate::build_circuit_model(&filled, nrows, ncols, -1.0);
         MgPreconditioner::build_from_laplacian(&laplacian, nrows, ncols, max_levels)
+    }
+
+    // The tests build the explicit hierarchy, so the fine operator is a CsMat.
+    fn fine_csmat<'a>(mg: &'a MgPreconditioner<'_>) -> &'a CsMat<f64> {
+        match &mg.fine {
+            FineOperator::Explicit(m) => m,
+            FineOperator::Stencil(_) => panic!("expected an explicit fine operator"),
+        }
+    }
+
+    fn num_levels(mg: &MgPreconditioner<'_>) -> usize {
+        1 + mg.coarse.len()
+    }
+
+    fn level_n(mg: &MgPreconditioner<'_>, level: usize) -> usize {
+        if level == 0 {
+            mg.fine.n()
+        } else {
+            let lvl = &mg.coarse[level - 1];
+            lvl.nrows * lvl.ncols
+        }
+    }
+
+    fn level_operator<'x>(mg: &'x MgPreconditioner<'_>, level: usize) -> &'x dyn Operator {
+        if level == 0 {
+            &mg.fine
+        } else {
+            &mg.coarse[level - 1].laplacian
+        }
+    }
+
+    #[test]
+    fn test_stencil_matches_explicit_mg() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+
+        let nrows = 16;
+        let ncols = 16;
+        let n = nrows * ncols;
+        let nodata = crate::NODATA_SENTINEL;
+
+        let mut resistance = vec![1.0; n];
+        for r in 0..nrows {
+            for c in 0..ncols {
+                let i = r * ncols + c;
+                if c % 4 == 0 {
+                    resistance[i] = 0.001;
+                }
+                if r % 5 == 3 {
+                    resistance[i] = 1000.0;
+                }
+            }
+        }
+        resistance[5 * ncols + 5] = nodata;
+
+        let mut gnd = vec![0.0; n];
+        gnd[n - 1] = 1.0;
+        gnd[n - ncols] = 2.0;
+
+        let filled = crate::raster::fill_nodata(&resistance, nodata);
+        let (_ctn, _nn, _e, lap) = crate::build_circuit_model(&filled, nrows, ncols, nodata);
+
+        let shunt: Vec<f64> = gnd.iter().map(|&g| if g > 0.0 { g } else { 0.0 }).collect();
+        let mask: Vec<bool> = gnd.iter().map(|&g| g > 0.0).collect();
+        let gns: Vec<usize> = (0..n).filter(|&i| mask[i]).collect();
+
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.13).sin()).collect();
+
+        let check = |mg_e: &MgPreconditioner, mg_s: &MgPreconditioner, tag: &str| {
+            assert_eq!(
+                mg_e.coarse[0].laplacian.nnz(),
+                mg_s.coarse[0].laplacian.nnz(),
+                "{tag}: coarse level-1 nnz differs"
+            );
+            let mut ze = vec![0.0; n];
+            let mut zs = vec![0.0; n];
+            mg_e.apply(&x, &mut ze);
+            mg_s.apply(&x, &mut zs);
+            for i in 0..n {
+                assert!(
+                    (ze[i] - zs[i]).abs() < 1e-6,
+                    "{tag}: MG stencil vs explicit mismatch at {}: {} vs {}",
+                    i, ze[i], zs[i]
+                );
+            }
+        };
+
+        // No ground
+        {
+            let mg_e = MgPreconditioner::build_from_laplacian(&lap, nrows, ncols, 5);
+            let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::None);
+            let mg_s = MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
+            check(&mg_e, &mg_s, "none");
+        }
+
+        // Neumann ground
+        {
+            let a = crate::circuit::laplacian::add_diagonal(&lap, &shunt);
+            let mg_e = MgPreconditioner::build_from_laplacian(&a, nrows, ncols, 5);
+            let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::Neumann(shunt.clone()));
+            let mg_s = MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
+            check(&mg_e, &mg_s, "neumann");
+        }
+
+        // Dirichlet ground
+        {
+            let a = crate::solve::apply_dirichlet_ground_lap(&lap, &gns);
+            let mg_e = MgPreconditioner::build_from_laplacian(&a, nrows, ncols, 5);
+            let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::Dirichlet(mask.clone()));
+            let mg_s = MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
+            check(&mg_e, &mg_s, "dirichlet");
+        }
     }
 
     #[test]
@@ -517,8 +723,8 @@ mod tests {
         
         let mut ax = vec![0.0; n];
         let mut ay = vec![0.0; n];
-        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &x, &mut ax);
-        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &y, &mut ay);
+        pcg::mat_vec_mul_into(fine_csmat(&mg), &x, &mut ax);
+        pcg::mat_vec_mul_into(fine_csmat(&mg), &y, &mut ay);
         let dot_x_ay: f64 = x.iter().zip(ay.iter()).map(|(a, b)| a * b).sum();
         let dot_y_ax: f64 = y.iter().zip(ax.iter()).map(|(a, b)| a * b).sum();
         assert!((dot_x_ay - dot_y_ax).abs() < 1e-7, "Fine matrix A is asymmetric!");
@@ -564,7 +770,7 @@ mod tests {
             mg.apply(&r, &mut z);
 
             let mut az = vec![0.0; n];
-            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+            pcg::mat_vec_mul_into(fine_csmat(&mg), &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             if z_az.abs() < 1e-30 {
                 break;
@@ -603,26 +809,25 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 4);
 
-        for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let n = lvl.nrows * lvl.ncols;
+        for level in 0..num_levels(&mg) {
+            let n = level_n(&mg, level);
+            let op = level_operator(&mg, level);
             for row in 0..n {
-                if let Some(rv) = lvl.laplacian.outer_view(row) {
-                    for (col, &val) in rv.iter() {
-                        if col == row {
-                            assert!(
-                                val > 0.0,
-                                "Level {}: diagonal[{}] = {:.6e} (must be positive)",
-                                level_idx, row, val
-                            );
-                            let diag_inv = if val.abs() > 1e-15 { 1.0 / val.abs() } else { 0.0 };
-                            assert!(
-                                diag_inv > 0.0,
-                                "Level {}: diag_inv[{}] = {:.6e} (must be positive)",
-                                level_idx, row, diag_inv
-                            );
-                        }
+                op.for_each_entry(row, &mut |col, val| {
+                    if col == row {
+                        assert!(
+                            val > 0.0,
+                            "Level {}: diagonal[{}] = {:.6e} (must be positive)",
+                            level, row, val
+                        );
+                        let diag_inv = if val.abs() > 1e-15 { 1.0 / val.abs() } else { 0.0 };
+                        assert!(
+                            diag_inv > 0.0,
+                            "Level {}: diag_inv[{}] = {:.6e} (must be positive)",
+                            level, row, diag_inv
+                        );
                     }
-                }
+                });
             }
         }
     }
@@ -687,8 +892,7 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 4);
 
-        let coarsest = mg.levels.len() - 1;
-        let lvl = &mg.levels[coarsest];
+        let lvl = mg.coarse.last().unwrap();
         let n = lvl.nrows * lvl.ncols;
 
         assert!(
@@ -724,21 +928,21 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 4);
 
-        for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let n = lvl.nrows * lvl.ncols;
+        for level in 0..num_levels(&mg) {
+            let n = level_n(&mg, level);
             let b = vec![0.0; n];
             let mut x: Vec<f64> = (0..n).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
 
             let initial_norm = x.iter().map(|v| v * v).sum::<f64>().sqrt();
             for _ in 0..3 {
-                symmetric_gauss_seidel_smooth(&lvl.laplacian, &mut x, &b, mg.omega);
+                symmetric_gauss_seidel_smooth(level_operator(&mg, level), &mut x, &b, mg.omega);
             }
             let final_norm = x.iter().map(|v| v * v).sum::<f64>().sqrt();
 
             assert!(
                 final_norm < initial_norm,
                 "Level {}: smoother did not reduce error norm (initial={:.6e}, final={:.6e})",
-                level_idx, initial_norm, final_norm
+                level, initial_norm, final_norm
             );
         }
     }
@@ -764,7 +968,7 @@ mod tests {
         mg.apply(&b, &mut z);
 
         let mut az = vec![0.0; n];
-        pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+        pcg::mat_vec_mul_into(fine_csmat(&mg), &z, &mut az);
         let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
         let rz: f64 = b.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
 
@@ -791,31 +995,31 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 6);
 
-        for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let diag_inv = crate::circuit::laplacian::extract_diag_inv(&lvl.laplacian);
-            let n = lvl.nrows * lvl.ncols;
+        for level in 0..num_levels(&mg) {
+            let op = level_operator(&mg, level);
+            let diag_inv = op.diag_inv();
             let mut min_inv = f64::MAX;
             let mut max_inv = 0.0;
-            for i in 0..n {
-                if diag_inv[i] < min_inv {
-                    min_inv = diag_inv[i];
+            for &d in &diag_inv {
+                if d < min_inv {
+                    min_inv = d;
                 }
-                if diag_inv[i] > max_inv {
-                    max_inv = diag_inv[i];
+                if d > max_inv {
+                    max_inv = d;
                 }
             }
             eprintln!("Level {}: diag_inv range = [{:.6e}, {:.6e}] (ratio = {:.2e})",
-                level_idx, min_inv, max_inv, max_inv / min_inv.max(1e-30));
+                level, min_inv, max_inv, max_inv / min_inv.max(1e-30));
 
             assert!(
                 min_inv > 1e-15,
                 "Level {}: diag_inv too small: min = {:.6e}",
-                level_idx, min_inv
+                level, min_inv
             );
             assert!(
                 max_inv < 1e10,
                 "Level {}: diag_inv too large: max = {:.6e}",
-                level_idx, max_inv
+                level, max_inv
             );
         }
     }
@@ -827,8 +1031,7 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 6);
 
-        let coarsest = mg.levels.len() - 1;
-        let lvl = &mg.levels[coarsest];
+        let lvl = mg.coarse.last().unwrap();
         let n = lvl.nrows * lvl.ncols;
 
         assert!(
@@ -878,17 +1081,16 @@ mod tests {
 
         let mg = build_mg(&resistance, nrows, ncols, 6);
 
-        for (level_idx, lvl) in mg.levels.iter().enumerate() {
-            let diag_inv = crate::circuit::laplacian::extract_diag_inv(&lvl.laplacian);
-            let nn = lvl.nrows * lvl.ncols;
+        for level in 0..num_levels(&mg) {
+            let diag_inv = level_operator(&mg, level).diag_inv();
             let mut min_d = f64::MAX;
             let mut max_d = 0.0;
-            for i in 0..nn {
-                if diag_inv[i] < min_d { min_d = diag_inv[i]; }
-                if diag_inv[i] > max_d { max_d = diag_inv[i]; }
+            for &d in &diag_inv {
+                if d < min_d { min_d = d; }
+                if d > max_d { max_d = d; }
             }
             eprintln!("Level {}: diag_inv [{:.4e}, {:.4e}] ratio {:.2e}",
-                level_idx, min_d, max_d, max_d / min_d.max(1e-30));
+                level, min_d, max_d, max_d / min_d.max(1e-30));
         }
 
         let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
@@ -909,7 +1111,7 @@ mod tests {
             mg.apply(&r, &mut z);
 
             let mut az = vec![0.0; n];
-            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+            pcg::mat_vec_mul_into(fine_csmat(&mg), &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             let rz: f64 = r.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
             eprintln!("  iter {}: ||r||={:.4e} r·z={:.4e} z·Az={:.4e}",
@@ -981,7 +1183,7 @@ mod tests {
             mg.apply(&r, &mut z);
 
             let mut az = vec![0.0; n];
-            pcg::mat_vec_mul_into(&mg.levels[0].laplacian, &z, &mut az);
+            pcg::mat_vec_mul_into(fine_csmat(&mg), &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             let rz: f64 = r.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
 

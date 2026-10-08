@@ -3,6 +3,9 @@ use serde::Serialize;
 use std::collections::HashSet;
 use crate::linalg::pcg as solver;
 use crate::linalg::multigrid::MgPreconditioner;
+use crate::linalg::operator::FineOperator;
+#[cfg(feature = "stencil")]
+use crate::linalg::operator::{GroundSpec, StencilOperator};
 use crate::memory;
 
 pub mod cache;
@@ -311,6 +314,7 @@ fn build_global_currents(
 /// directly (no component extraction) because the MG hierarchy is built on
 /// the full rectangular grid and its restriction/prolongation operators
 /// assume raster-order indexing.
+#[cfg(not(feature = "stencil"))]
 pub fn solve_raster_sources_mg(
     resistance_data: &[f64],
     nrows: usize,
@@ -367,7 +371,7 @@ pub fn solve_raster_sources_mg(
     memory::record_fine_laplacian(&a);
     memory::record_cg_vectors(num_nodes);
 
-    let mg = MgPreconditioner::build_from_laplacian(&a, nrows, ncols, 8);
+    let mg = MgPreconditioner::build_from_operator(FineOperator::Explicit(a), nrows, ncols, 8);
 
     // Mean removal is only needed for singular (ground-free) systems; with
     // grounds the system is anchored and Julia solves b as-is.
@@ -380,7 +384,7 @@ pub fn solve_raster_sources_mg(
             }
         }
     }
-    let res = solver::cg_solve_precond(&a, &s, max_iter, tol, None, &mg);
+    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, None, &mg);
 
     let out = build_raster_output(
         &res.v, resistance_data, ground_data,
@@ -388,6 +392,141 @@ pub fn solve_raster_sources_mg(
     );
 
     AnnotatedOutput { output: out, total_iters: res.iters }
+}
+
+// ----------------------------------------------------------------------------
+// Matrix-free (stencil) fine-level MG solve
+// ----------------------------------------------------------------------------
+
+#[cfg(feature = "stencil")]
+fn valid_source_value(sv: f64, nodata: f64) -> bool {
+    sv.is_finite() && sv > 0.0 && (sv - nodata).abs() > 1e-10
+}
+
+#[cfg(feature = "stencil")]
+fn valid_ground_value(gv: f64, nodata: f64) -> bool {
+    gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10
+}
+
+/// Per-node source vector `s` (node index == flat cell index).
+#[cfg(feature = "stencil")]
+fn build_source_identity(source_data: &[f64], nodata: f64) -> Vec<f64> {
+    source_data
+        .iter()
+        .map(|&sv| if valid_source_value(sv, nodata) { sv } else { 0.0 })
+        .collect()
+}
+
+/// Per-node Neumann shunt conductances (node index == flat cell index).
+#[cfg(feature = "stencil")]
+fn build_neumann_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
+    ground_data
+        .iter()
+        .map(|&gv| if valid_ground_value(gv, nodata) { gv } else { 0.0 })
+        .collect()
+}
+
+/// Per-node Dirichlet pinned mask (node index == flat cell index).
+#[cfg(feature = "stencil")]
+fn build_dirichlet_mask_identity(ground_data: &[f64], nodata: f64) -> Vec<bool> {
+    ground_data.iter().map(|&gv| valid_ground_value(gv, nodata)).collect()
+}
+
+/// Matrix-free MG solve: the fine Laplacian is a stencil over the input
+/// resistance raster and is never materialised. The coarse hierarchy is
+/// materialised as usual.
+#[cfg(feature = "stencil")]
+pub fn solve_raster_sources_mg(
+    resistance_data: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    remove_average: bool,
+    ground_mode: GroundMode,
+) -> AnnotatedOutput<RasterOutput> {
+    memory::reset();
+    let num_nodes = nrows * ncols;
+
+    let source_s = build_source_identity(source_data, nodata);
+
+    let grounds_present;
+    let (ground_spec, mut s) = match ground_mode {
+        GroundMode::Neumann => {
+            let shunt = build_neumann_shunt_identity(ground_data, nodata);
+            grounds_present = shunt.iter().any(|&x| x > 0.0);
+            (GroundSpec::Neumann(shunt), source_s)
+        }
+        GroundMode::Dirichlet => {
+            let mask = build_dirichlet_mask_identity(ground_data, nodata);
+            grounds_present = mask.iter().any(|&x| x);
+            let mut s = source_s;
+            for i in 0..num_nodes {
+                if mask[i] {
+                    s[i] = 0.0;
+                }
+            }
+            (GroundSpec::Dirichlet(mask), s)
+        }
+    };
+
+    // Mean removal is only needed for singular (ground-free) systems.
+    if remove_average && !grounds_present {
+        let sum: f64 = s.iter().sum();
+        if sum.abs() > 1e-15 {
+            let mean = sum / num_nodes as f64;
+            for v in &mut s {
+                *v -= mean;
+            }
+        }
+    }
+
+    let op = StencilOperator::new(nrows, ncols, nodata, resistance_data, ground_spec);
+
+    memory::record_stencil_fine(num_nodes);
+    memory::record_cg_vectors(num_nodes);
+
+    let mg = MgPreconditioner::build_from_operator(FineOperator::Stencil(op), nrows, ncols, 8);
+    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, None, &mg);
+
+    let out = build_raster_output_identity(
+        &res.v, resistance_data, ground_data, nrows, ncols, nodata, ground_mode,
+    );
+
+    AnnotatedOutput { output: out, total_iters: res.iters }
+}
+
+/// Raster output for the full-grid (identity mapping) case: the voltage field
+/// is already per-cell, so no node scatter is needed.
+#[cfg(feature = "stencil")]
+fn build_raster_output_identity(
+    voltages_global: &[f64],
+    resistance_data: &[f64],
+    ground_data: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    ground_mode: GroundMode,
+) -> RasterOutput {
+    let voltage_map = voltages_global.to_vec();
+    let current_map = current::compute_current_map_from_raster(
+        resistance_data,
+        ground_data,
+        &voltage_map,
+        nrows,
+        ncols,
+        nodata,
+        ground_mode == GroundMode::Neumann,
+    );
+    RasterOutput {
+        voltages: voltage_map,
+        current_map,
+        nrows,
+        ncols,
+    }
 }
 
 fn build_raster_output(

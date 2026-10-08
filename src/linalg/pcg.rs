@@ -1,5 +1,7 @@
 use sprs::CsMat;
 
+use crate::linalg::operator::Operator;
+
 pub struct CgResult {
     pub v: Vec<f64>,
     pub iters: usize,
@@ -18,9 +20,9 @@ pub struct JacobiPreconditioner {
 }
 
 impl JacobiPreconditioner {
-    pub fn new(a: &CsMat<f64>) -> Self {
-        crate::memory::record_jacobi_diag(a.rows());
-        Self { diag_inv: crate::circuit::laplacian::extract_diag_inv(a) }
+    pub fn new(a: &dyn Operator) -> Self {
+        crate::memory::record_jacobi_diag(a.n());
+        Self { diag_inv: a.diag_inv() }
     }
 }
 
@@ -43,14 +45,14 @@ impl Preconditioner for JacobiPreconditioner {
 /// where M is a matrix that approximates L but is also easy to invert.
 ///
 /// # Arguments
-/// * `a` - A reference to a `CsMat<f64>` representing the matrix L.
+/// * `a` - A reference to an [`Operator`] representing the matrix L.
 /// * `s` - A slice of f64 representing the right-hand side (source) vector s.
 /// * `max_iter` - The maximum number of iterations to perform.
 /// * `tol` - The tolerance for convergence.
 /// * `v0` - An optional initial guess for the voltage v, otherwise taken to be zero.
 /// * `precond` - A reference to a type implementing the `Preconditioner` trait.
 pub fn cg_solve_precond(
-    a: &CsMat<f64>,
+    a: &dyn Operator,
     s: &[f64],
     max_iter: usize,
     tol: f64,
@@ -69,7 +71,7 @@ pub fn cg_solve_precond(
     let mut r = vec![0.0; n];
     if v0.is_some() {
         let mut lv = vec![0.0; n];
-        mat_vec_mul_into(a, &v, &mut lv);
+        a.matvec(&v, &mut lv);
         for i in 0..n { r[i] = s[i] - lv[i]; }
     } else {
         r.copy_from_slice(s);
@@ -90,7 +92,7 @@ pub fn cg_solve_precond(
     let mut iters = 0;
     for iter in 0..max_iter {
         iters = iter + 1;
-        mat_vec_mul_into(a, &p, &mut lp);
+        a.matvec(&p, &mut lp);
         let p_lp = dot(&p, &lp);
         // avoid dividing by zero
         if p_lp.abs() < 1e-30 { 
@@ -138,7 +140,7 @@ pub fn cg_solve_precond(
 
 /// Wrapper for Jacobi preconditioner.
 pub fn cg_solve(
-    a: &CsMat<f64>,
+    a: &dyn Operator,
     s: &[f64],
     max_iter: usize,
     tol: f64,
@@ -152,6 +154,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
+#[cfg(test)]
 pub(crate) fn mat_vec_mul_into(a: &CsMat<f64>, v: &[f64], out: &mut Vec<f64>) {
     let n = a.rows();
     out.clear();
