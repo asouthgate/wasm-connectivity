@@ -7,7 +7,7 @@
 //! Usage:
 //!   cargo run --profile release-prof --bin mem-story \
 //!       --features bin,memory-story -- [500|1000] \
-//!       [--solver jacobi|mg|all] [--ground neumann|dirichlet|all]
+//!       [--solver jacobi|mg|mg-stencil|all] [--ground neumann|dirichlet|all]
 //!
 //! Each output line is a JSON object:
 //!   { "resolution", "solver", "ground", "total_iters", "story": <MemoryStory> }
@@ -157,6 +157,15 @@ fn main() {
                 &src.data, &gnd.data, 100_000, 1e-6, true, ground_mode,
             );
             emit(resolution, "mg", suffix, mg.total_iters);
+        }
+
+        if solver == "mg-stencil" || solver == "all" {
+            wasm_connect::cache::reset();
+            let mg = solve::solve_raster_sources_mg_stencil(
+                &resistance, base.nrows, base.ncols, base.nodata,
+                &src.data, &gnd.data, 100_000, 1e-6, true, ground_mode,
+            );
+            emit(resolution, "mg-stencil", suffix, mg.total_iters);
         }
     }
 }

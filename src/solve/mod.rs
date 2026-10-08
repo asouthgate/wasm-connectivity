@@ -3,9 +3,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use crate::linalg::pcg as solver;
 use crate::linalg::multigrid::MgPreconditioner;
-use crate::linalg::operator::FineOperator;
-#[cfg(feature = "stencil")]
-use crate::linalg::operator::{GroundSpec, StencilOperator};
+use crate::linalg::operator::{FineOperator, GroundSpec, StencilOperator};
 use crate::memory;
 
 pub mod cache;
@@ -314,7 +312,6 @@ fn build_global_currents(
 /// directly (no component extraction) because the MG hierarchy is built on
 /// the full rectangular grid and its restriction/prolongation operators
 /// assume raster-order indexing.
-#[cfg(not(feature = "stencil"))]
 pub fn solve_raster_sources_mg(
     resistance_data: &[f64],
     nrows: usize,
@@ -398,18 +395,15 @@ pub fn solve_raster_sources_mg(
 // Matrix-free (stencil) fine-level MG solve
 // ----------------------------------------------------------------------------
 
-#[cfg(feature = "stencil")]
 fn valid_source_value(sv: f64, nodata: f64) -> bool {
     sv.is_finite() && sv > 0.0 && (sv - nodata).abs() > 1e-10
 }
 
-#[cfg(feature = "stencil")]
 fn valid_ground_value(gv: f64, nodata: f64) -> bool {
     gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10
 }
 
 /// Per-node source vector `s` (node index == flat cell index).
-#[cfg(feature = "stencil")]
 fn build_source_identity(source_data: &[f64], nodata: f64) -> Vec<f64> {
     source_data
         .iter()
@@ -418,7 +412,6 @@ fn build_source_identity(source_data: &[f64], nodata: f64) -> Vec<f64> {
 }
 
 /// Per-node Neumann shunt conductances (node index == flat cell index).
-#[cfg(feature = "stencil")]
 fn build_neumann_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
     ground_data
         .iter()
@@ -427,16 +420,14 @@ fn build_neumann_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
 }
 
 /// Per-node Dirichlet pinned mask (node index == flat cell index).
-#[cfg(feature = "stencil")]
 fn build_dirichlet_mask_identity(ground_data: &[f64], nodata: f64) -> Vec<bool> {
     ground_data.iter().map(|&gv| valid_ground_value(gv, nodata)).collect()
 }
 
-/// Matrix-free MG solve: the fine Laplacian is a stencil over the input
-/// resistance raster and is never materialised. The coarse hierarchy is
-/// materialised as usual.
-#[cfg(feature = "stencil")]
-pub fn solve_raster_sources_mg(
+/// Matrix-free (low-memory) MG solve: the fine Laplacian is a stencil over
+/// the input resistance raster and is never materialised. The coarse hierarchy
+/// is materialised as usual.
+pub fn solve_raster_sources_mg_stencil(
     resistance_data: &[f64],
     nrows: usize,
     ncols: usize,
@@ -501,7 +492,6 @@ pub fn solve_raster_sources_mg(
 
 /// Raster output for the full-grid (identity mapping) case: the voltage field
 /// is already per-cell, so no node scatter is needed.
-#[cfg(feature = "stencil")]
 fn build_raster_output_identity(
     voltages_global: &[f64],
     resistance_data: &[f64],

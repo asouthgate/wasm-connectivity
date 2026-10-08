@@ -398,14 +398,69 @@ pub fn run_geospatial_pipeline_cached_mg(
     tol: f64,
     ground_mode: crate::solve::GroundMode,
 ) -> GeospatialOutput {
+    run_geospatial_pipeline_mg_impl(
+        base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize,
+        source_data, ground_data, max_iter, tol, ground_mode, false,
+    )
+}
+
+/// Like [`run_geospatial_pipeline_cached_mg`], but solves with the
+/// matrix-free (low-memory) fine-level stencil.
+pub fn run_geospatial_pipeline_cached_mg_stencil(
+    base_raster: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: &str,
+    layer_params_str: &str,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    ground_mode: crate::solve::GroundMode,
+) -> GeospatialOutput {
+    run_geospatial_pipeline_mg_impl(
+        base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize,
+        source_data, ground_data, max_iter, tol, ground_mode, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_geospatial_pipeline_mg_impl(
+    base_raster: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: &str,
+    layer_params_str: &str,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    ground_mode: crate::solve::GroundMode,
+    use_stencil: bool,
+) -> GeospatialOutput {
     let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
     );
 
-    let annotated = crate::solve::solve_raster_sources_mg(
-        &resistance_data, nrows, ncols, nodata,
-        source_data, ground_data, max_iter, tol, true, ground_mode,
-    );
+    let annotated = if use_stencil {
+        crate::solve::solve_raster_sources_mg_stencil(
+            &resistance_data, nrows, ncols, nodata,
+            source_data, ground_data, max_iter, tol, true, ground_mode,
+        )
+    } else {
+        crate::solve::solve_raster_sources_mg(
+            &resistance_data, nrows, ncols, nodata,
+            source_data, ground_data, max_iter, tol, true, ground_mode,
+        )
+    };
 
     GeospatialOutput {
         resistance_map: resistance_data,

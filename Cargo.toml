@@ -21,7 +21,6 @@ image = { version = "0.24", default-features = false, features = ["png"], option
 [features]
 bin = ["tiff", "image"]
 memory-story = []
-stencil = []
 
 [[bin]]
 name = "resistance-pipeline"
