@@ -1,10 +1,11 @@
-use sprs::CsMat;
-use crate::linalg::pcg::Preconditioner;
 use crate::linalg::cholesky;
 use crate::linalg::operator::{FineOperator, Operator};
+use crate::linalg::pcg::Preconditioner;
+use crate::linalg::transfer::Transfer;
 use crate::memory;
 #[cfg(feature = "instrumentation-profile")]
 use crate::memory::GalerkinScratch;
+use sprs::CsMat;
 use std::cell::RefCell;
 
 // 7×7 is the largest square fine grid below the default 8×8 coarsening threshold.
@@ -35,12 +36,12 @@ impl Default for MgOptions {
 
 /// One (coarse) level of the multigrid hierarchy.
 struct MgLevel {
-    laplacian: CsMat<f64>,
+    laplacian: CoarseOperator,
     nrows: usize,
     ncols: usize,
     cholesky_l: Option<Vec<f64>>,
-    /// Prolongation triplets (rows, cols, vals) from this level to the finer level above.
-    prolongation: Option<(Vec<usize>, Vec<usize>, Vec<f64>)>,
+    /// Geometric transfer from this level to the finer level above.
+    prolongation: Transfer,
 }
 
 /// Per-level scratch vectors used by the V-cycle:
@@ -50,13 +51,80 @@ struct LevelWorkspace {
     e: Vec<f64>,
     d_prime: Vec<f64>,
     d: Vec<f64>,
+    smoother: Smoother,
+}
+
+/// Coefficients are cached only for the diagonal-based smoother. Explicit MG
+/// retains its existing Gauss–Seidel update and damping.
+enum Smoother {
+    SymmetricGaussSeidel,
+    WeightedJacobi { diag_inv: Vec<f64>, omega: f64 },
+}
+
+impl Smoother {
+    fn weighted_jacobi(op: &dyn Operator, requested_omega: f64) -> Self {
+        let mut diag_inv = vec![0.0; op.n()];
+        let mut upper_bound: f64 = 0.0;
+        for (row, inverse) in diag_inv.iter_mut().enumerate() {
+            let mut diagonal: f64 = 0.0;
+            let mut abs_sum: f64 = 0.0;
+            op.for_each_entry(row, &mut |col, value| {
+                abs_sum += value.abs();
+                if col == row {
+                    diagonal = value;
+                }
+            });
+            if diagonal.abs() > 1e-15 {
+                *inverse = 1.0 / diagonal.abs();
+                upper_bound = upper_bound.max(abs_sum * *inverse);
+            }
+        }
+        // Gershgorin bounds the eigenvalues of D^-1 L by the largest absolute
+        // row sum. Keep omega*lambda_max <= 1.8 < 2 for damped Jacobi.
+        let omega = requested_omega.min(1.8 / upper_bound.max(1.0));
+        Self::WeightedJacobi { diag_inv, omega }
+    }
+
+    fn smooth(
+        &self,
+        op: &dyn Operator,
+        e: &mut [f64],
+        d: &[f64],
+        scratch: &mut [f64],
+        gs_omega: f64,
+    ) {
+        match self {
+            Self::SymmetricGaussSeidel => symmetric_gauss_seidel_smooth(op, e, d, gs_omega),
+            Self::WeightedJacobi { diag_inv, omega } => {
+                weighted_jacobi_smooth(op, e, d, diag_inv, *omega, scratch)
+            }
+        }
+    }
+}
+
+/// Persistent scratch for P^T L (P x). Both buffers have the fine operator's
+/// size and are reused across all level-1 matvecs and smoothing sweeps.
+struct GalerkinMatvecWorkspace {
+    prolonged: Vec<f64>,
+    applied: Vec<f64>,
+}
+
+impl GalerkinMatvecWorkspace {
+    fn new(n: usize) -> Self {
+        Self {
+            prolonged: vec![0.0; n],
+            applied: vec![0.0; n],
+        }
+    }
 }
 
 /// Multigrid preconditioner: applies one V-cycle as `M⁻¹·r`.
 ///
 /// Level 0 (the fine grid) is an [`Operator`]: either a materialised CSR
-/// matrix or a matrix-free stencil. Deeper levels are materialised coarse
-/// Laplacians produced by Galerkin coarsening.
+/// matrix or a matrix-free stencil. The stencil path uses weighted Jacobi
+/// and applies level 1 as P^T L_0 (P x); level 2 is the first CSR. Explicit MG
+/// stores every Laplacian and uses symmetric Gauss–Seidel. Both paths use
+/// geometric transfers without entry arrays.
 pub struct MgPreconditioner<'a> {
     fine: FineOperator<'a>,
     // Retain operators for post-smoothing on ascent and reuse across PCG iterations.
@@ -69,140 +137,253 @@ pub struct MgPreconditioner<'a> {
     workspaces: RefCell<Vec<LevelWorkspace>>,
 }
 
-/// Build a sparse prolongation matrix P: coarse → fine.
-/// Uses bilinear interpolation: each coarse cell contributes to a 4×4
-/// block of fine cells with weights derived from the tensor product of
-/// linear interpolation in each dimension.
-///
-/// Row weights: [1/4, 3/4, 3/4, 1/4]  (centered at the coarse cell)
-/// Col weights: [1/4, 3/4, 3/4, 1/4]
-/// The 2-D weight is the product, giving 9/16 on the four center fine
-/// cells, 3/16 on the eight edge neighbours, and 1/16 on the four corners.
-///
-/// P has dimensions (fine_nrows * fine_ncols) x (coarse_nrows * coarse_ncols).
-/// Returns (row_indices, col_indices, values) triplets.
-fn build_prolongation_triplets(
-    fine_nrows: usize,
-    fine_ncols: usize,
-    coarse_nrows: usize,
-    coarse_ncols: usize,
-) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
-    let fine_n = fine_nrows * fine_ncols;
-    let mut rows = Vec::with_capacity(fine_n * 4);
-    let mut cols = Vec::with_capacity(fine_n * 4);
-    let mut vals = Vec::with_capacity(fine_n * 4);
+/// Level 1 stores only its regularisation and structure count; deeper levels
+/// retain CSR matrices. The fine operator is borrowed only by temporary views,
+/// so the owning hierarchy never contains references into itself.
+enum CoarseOperator {
+    Galerkin {
+        reg_diag0: f64,
+        matvec_workspace: RefCell<GalerkinMatvecWorkspace>,
+        #[cfg(feature = "instrumentation-profile")]
+        nnz: usize,
+    },
+    Explicit(CsMat<f64>),
+}
 
-    let rw: [f64; 4] = [0.25, 0.75, 0.75, 0.25];
-    let cw: [f64; 4] = [0.25, 0.75, 0.75, 0.25];
-    let offsets: [isize; 4] = [-1, 0, 1, 2];
+impl MgLevel {
+    fn operator<'b>(&'b self, fine: &'b FineOperator<'b>) -> LevelOperator<'b> {
+        match &self.laplacian {
+            CoarseOperator::Explicit(matrix) => LevelOperator::Borrowed(matrix),
+            CoarseOperator::Galerkin {
+                reg_diag0,
+                matvec_workspace,
+                ..
+            } => LevelOperator::Galerkin(GalerkinOperator {
+                fine,
+                transfer: self.prolongation,
+                reg_diag0: *reg_diag0,
+                matvec_workspace,
+            }),
+        }
+    }
 
-    for cr in 0..coarse_nrows {
-        for cc in 0..coarse_ncols {
-            let coarse_idx = cr * coarse_ncols + cc;
+    #[cfg(feature = "instrumentation-profile")]
+    fn nnz(&self) -> usize {
+        match &self.laplacian {
+            CoarseOperator::Explicit(matrix) => matrix.nnz(),
+            CoarseOperator::Galerkin { nnz, .. } => *nnz,
+        }
+    }
+}
 
-            for (ri, &ro) in offsets.iter().enumerate() {
-                let fr = 2 * cr as isize + ro;
-                if fr < 0 || fr >= fine_nrows as isize { continue; }
-                let fr = fr as usize;
+/// A borrowed view of any hierarchy level.
+enum LevelOperator<'b> {
+    Borrowed(&'b dyn Operator),
+    Galerkin(GalerkinOperator<'b, FineOperator<'b>>),
+}
 
-                for (ci, &co) in offsets.iter().enumerate() {
-                    let fc = 2 * cc as isize + co;
-                    if fc < 0 || fc >= fine_ncols as isize { continue; }
-                    let fc = fc as usize;
+impl Operator for LevelOperator<'_> {
+    fn n(&self) -> usize {
+        match self {
+            Self::Borrowed(op) => op.n(),
+            Self::Galerkin(op) => op.n(),
+        }
+    }
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        match self {
+            Self::Borrowed(op) => op.matvec(x, y),
+            Self::Galerkin(op) => op.matvec(x, y),
+        }
+    }
+    fn diag_inv(&self) -> Vec<f64> {
+        match self {
+            Self::Borrowed(op) => op.diag_inv(),
+            Self::Galerkin(op) => op.diag_inv(),
+        }
+    }
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+        match self {
+            Self::Borrowed(op) => op.for_each_entry(row, f),
+            Self::Galerkin(op) => op.for_each_entry(row, f),
+        }
+    }
+}
 
-                    rows.push(fr * fine_ncols + fc);
-                    cols.push(coarse_idx);
-                    vals.push(rw[ri] * cw[ci]);
-                }
+/// Local accumulation of P^T L P for a five-point fine operator. A transfer
+/// column spans four fine cells per axis; one fine edge extends that support
+/// by one cell. The resulting coarse columns lie within two cells of the row.
+/// Keep presence separate from values: cancellation must not drop structural
+/// entries that the explicit symbolic Galerkin pass would retain.
+struct GalerkinRow {
+    values: [f64; 25],
+    present: u32,
+}
+
+struct GalerkinOperator<'b, T: Operator + ?Sized> {
+    fine: &'b T,
+    transfer: Transfer,
+    reg_diag0: f64,
+    matvec_workspace: &'b RefCell<GalerkinMatvecWorkspace>,
+}
+
+impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
+    fn row(&self, row: usize) -> GalerkinRow {
+        let mut result = GalerkinRow {
+            values: [0.0; 25],
+            present: 0,
+        };
+        let nc = self.transfer.coarse_ncols;
+        let cr = (row / nc) as isize;
+        let cc = (row % nc) as isize;
+        self.transfer.for_each_column(row, |a, p_ai| {
+            self.fine.for_each_entry(a, &mut |b, l_ab| {
+                self.transfer.for_each_row_coordinate(b, |jr, jc, p_bj| {
+                    let dr = jr as isize - cr;
+                    let dc = jc as isize - cc;
+                    assert!(
+                        (-2..=2).contains(&dr) && (-2..=2).contains(&dc),
+                        "matrix-free Galerkin requires a five-point fine operator"
+                    );
+                    let slot = ((dr + 2) * 5 + dc + 2) as usize;
+                    result.present |= 1 << slot;
+                    result.values[slot] += p_ai * l_ab * p_bj;
+                });
+            });
+        });
+        if row == 0 {
+            result.values[12] += self.reg_diag0;
+        }
+        result
+    }
+
+    fn visit_row(&self, row: usize, entries: &GalerkinRow, f: &mut dyn FnMut(usize, f64)) {
+        let nc = self.transfer.coarse_ncols;
+        let cr = (row / nc) as isize;
+        let cc = (row % nc) as isize;
+        for slot in 0..25 {
+            if entries.present & (1 << slot) != 0 {
+                let r = cr + slot as isize / 5 - 2;
+                let c = cc + slot as isize % 5 - 2;
+                f(r as usize * nc + c as usize, entries.values[slot]);
             }
         }
     }
 
-    (rows, cols, vals)
-}
-
-/// Apply prolongation: fine += P * coarse
-fn prolongate_sparse(rows: &[usize], cols: &[usize], vals: &[f64], coarse: &[f64], fine: &mut [f64]) {
-    for k in 0..rows.len() {
-        fine[rows[k]] += vals[k] * coarse[cols[k]];
+    /// Match regularize_laplacian: norm of the aggregated, unregularised
+    /// entries, followed by a correction at node 0. No rows are retained.
+    fn setup_metadata(&self) -> (f64, usize) {
+        let mut norm2 = 0.0;
+        let mut nnz = 0;
+        for row in 0..self.n() {
+            self.for_each_entry(row, &mut |_, val| {
+                norm2 += val * val;
+                nnz += 1;
+            });
+        }
+        let norm = norm2.sqrt();
+        let reg = if norm.is_finite() && norm > 0.0 {
+            1e-5 * norm
+        } else {
+            0.0
+        };
+        (reg, nnz)
     }
 }
 
-/// Apply restriction: coarse = P^T * fine
-fn restrict_sparse(rows: &[usize], cols: &[usize], vals: &[f64], fine: &[f64], coarse: &mut [f64]) {
-    coarse.fill(0.0);
-    for k in 0..rows.len() {
-        coarse[cols[k]] += vals[k] * fine[rows[k]];
+impl<T: Operator + ?Sized> Operator for GalerkinOperator<'_, T> {
+    fn n(&self) -> usize {
+        self.transfer.coarse_n()
+    }
+
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        let mut workspace = self.matvec_workspace.borrow_mut();
+        let GalerkinMatvecWorkspace { prolonged, applied } = &mut *workspace;
+        prolonged.fill(0.0);
+        self.transfer.prolongate(x, prolonged);
+        self.fine.matvec(prolonged, applied);
+        self.transfer.restrict(applied, y);
+        y[0] += self.reg_diag0 * x[0];
+    }
+
+    fn diag_inv(&self) -> Vec<f64> {
+        (0..self.n())
+            .map(|row| {
+                let diag = self.row(row).values[12];
+                if diag.abs() > 1e-15 {
+                    1.0 / diag.abs()
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+        self.visit_row(row, &self.row(row), f);
     }
 }
 
-/// Galerkin coarse operator: `L_coarse = P^T * L_fine * P`.
-/// Reads rows from any operator without materialising the intermediate `L_fine * P`.
-fn galerkin_coarsen_operator(fine: &dyn Operator, p: &CsMat<f64>, coarse_n: usize) -> CsMat<f64> {
-    let p_csc = p.to_csc();
-
-    // Symbolic pass: discover distinct columns in each output row before
-    // computing values. These counts give exact-sized CSR allocations, avoiding
-    // hash maps and the potentially large intermediate product L_fine * P.
+/// Galerkin coarse operator: L_coarse = P^T L_fine P. Transfer entries are
+/// generated in both orientations; neither P nor L_fine P is materialised.
+fn galerkin_coarsen_operator(fine: &dyn Operator, p: Transfer) -> CsMat<f64> {
+    let coarse_n = p.coarse_n();
+    // Symbolic pass: count distinct columns before allocating exact CSR slots.
+    // This avoids hash maps and the potentially large intermediate L_fine P.
     let mut seen = vec![usize::MAX; coarse_n];
     let mut row_nnz = vec![0usize; coarse_n];
     for i in 0..coarse_n {
-        let Some(pcol) = p_csc.outer_view(i) else {
-            continue;
-        };
-        for (a, _) in pcol.iter() {
+        p.for_each_column(i, |a, _| {
             fine.for_each_entry(a, &mut |b, _| {
-                if let Some(pb) = p.outer_view(b) {
-                    for (j, _) in pb.iter() {
-                        if seen[j] != i {
-                            seen[j] = i;
-                            row_nnz[i] += 1;
-                        }
+                p.for_each_row(b, |j, _| {
+                    if seen[j] != i {
+                        seen[j] = i;
+                        row_nnz[i] += 1;
                     }
-                }
+                });
             });
-        }
+        });
     }
-
     let mut indptr = vec![0usize; coarse_n + 1];
     for i in 0..coarse_n {
         indptr[i + 1] = indptr[i] + row_nnz[i];
     }
     let nnz = indptr[coarse_n];
 
-    // Numeric pass: accumulate contributions into the allocated CSR slots.
+    // Numeric pass: aggregate duplicate contributions into the allocated slots.
     seen.fill(usize::MAX);
     let mut pos = vec![0usize; coarse_n];
     let mut row_count = vec![0usize; coarse_n];
     let mut cols = vec![0usize; nnz];
     let mut vals = vec![0.0f64; nnz];
     for i in 0..coarse_n {
-        let Some(pcol) = p_csc.outer_view(i) else {
-            continue;
-        };
-        for (a, &p_ai) in pcol.iter() {
+        p.for_each_column(i, |a, p_ai| {
             fine.for_each_entry(a, &mut |b, l_ab| {
-                if let Some(pb) = p.outer_view(b) {
-                    for (j, &p_bj) in pb.iter() {
-                        let slot = if seen[j] != i {
-                            seen[j] = i;
-                            let s = indptr[i] + row_count[i];
-                            row_count[i] += 1;
-                            pos[j] = s;
-                            cols[s] = j;
-                            vals[s] = 0.0;
-                            s
-                        } else {
-                            pos[j]
-                        };
-                        vals[slot] += p_ai * l_ab * p_bj;
-                    }
-                }
+                p.for_each_row(b, |j, p_bj| {
+                    let slot = if seen[j] != i {
+                        seen[j] = i;
+                        let slot = indptr[i] + row_count[i];
+                        row_count[i] += 1;
+                        pos[j] = slot;
+                        cols[slot] = j;
+                        slot
+                    } else {
+                        pos[j]
+                    };
+                    vals[slot] += p_ai * l_ab * p_bj;
+                });
             });
-        }
+        });
     }
-
     CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
+}
+
+fn operator_to_dense(op: &dyn Operator) -> Vec<f64> {
+    let n = op.n();
+    let mut dense = vec![0.0; n * n];
+    for row in 0..n {
+        op.for_each_entry(row, &mut |col, val| dense[row * n + col] = val);
+    }
+    dense
 }
 
 impl MgPreconditioner<'static> {
@@ -219,16 +400,23 @@ impl MgPreconditioner<'static> {
 
 impl<'a> MgPreconditioner<'a> {
     /// Build a multigrid hierarchy from a fine-grid operator (materialised or
-    /// matrix-free). Deeper levels are Galerkin-coarsened and materialised.
+    /// matrix-free). A stencil fine grid also keeps level 1 matrix-free;
+    /// subsequent levels are Galerkin-coarsened and materialised.
     pub fn build_from_operator(
         fine: FineOperator<'a>,
         nrows: usize,
         ncols: usize,
         max_levels: usize,
     ) -> Self {
-        Self::build_with_options(fine, nrows, ncols, MgOptions {
-            max_levels, ..MgOptions::default()
-        })
+        Self::build_with_options(
+            fine,
+            nrows,
+            ncols,
+            MgOptions {
+                max_levels,
+                ..MgOptions::default()
+            },
+        )
     }
 
     /// Build with an optional direct-solve grid size. Rejects zero dimensions,
@@ -273,35 +461,46 @@ impl<'a> MgPreconditioner<'a> {
                 break;
             }
 
-            let coarse_n = next_nr * next_nc;
-            let (p_rows, p_cols, p_vals) =
-                build_prolongation_triplets(fine_nr, fine_nc, next_nr, next_nc);
-            let fine_n = fine_nr * fine_nc;
-
-            // Build prolongation as a sparse matrix for Galerkin
-            let p_tri = sprs::TriMat::from_triplets(
-                (fine_n, coarse_n),
-                p_rows.clone(),
-                p_cols.clone(),
-                p_vals.clone(),
-            );
-            let p = p_tri.to_csr();
-
-            // The first transition reads the original fine representation (CSR
-            // or stencil); later transitions read the last retained coarse CSR.
-            let previous: &dyn Operator = coarse
-                .last()
-                .map(|level| &level.laplacian as &dyn Operator)
-                .unwrap_or(&fine);
-            let mut laplacian = galerkin_coarsen_operator(previous, &p, coarse_n);
-            crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
-
+            let prolongation = Transfer {
+                fine_nrows: fine_nr,
+                fine_ncols: fine_nc,
+                coarse_nrows: next_nr,
+                coarse_ncols: next_nc,
+            };
+            let laplacian = if coarse.is_empty() && matches!(&fine, FineOperator::Stencil(_)) {
+                // Keep the first Galerkin level implicit only when its source
+                // is the five-point stencil; arbitrary explicit matrices need CSR.
+                let matvec_workspace = RefCell::new(GalerkinMatvecWorkspace::new(fine.n()));
+                let op = GalerkinOperator {
+                    fine: &fine,
+                    transfer: prolongation,
+                    reg_diag0: 0.0,
+                    matvec_workspace: &matvec_workspace,
+                };
+                let (reg_diag0, _nnz) = op.setup_metadata();
+                CoarseOperator::Galerkin {
+                    reg_diag0,
+                    matvec_workspace,
+                    #[cfg(feature = "instrumentation-profile")]
+                    nnz: _nnz,
+                }
+            } else {
+                // A borrowed view can read either the implicit level 1 or a
+                // retained CSR, without creating an intermediate fine matrix.
+                let previous = coarse
+                    .last()
+                    .map(|level| level.operator(&fine))
+                    .unwrap_or(LevelOperator::Borrowed(&fine));
+                let mut matrix = galerkin_coarsen_operator(&previous, prolongation);
+                crate::circuit::laplacian::regularize_laplacian(&mut matrix);
+                CoarseOperator::Explicit(matrix)
+            };
             coarse.push(MgLevel {
                 laplacian,
                 nrows: next_nr,
                 ncols: next_nc,
                 cholesky_l: None,
-                prolongation: Some((p_rows, p_cols, p_vals)),
+                prolongation,
             });
 
             nr = next_nr;
@@ -314,15 +513,12 @@ impl<'a> MgPreconditioner<'a> {
         if let Some(coarsest) = coarse.last_mut() {
             let cnodes = coarsest.nrows * coarsest.ncols;
             memory::record_coarse_dense(cnodes);
-            let dense = cholesky::sparse_to_dense(&coarsest.laplacian, cnodes);
+            let dense = operator_to_dense(&coarsest.operator(&fine));
             coarsest.cholesky_l = cholesky::cholesky_decompose(&dense, cnodes);
         } else if fine.n() <= options.cholesky_size.unwrap_or(SMALL_FINE_DIRECT_LIMIT) {
             let n = fine.n();
             memory::record_coarse_dense(n);
-            let mut dense = vec![0.0; n * n];
-            for row in 0..n {
-                fine.for_each_entry(row, &mut |col, val| dense[row * n + col] = val);
-            }
+            let dense = operator_to_dense(&fine);
             fine_cholesky_l = cholesky::cholesky_decompose(&dense, n);
         }
         memory::record_fine_operator(&fine);
@@ -345,62 +541,101 @@ impl<'a> MgPreconditioner<'a> {
             );
             for (k, lvl) in coarse.iter().enumerate() {
                 let nodes = lvl.nrows * lvl.ncols;
-                let nnz = lvl.laplacian.nnz();
-                let lap_bytes = memory::csmat_bytes(&lvl.laplacian);
-                let prolongation_bytes = lvl
-                    .prolongation
-                    .as_ref()
-                    .map(|(rows, _, _)| memory::triplets_bytes(rows.len()))
-                    .unwrap_or(0);
+                let (lap_bytes, repr, scratch) = match &lvl.laplacian {
+                    CoarseOperator::Galerkin { .. } => (
+                        0,
+                        "galerkin-stencil",
+                        GalerkinScratch {
+                            row_accumulator_bytes: std::mem::size_of::<GalerkinRow>() as u64,
+                            ..GalerkinScratch::default()
+                        },
+                    ),
+                    CoarseOperator::Explicit(matrix) => (
+                        memory::csmat_bytes(matrix),
+                        "explicit",
+                        GalerkinScratch {
+                            symbolic_seen_bytes: memory::vec_usize_bytes(nodes),
+                            symbolic_row_nnz_bytes: memory::vec_usize_bytes(nodes),
+                            numeric_pos_bytes: memory::vec_usize_bytes(nodes),
+                            numeric_row_count_bytes: memory::vec_usize_bytes(nodes),
+                            row_accumulator_bytes: if k == 1
+                                && matches!(&coarse[0].laplacian, CoarseOperator::Galerkin { .. })
+                            {
+                                std::mem::size_of::<GalerkinRow>() as u64
+                            } else {
+                                0
+                            },
+                            ..GalerkinScratch::default()
+                        },
+                    ),
+                };
                 let cholesky_bytes = lvl
                     .cholesky_l
                     .as_ref()
                     .map(|l| memory::vec_f64_bytes(l.len()))
                     .unwrap_or(0);
-
-                let (rows, _, _) = lvl.prolongation.as_ref().unwrap();
-                let nnz_p = rows.len() as u64;
-                let fine_n = if k == 0 {
-                    nrows * ncols
-                } else {
-                    coarse[k - 1].nrows * coarse[k - 1].ncols
-                };
-                let u = memory::usize_size();
-                let scratch = GalerkinScratch {
-                    symbolic_seen_bytes: memory::vec_usize_bytes(nodes),
-                    symbolic_row_nnz_bytes: memory::vec_usize_bytes(nodes),
-                    numeric_pos_bytes: memory::vec_usize_bytes(nodes),
-                    numeric_row_count_bytes: memory::vec_usize_bytes(nodes),
-                    p_triplets_clone_bytes: memory::triplets_bytes(rows.len()),
-                    p_csr_bytes: (fine_n as u64 + 1) * u + nnz_p * (u + 8),
-                    p_csc_bytes: (nodes as u64 + 1) * u + nnz_p * (u + 8),
-                };
-
                 memory::record_level(
                     k + 1,
                     nodes,
-                    nnz,
+                    lvl.nnz(),
                     lap_bytes,
-                    prolongation_bytes,
+                    0,
                     cholesky_bytes,
                     scratch,
                 );
+                memory::record_level_representation(k + 1, repr);
             }
         }
 
-        // Pre-allocate scratch workspaces (one per level: fine + coarse)
+        // Cache smoother data during setup; no allocations during a sweep.
+        let low_memory = matches!(&fine, FineOperator::Stencil(_));
         let mut workspaces = Vec::with_capacity(1 + coarse.len());
-        workspaces.push(LevelWorkspace {
-            e: vec![0.0; nrows * ncols],
-            d_prime: vec![0.0; nrows * ncols],
-            d: vec![0.0; nrows * ncols],
-        });
-        for lvl in &coarse {
-            let n = lvl.nrows * lvl.ncols;
+        for level in 0..=coarse.len() {
+            let op = if level == 0 {
+                LevelOperator::Borrowed(&fine)
+            } else {
+                coarse[level - 1].operator(&fine)
+            };
+            let n = op.n();
+            let smoother = if low_memory && level < coarse.len() {
+                Smoother::weighted_jacobi(&op, 0.67)
+            } else {
+                Smoother::SymmetricGaussSeidel
+            };
+            #[cfg(feature = "instrumentation-profile")]
+            {
+                let (repr, diag_bytes, omega) = if level == coarse.len() {
+                    ("none", 0, None)
+                } else {
+                    match &smoother {
+                        Smoother::SymmetricGaussSeidel => ("symmetric-gauss-seidel", 0, Some(0.67)),
+                        Smoother::WeightedJacobi { diag_inv, omega } => (
+                            "weighted-jacobi",
+                            memory::vec_f64_bytes(diag_inv.len()),
+                            Some(*omega),
+                        ),
+                    }
+                };
+                let matvec_bytes = if level > 0 {
+                    match &coarse[level - 1].laplacian {
+                        CoarseOperator::Galerkin {
+                            matvec_workspace, ..
+                        } => {
+                            let scratch = matvec_workspace.borrow();
+                            memory::vec_f64_bytes(scratch.prolonged.len() + scratch.applied.len())
+                        }
+                        CoarseOperator::Explicit(_) => 0,
+                    }
+                } else {
+                    0
+                };
+                memory::record_level_runtime(level, repr, diag_bytes, omega, matvec_bytes);
+            }
             workspaces.push(LevelWorkspace {
                 e: vec![0.0; n],
                 d_prime: vec![0.0; n],
                 d: vec![0.0; n],
+                smoother,
             });
         }
 
@@ -419,11 +654,11 @@ impl<'a> MgPreconditioner<'a> {
         &self.fine
     }
 
-    fn level_operator(&self, level: usize) -> &dyn Operator {
+    fn level_operator(&self, level: usize) -> LevelOperator<'_> {
         if level == 0 {
-            &self.fine
+            LevelOperator::Borrowed(&self.fine)
         } else {
-            &self.coarse[level - 1].laplacian
+            self.coarse[level - 1].operator(&self.fine)
         }
     }
 
@@ -444,27 +679,39 @@ impl<'a> MgPreconditioner<'a> {
             } else {
                 // Start from zero so the result does not depend on an earlier
                 // application when Cholesky is unavailable.
-                let result = crate::linalg::pcg::cg_solve(op, &current.d, 50, 1e-3, None);
+                let result = crate::linalg::pcg::cg_solve(&op, &current.d, 50, 1e-3, None);
                 current.e.copy_from_slice(&result.v);
             }
             return;
         }
 
         for _ in 0..self.nu {
-            symmetric_gauss_seidel_smooth(op, &mut current.e, &current.d, self.omega);
+            current.smoother.smooth(
+                &op,
+                &mut current.e,
+                &current.d,
+                &mut current.d_prime,
+                self.omega,
+            );
         }
         op.matvec(&current.e, &mut current.d_prime);
         for (residual, &source) in current.d_prime.iter_mut().zip(&current.d) {
             *residual = source - *residual;
         }
 
-        let (rows, cols, vals) = self.coarse[level].prolongation.as_ref().unwrap();
-        restrict_sparse(rows, cols, vals, &current.d_prime, &mut deeper[0].d);
+        let transfer = self.coarse[level].prolongation;
+        transfer.restrict(&current.d_prime, &mut deeper[0].d);
         self.v_cycle(deeper, level + 1);
-        prolongate_sparse(rows, cols, vals, &deeper[0].e, &mut current.e);
+        transfer.prolongate(&deeper[0].e, &mut current.e);
 
         for _ in 0..self.nu {
-            symmetric_gauss_seidel_smooth(op, &mut current.e, &current.d, self.omega);
+            current.smoother.smooth(
+                &op,
+                &mut current.e,
+                &current.d,
+                &mut current.d_prime,
+                self.omega,
+            );
         }
     }
 }
@@ -480,12 +727,23 @@ impl<'a> Preconditioner for MgPreconditioner<'a> {
     }
 }
 
-fn symmetric_gauss_seidel_smooth(
+/// One simultaneous weighted Jacobi sweep. The entire product uses the old e;
+/// only after that product is complete are any entries of e updated.
+fn weighted_jacobi_smooth(
     op: &dyn Operator,
     e: &mut [f64],
     d: &[f64],
+    diag_inv: &[f64],
     omega: f64,
+    scratch: &mut [f64],
 ) {
+    op.matvec(e, scratch);
+    for i in 0..e.len() {
+        e[i] += omega * diag_inv[i] * (d[i] - scratch[i]);
+    }
+}
+
+fn symmetric_gauss_seidel_smooth(op: &dyn Operator, e: &mut [f64], d: &[f64], omega: f64) {
     let n = d.len();
     // Forward sweep
     for row in 0..n {
@@ -532,7 +790,12 @@ mod tests {
     }
 
     // Build a bilinear MG hierarchy from a resistance raster (nodata -1.0).
-    fn build_mg(resistance: &[f64], nrows: usize, ncols: usize, max_levels: usize) -> MgPreconditioner<'static> {
+    fn build_mg(
+        resistance: &[f64],
+        nrows: usize,
+        ncols: usize,
+        max_levels: usize,
+    ) -> MgPreconditioner<'static> {
         let filled = crate::raster::fill_nodata(resistance, -1.0);
         let (_cell_to_node, _num_nodes, _edges, laplacian) =
             crate::build_circuit_model(&filled, nrows, ncols, -1.0);
@@ -560,12 +823,360 @@ mod tests {
         }
     }
 
-    fn level_operator<'x>(mg: &'x MgPreconditioner<'_>, level: usize) -> &'x dyn Operator {
-        if level == 0 {
-            &mg.fine
-        } else {
-            &mg.coarse[level - 1].laplacian
+    fn level_operator<'x>(mg: &'x MgPreconditioner<'_>, level: usize) -> LevelOperator<'x> {
+        mg.level_operator(level)
+    }
+
+    // Compare representations using the same smoother. Production explicit
+    // MG still selects Gauss–Seidel; only this numerical reference uses Jacobi.
+    fn use_jacobi_reference(mg: &MgPreconditioner<'_>) {
+        let smoothers: Vec<_> = (0..mg.coarse.len())
+            .map(|level| Smoother::weighted_jacobi(&mg.level_operator(level), 0.67))
+            .collect();
+        let mut workspaces = mg.workspaces.borrow_mut();
+        for (workspace, smoother) in workspaces.iter_mut().zip(smoothers) {
+            assert!(matches!(workspace.smoother, Smoother::SymmetricGaussSeidel));
+            workspace.smoother = smoother;
         }
+    }
+
+    fn structural_nnz(op: &dyn Operator) -> usize {
+        let mut nnz = 0;
+        for row in 0..op.n() {
+            op.for_each_entry(row, &mut |_, _| nnz += 1);
+        }
+        nnz
+    }
+
+    fn materialize(op: &dyn Operator) -> CsMat<f64> {
+        let mut triplets = sprs::TriMat::new((op.n(), op.n()));
+        for row in 0..op.n() {
+            op.for_each_entry(row, &mut |col, val| triplets.add_triplet(row, col, val));
+        }
+        triplets.to_csr()
+    }
+
+    fn materialize_transfer(transfer: Transfer) -> CsMat<f64> {
+        let mut triplets = sprs::TriMat::new((
+            transfer.fine_nrows * transfer.fine_ncols,
+            transfer.coarse_n(),
+        ));
+        for col in 0..transfer.coarse_n() {
+            transfer.for_each_column(col, |row, val| triplets.add_triplet(row, col, val));
+        }
+        triplets.to_csr()
+    }
+
+    fn assert_operators_match(actual: &dyn Operator, expected: &dyn Operator) {
+        assert_eq!(actual.n(), expected.n());
+        for row in 0..actual.n() {
+            let mut entries = Vec::new();
+            let mut reference = Vec::new();
+            actual.for_each_entry(row, &mut |col, val| entries.push((col, val)));
+            expected.for_each_entry(row, &mut |col, val| reference.push((col, val)));
+            entries.sort_by_key(|&(col, _)| col);
+            reference.sort_by_key(|&(col, _)| col);
+            assert_eq!(entries.len(), reference.len(), "row {row} structure");
+            for ((col, val), (ref_col, ref_val)) in entries.iter().zip(&reference) {
+                assert_eq!(col, ref_col, "row {row} column");
+                assert!(
+                    (val - ref_val).abs() <= 1e-11 * ref_val.abs().max(1.0),
+                    "row {row}, col {col}: {val} vs {ref_val}"
+                );
+            }
+        }
+        let x: Vec<f64> = (0..actual.n()).map(|i| (i as f64 * 0.3).sin()).collect();
+        let mut y = vec![0.0; actual.n()];
+        let mut ref_y = y.clone();
+        actual.matvec(&x, &mut y);
+        expected.matvec(&x, &mut ref_y);
+        for (a, b) in y.iter().zip(ref_y) {
+            assert!((a - b).abs() <= 1e-10 * b.abs().max(1.0));
+        }
+        for (a, b) in actual.diag_inv().iter().zip(expected.diag_inv()) {
+            assert!((a - b).abs() <= 1e-11 * b.abs().max(1.0));
+        }
+    }
+
+    fn reference_galerkin(fine: &dyn Operator, p: &CsMat<f64>, coarse_n: usize) -> CsMat<f64> {
+        let p_csc = p.to_csc();
+
+        // Symbolic pass: discover distinct columns in each output row before
+        // computing values. These counts give exact-sized CSR allocations, avoiding
+        // hash maps and the potentially large intermediate product L_fine * P.
+        let mut seen = vec![usize::MAX; coarse_n];
+        let mut row_nnz = vec![0usize; coarse_n];
+        for i in 0..coarse_n {
+            let Some(pcol) = p_csc.outer_view(i) else {
+                continue;
+            };
+            for (a, _) in pcol.iter() {
+                fine.for_each_entry(a, &mut |b, _| {
+                    if let Some(pb) = p.outer_view(b) {
+                        for (j, _) in pb.iter() {
+                            if seen[j] != i {
+                                seen[j] = i;
+                                row_nnz[i] += 1;
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        let mut indptr = vec![0usize; coarse_n + 1];
+        for i in 0..coarse_n {
+            indptr[i + 1] = indptr[i] + row_nnz[i];
+        }
+        let nnz = indptr[coarse_n];
+
+        // Numeric pass: accumulate contributions into the allocated CSR slots.
+        seen.fill(usize::MAX);
+        let mut pos = vec![0usize; coarse_n];
+        let mut row_count = vec![0usize; coarse_n];
+        let mut cols = vec![0usize; nnz];
+        let mut vals = vec![0.0f64; nnz];
+        for i in 0..coarse_n {
+            let Some(pcol) = p_csc.outer_view(i) else {
+                continue;
+            };
+            for (a, &p_ai) in pcol.iter() {
+                fine.for_each_entry(a, &mut |b, l_ab| {
+                    if let Some(pb) = p.outer_view(b) {
+                        for (j, &p_bj) in pb.iter() {
+                            let slot = if seen[j] != i {
+                                seen[j] = i;
+                                let s = indptr[i] + row_count[i];
+                                row_count[i] += 1;
+                                pos[j] = s;
+                                cols[s] = j;
+                                vals[s] = 0.0;
+                                s
+                            } else {
+                                pos[j]
+                            };
+                            vals[slot] += p_ai * l_ab * p_bj;
+                        }
+                    }
+                });
+            }
+        }
+
+        CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
+    }
+
+    #[test]
+    fn implicit_galerkin_and_level_two_match_original_coarsening() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        for (nr, nc) in [(8, 8), (15, 17), (16, 16), (9, 13), (2, 19), (19, 2)] {
+            let n = nr * nc;
+            let resistance: Vec<f64> = (0..n)
+                .map(|i| match i % 13 {
+                    0 => -9999.0,
+                    1 => 0.0,
+                    2 => f64::NAN,
+                    3 => 1e-3,
+                    4 => 1e6,
+                    _ => 1.0 + (i % 9) as f64,
+                })
+                .collect();
+            for ground in 0..3 {
+                let spec = match ground {
+                    0 => GroundSpec::None,
+                    1 => GroundSpec::Neumann(
+                        (0..n)
+                            .map(|i| if i % nc == nc - 1 { 2.0 } else { 0.0 })
+                            .collect(),
+                    ),
+                    _ => GroundSpec::Dirichlet((0..n).map(|i| i % nc == nc - 1).collect()),
+                };
+                let fine = StencilOperator::new(nr, nc, -9999.0, &resistance, spec);
+                let transfer = Transfer {
+                    fine_nrows: nr,
+                    fine_ncols: nc,
+                    coarse_nrows: nr / 2,
+                    coarse_ncols: nc / 2,
+                };
+                let p = materialize_transfer(transfer);
+                let fine_matrix = materialize(&fine);
+                let mut reference = reference_galerkin(&fine_matrix, &p, transfer.coarse_n());
+                let matvec_workspace = RefCell::new(GalerkinMatvecWorkspace::new(fine.n()));
+                let raw = GalerkinOperator {
+                    fine: &fine,
+                    transfer,
+                    reg_diag0: 0.0,
+                    matvec_workspace: &matvec_workspace,
+                };
+                let (reg, nnz) = raw.setup_metadata();
+                assert_eq!(nnz, reference.nnz());
+                crate::circuit::laplacian::regularize_laplacian(&mut reference);
+                let implicit = GalerkinOperator {
+                    reg_diag0: reg,
+                    ..raw
+                };
+                assert_operators_match(&implicit, &reference);
+                assert_operators_match(
+                    &galerkin_coarsen_operator(&fine, transfer),
+                    &reference_galerkin(&fine_matrix, &p, transfer.coarse_n()),
+                );
+                if transfer.coarse_nrows >= 2 && transfer.coarse_ncols >= 2 {
+                    let p1 = Transfer {
+                        fine_nrows: nr / 2,
+                        fine_ncols: nc / 2,
+                        coarse_nrows: nr / 4,
+                        coarse_ncols: nc / 4,
+                    };
+                    let mut actual2 = galerkin_coarsen_operator(&implicit, p1);
+                    let mut expected2 =
+                        reference_galerkin(&reference, &materialize_transfer(p1), p1.coarse_n());
+                    crate::circuit::laplacian::regularize_laplacian(&mut actual2);
+                    crate::circuit::laplacian::regularize_laplacian(&mut expected2);
+                    assert_operators_match(&actual2, &expected2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn galerkin_preserves_structurally_present_zero_entries() {
+        let transfer = Transfer {
+            fine_nrows: 8,
+            fine_ncols: 8,
+            coarse_nrows: 4,
+            coarse_ncols: 4,
+        };
+        let mut diagonal = sprs::TriMat::new((64, 64));
+        for i in 0..64 {
+            diagonal.add_triplet(i, i, 0.0);
+        }
+        let fine = diagonal.to_csr::<usize>();
+        let matvec_workspace = RefCell::new(GalerkinMatvecWorkspace::new(fine.n()));
+        let implicit = GalerkinOperator {
+            fine: &fine,
+            transfer,
+            reg_diag0: 0.0,
+            matvec_workspace: &matvec_workspace,
+        };
+        let expected = reference_galerkin(&fine, &materialize_transfer(transfer), 16);
+        assert_operators_match(&implicit, &expected);
+        assert_eq!(implicit.setup_metadata().1, expected.nnz());
+        assert!(expected.nnz() > 16);
+    }
+
+    struct ProductOnly<'b> {
+        matrix: &'b CsMat<f64>,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl Operator for ProductOnly<'_> {
+        fn n(&self) -> usize {
+            self.matrix.rows()
+        }
+        fn matvec(&self, x: &[f64], y: &mut [f64]) {
+            self.calls.set(self.calls.get() + 1);
+            self.matrix.matvec(x, y);
+        }
+        fn diag_inv(&self) -> Vec<f64> {
+            panic!("diagonal must be cached before smoothing")
+        }
+        fn for_each_entry(&self, _: usize, _: &mut dyn FnMut(usize, f64)) {
+            panic!("matvec-based smoothing must not reconstruct coefficients")
+        }
+    }
+
+    #[test]
+    fn weighted_jacobi_updates_simultaneously_using_only_matvec() {
+        let mut entries = sprs::TriMat::new((3, 3));
+        for i in 0..3 {
+            entries.add_triplet(i, i, 2.0);
+        }
+        for i in 0..2 {
+            entries.add_triplet(i, i + 1, -1.0);
+            entries.add_triplet(i + 1, i, -1.0);
+        }
+        let matrix = entries.to_csr::<usize>();
+        let op = ProductOnly {
+            matrix: &matrix,
+            calls: std::cell::Cell::new(0),
+        };
+        let mut e = vec![1.0, 2.0, 4.0];
+        let mut scratch = vec![99.0; 3];
+        let ptr = scratch.as_ptr();
+        weighted_jacobi_smooth(&op, &mut e, &[3.0, -2.0, 1.0], &[0.5; 3], 0.5, &mut scratch);
+        assert_eq!(e, vec![1.75, 1.75, 2.75]);
+        weighted_jacobi_smooth(&op, &mut e, &[3.0, -2.0, 1.0], &[0.5; 3], 0.5, &mut scratch);
+        assert_eq!(e, vec![2.0625, 1.5, 2.0625]);
+        assert_eq!(op.calls.get(), 2);
+        assert_eq!(scratch.as_ptr(), ptr);
+    }
+
+    #[test]
+    fn jacobi_damping_is_capped_for_large_normalized_eigenvalues() {
+        let mut entries = sprs::TriMat::new((4, 4));
+        for i in 0..4 {
+            for j in 0..4 {
+                entries.add_triplet(i, j, if i == j { 1.0 } else { 0.9 });
+            }
+        }
+        let matrix = entries.to_csr::<usize>();
+        let smoother = Smoother::weighted_jacobi(&matrix, 0.67);
+        let Smoother::WeightedJacobi { diag_inv, omega } = &smoother else {
+            panic!("expected Jacobi")
+        };
+        assert_eq!(diag_inv, &vec![1.0; 4]);
+        assert!((*omega - 1.8 / 3.7).abs() < 1e-14);
+        let mut e = vec![1.0; 4];
+        smoother.smooth(&matrix, &mut e, &[0.0; 4], &mut [0.0; 4], 0.67);
+        for value in e {
+            assert!((value + 0.8).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn composed_galerkin_applies_fine_operator_once_and_reuses_scratch() {
+        let nr = 8;
+        let nc = 8;
+        let resistance = vec![1.0; nr * nc];
+        let (_, _, _, matrix) = crate::build_circuit_model(&resistance, nr, nc, -9999.0);
+        let transfer = Transfer {
+            fine_nrows: nr,
+            fine_ncols: nc,
+            coarse_nrows: 4,
+            coarse_ncols: 4,
+        };
+        let mut expected = reference_galerkin(&matrix, &materialize_transfer(transfer), 16);
+        let reg = 0.123;
+        expected.get_mut(0, 0).map(|diag| *diag += reg).unwrap();
+        let fine = ProductOnly {
+            matrix: &matrix,
+            calls: std::cell::Cell::new(0),
+        };
+        let scratch = RefCell::new(GalerkinMatvecWorkspace::new(64));
+        let ptrs = {
+            let w = scratch.borrow();
+            (w.prolonged.as_ptr(), w.applied.as_ptr())
+        };
+        let op = GalerkinOperator {
+            fine: &fine,
+            transfer,
+            reg_diag0: reg,
+            matvec_workspace: &scratch,
+        };
+        let x: Vec<f64> = (0..16).map(|i| (i as f64 * 0.3).sin()).collect();
+        let mut actual = vec![77.0; 16];
+        let mut reference = vec![0.0; 16];
+        expected.matvec(&x, &mut reference);
+        for _ in 0..2 {
+            op.matvec(&x, &mut actual);
+            for (a, b) in actual.iter().zip(&reference) {
+                assert!((a - b).abs() < 1e-12);
+            }
+        }
+        op.matvec(&[0.0; 16], &mut actual);
+        assert_eq!(actual, vec![0.0; 16]);
+        assert_eq!(fine.calls.get(), 3);
+        let w = scratch.borrow();
+        assert_eq!((w.prolonged.as_ptr(), w.applied.as_ptr()), ptrs);
     }
 
     #[test]
@@ -601,6 +1212,19 @@ mod tests {
             {
                 let profile = memory::take_profile().unwrap();
                 assert!(profile.hierarchy[0].laplacian_bytes > 0);
+                for level in &profile.hierarchy {
+                    let terminal = level.level == profile.hierarchy.len() - 1;
+                    assert_eq!(
+                        level.smoother_repr,
+                        if terminal {
+                            "none"
+                        } else {
+                            "symmetric-gauss-seidel"
+                        }
+                    );
+                    assert_eq!(level.smoother_diag_bytes, 0);
+                    assert_eq!(level.operator_matvec_scratch_bytes, 0);
+                }
                 for level in &profile.hierarchy[1..] {
                     // CSR output arrays are retained in the Laplacian, not scratch.
                     assert_eq!(
@@ -609,7 +1233,10 @@ mod tests {
                             + memory::vec_usize_bytes(level.nnz)
                             + memory::vec_f64_bytes(level.nnz)
                     );
-                    assert!(level.galerkin_scratch.p_triplets_clone_bytes > 0);
+                    assert_eq!(level.prolongation_p_bytes, 0);
+                    assert_eq!(level.galerkin_scratch.p_triplets_clone_bytes, 0);
+                    assert_eq!(level.galerkin_scratch.p_csr_bytes, 0);
+                    assert_eq!(level.galerkin_scratch.p_csc_bytes, 0);
                 }
             }
             memory::reset();
@@ -635,12 +1262,56 @@ mod tests {
                 assert_eq!(profile.requested_cholesky_size, target);
                 assert_eq!(profile.hierarchy[0].laplacian_bytes, 0);
                 assert_eq!(profile.ground_storage_bytes, memory::vec_f64_bytes(nr * nc));
+                assert_eq!(profile.hierarchy[0].operator_repr, "stencil");
+                for level in &profile.hierarchy {
+                    let terminal = level.level == profile.hierarchy.len() - 1;
+                    assert_eq!(
+                        level.smoother_repr,
+                        if terminal { "none" } else { "weighted-jacobi" }
+                    );
+                    assert_eq!(
+                        level.smoother_diag_bytes,
+                        if terminal {
+                            0
+                        } else {
+                            memory::vec_f64_bytes(level.nodes)
+                        }
+                    );
+                    assert_eq!(
+                        level.operator_matvec_scratch_bytes,
+                        if level.level == 1 {
+                            memory::vec_f64_bytes(2 * nr * nc)
+                        } else {
+                            0
+                        }
+                    );
+                }
+                for level in &profile.hierarchy[1..] {
+                    assert_eq!(level.prolongation_p_bytes, 0);
+                    assert_eq!(level.galerkin_scratch.p_triplets_clone_bytes, 0);
+                    assert_eq!(level.galerkin_scratch.p_csr_bytes, 0);
+                    assert_eq!(level.galerkin_scratch.p_csc_bytes, 0);
+                    if level.level == 1 {
+                        assert_eq!(level.operator_repr, "galerkin-stencil");
+                        assert_eq!(level.laplacian_bytes, 0);
+                        assert_eq!(level.galerkin_scratch.symbolic_seen_bytes, 0);
+                        assert_eq!(level.galerkin_scratch.numeric_pos_bytes, 0);
+                        assert_eq!(
+                            level.galerkin_scratch.row_accumulator_bytes,
+                            std::mem::size_of::<GalerkinRow>() as u64
+                        );
+                    } else {
+                        assert_eq!(level.operator_repr, "explicit");
+                        assert!(level.laplacian_bytes > 0);
+                    }
+                }
             }
             let source: Vec<f64> = (0..nr * nc).map(|i| 1.0 + (i as f64).sin()).collect();
             let (mut first, mut again, mut reference) = (Vec::new(), Vec::new(), Vec::new());
             stencil.apply(&source, &mut first);
             stencil.apply(&vec![0.0; nr * nc], &mut again);
             stencil.apply(&source, &mut again);
+            use_jacobi_reference(&explicit);
             explicit.apply(&source, &mut reference);
             assert_eq!(
                 first, again,
@@ -690,10 +1361,11 @@ mod tests {
 
         let check = |mg_e: &MgPreconditioner, mg_s: &MgPreconditioner, tag: &str| {
             assert_eq!(
-                mg_e.coarse[0].laplacian.nnz(),
-                mg_s.coarse[0].laplacian.nnz(),
+                structural_nnz(&mg_e.level_operator(1)),
+                structural_nnz(&mg_s.level_operator(1)),
                 "{tag}: coarse level-1 nnz differs"
             );
+            use_jacobi_reference(mg_e);
             let mut ze = vec![0.0; n];
             let mut zs = vec![0.0; n];
             mg_e.apply(&x, &mut ze);
@@ -702,7 +1374,9 @@ mod tests {
                 assert!(
                     (ze[i] - zs[i]).abs() < 1e-6,
                     "{tag}: MG stencil vs explicit mismatch at {}: {} vs {}",
-                    i, ze[i], zs[i]
+                    i,
+                    ze[i],
+                    zs[i]
                 );
             }
         };
@@ -711,7 +1385,8 @@ mod tests {
         {
             let mg_e = MgPreconditioner::build_from_laplacian(lap.clone(), nrows, ncols, 5);
             let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::None);
-            let mg_s = MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
+            let mg_s =
+                MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
             check(&mg_e, &mg_s, "none");
         }
 
@@ -719,8 +1394,15 @@ mod tests {
         {
             let a = crate::circuit::laplacian::add_diagonal(&lap, &shunt);
             let mg_e = MgPreconditioner::build_from_laplacian(a, nrows, ncols, 5);
-            let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::Neumann(shunt.clone()));
-            let mg_s = MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
+            let st = StencilOperator::new(
+                nrows,
+                ncols,
+                nodata,
+                &resistance,
+                GroundSpec::Neumann(shunt.clone()),
+            );
+            let mg_s =
+                MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
             check(&mg_e, &mg_s, "neumann");
         }
 
@@ -728,9 +1410,69 @@ mod tests {
         {
             let a = crate::solve::apply_dirichlet_ground_lap(&lap, &gns);
             let mg_e = MgPreconditioner::build_from_laplacian(a, nrows, ncols, 5);
-            let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::Dirichlet(mask.clone()));
-            let mg_s = MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
+            let st = StencilOperator::new(
+                nrows,
+                ncols,
+                nodata,
+                &resistance,
+                GroundSpec::Dirichlet(mask.clone()),
+            );
+            let mg_s =
+                MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
             check(&mg_e, &mg_s, "dirichlet");
+        }
+    }
+
+    #[test]
+    fn matrix_free_preconditioner_is_symmetric_and_positive() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        for (nr, nc) in [(16, 16), (17, 19)] {
+            let n = nr * nc;
+            let resistance: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64).collect();
+            let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+            let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.2).cos()).collect();
+            for mode in 0..3 {
+                let spec = match mode {
+                    0 => GroundSpec::None,
+                    1 => GroundSpec::Neumann(
+                        (0..n)
+                            .map(|i| if i % nc == nc - 1 { 1.0 } else { 0.0 })
+                            .collect(),
+                    ),
+                    _ => GroundSpec::Dirichlet((0..n).map(|i| i % nc == nc - 1).collect()),
+                };
+                let fine = StencilOperator::new(nr, nc, -9999.0, &resistance, spec);
+                let mg =
+                    MgPreconditioner::build_from_operator(FineOperator::Stencil(fine), nr, nc, 8);
+                let mut mx = Vec::new();
+                let mut my = Vec::new();
+                mg.apply(&x, &mut mx);
+                mg.apply(&y, &mut my);
+                let x_my: f64 = x.iter().zip(&my).map(|(a, b)| a * b).sum();
+                let y_mx: f64 = y.iter().zip(&mx).map(|(a, b)| a * b).sum();
+                assert!((x_my - y_mx).abs() < 1e-9 * x_my.abs().max(y_mx.abs()).max(1.0));
+                assert!(x.iter().zip(&mx).map(|(a, b)| a * b).sum::<f64>() > 0.0);
+                for level in 0..num_levels(&mg) {
+                    let op = mg.level_operator(level);
+                    for diagonal in op.diag_inv() {
+                        assert!(diagonal > 0.0);
+                    }
+                    let mut error: Vec<f64> = (0..op.n())
+                        .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+                        .collect();
+                    let before: f64 = error.iter().map(|x| x * x).sum();
+                    for _ in 0..3 {
+                        mg.workspaces.borrow()[level].smoother.smooth(
+                            &op,
+                            &mut error,
+                            &vec![0.0; op.n()],
+                            &mut vec![0.0; op.n()],
+                            mg.omega,
+                        );
+                    }
+                    assert!(error.iter().map(|x| x * x).sum::<f64>() < before);
+                }
+            }
         }
     }
 
@@ -739,37 +1481,42 @@ mod tests {
         let nrows = 15;
         let ncols = 15;
         let n = nrows * ncols;
-        
+
         // 1. Build using your actual `.build` method
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 3);
-        
+
         // 2. Generate two distinct structural vectors using predictable trigonometric waves
         let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
         let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.2).cos()).collect();
-        
+
         let mut mx = vec![0.0; n];
         let mut my = vec![0.0; n];
-        
+
         let mut ax = vec![0.0; n];
         let mut ay = vec![0.0; n];
         pcg::mat_vec_mul_into(fine_csmat(&mg), &x, &mut ax);
         pcg::mat_vec_mul_into(fine_csmat(&mg), &y, &mut ay);
         let dot_x_ay: f64 = x.iter().zip(ay.iter()).map(|(a, b)| a * b).sum();
         let dot_y_ax: f64 = y.iter().zip(ax.iter()).map(|(a, b)| a * b).sum();
-        assert!((dot_x_ay - dot_y_ax).abs() < 1e-7, "Fine matrix A is asymmetric!");
+        assert!(
+            (dot_x_ay - dot_y_ax).abs() < 1e-7,
+            "Fine matrix A is asymmetric!"
+        );
 
         mg.apply(&x, &mut mx);
         mg.apply(&y, &mut my);
-        
+
         // 3. Compute dot products: x · M(y) vs y · M(x)
         let dot_x_my: f64 = x.iter().zip(my.iter()).map(|(a, b)| a * b).sum();
         let dot_y_mx: f64 = y.iter().zip(mx.iter()).map(|(a, b)| a * b).sum();
-        
+
         // Operators must be symmetric up to floating-point drift
         assert!(
-            (dot_x_my - dot_y_mx).abs() < 1e-6, 
-            "MG Preconditioner is asymmetric! x*M(y) = {}, y*M(x) = {}", dot_x_my, dot_y_mx
+            (dot_x_my - dot_y_mx).abs() < 1e-6,
+            "MG Preconditioner is asymmetric! x*M(y) = {}, y*M(x) = {}",
+            dot_x_my,
+            dot_y_mx
         );
     }
 
@@ -782,7 +1529,9 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 7);
 
-        let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
+        let b_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5)
+            .collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
         let b: Vec<f64> = b_raw.iter().map(|v| v - mean).collect();
 
@@ -823,8 +1572,15 @@ mod tests {
 
         let r0 = residuals[0];
         let r_last = residuals[residuals.len() - 1];
-        eprintln!("Large uniform {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
-            nrows, ncols, residuals.len(), r0, r_last, r_last / r0);
+        eprintln!(
+            "Large uniform {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
+            nrows,
+            ncols,
+            residuals.len(),
+            r0,
+            r_last,
+            r_last / r0
+        );
         assert!(
             r_last < r0 * 1e-2,
             "MG-preconditioned CG did not converge on large uniform grid: ||r|| went from {:.6e} to {:.6e} in {} iters",
@@ -848,13 +1604,21 @@ mod tests {
                         assert!(
                             val > 0.0,
                             "Level {}: diagonal[{}] = {:.6e} (must be positive)",
-                            level, row, val
+                            level,
+                            row,
+                            val
                         );
-                        let diag_inv = if val.abs() > 1e-15 { 1.0 / val.abs() } else { 0.0 };
+                        let diag_inv = if val.abs() > 1e-15 {
+                            1.0 / val.abs()
+                        } else {
+                            0.0
+                        };
                         assert!(
                             diag_inv > 0.0,
                             "Level {}: diag_inv[{}] = {:.6e} (must be positive)",
-                            level, row, diag_inv
+                            level,
+                            row,
+                            diag_inv
                         );
                     }
                 });
@@ -870,7 +1634,9 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 4);
 
-        let z: Vec<f64> = (0..n).map(|i| (i as f64 * 0.7 + 1.3).sin() * 0.5 + 0.3).collect();
+        let z: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.7 + 1.3).sin() * 0.5 + 0.3)
+            .collect();
         let mut mz = vec![0.0; n];
         mg.apply(&z, &mut mz);
 
@@ -881,7 +1647,9 @@ mod tests {
             z_mz
         );
 
-        let z2: Vec<f64> = (0..n).map(|i| (i as f64 * 1.1 + 2.7).cos() * 0.8 - 0.2).collect();
+        let z2: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 1.1 + 2.7).cos() * 0.8 - 0.2)
+            .collect();
         let mut mz2 = vec![0.0; n];
         mg.apply(&z2, &mut mz2);
         let z2_mz2: f64 = z2.iter().zip(mz2.iter()).map(|(a, b)| a * b).sum();
@@ -900,7 +1668,9 @@ mod tests {
         let resistance = generate_mock_resistance(nrows, ncols);
         let mg = build_mg(&resistance, nrows, ncols, 4);
 
-        let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
+        let b_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5)
+            .collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
         let b: Vec<f64> = b_raw.iter().map(|v| v - mean).collect();
 
@@ -930,12 +1700,14 @@ mod tests {
             "Coarsest level should have Cholesky factorization"
         );
 
-        let b: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.5 + 0.3).sin() + 1.0) * 0.5).collect();
+        let b: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.5 + 0.3).sin() + 1.0) * 0.5)
+            .collect();
         let l = lvl.cholesky_l.as_ref().unwrap();
         let z = crate::linalg::cholesky::cholesky_solve(l, &b, n);
 
         let mut az = vec![0.0; n];
-        pcg::mat_vec_mul_into(&lvl.laplacian, &z, &mut az);
+        lvl.operator(&mg.fine).matvec(&z, &mut az);
 
         let mut max_err = 0.0;
         for i in 0..n {
@@ -961,18 +1733,22 @@ mod tests {
         for level in 0..num_levels(&mg) {
             let n = level_n(&mg, level);
             let b = vec![0.0; n];
-            let mut x: Vec<f64> = (0..n).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+            let mut x: Vec<f64> = (0..n)
+                .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+                .collect();
 
             let initial_norm = x.iter().map(|v| v * v).sum::<f64>().sqrt();
             for _ in 0..3 {
-                symmetric_gauss_seidel_smooth(level_operator(&mg, level), &mut x, &b, mg.omega);
+                symmetric_gauss_seidel_smooth(&level_operator(&mg, level), &mut x, &b, mg.omega);
             }
             let final_norm = x.iter().map(|v| v * v).sum::<f64>().sqrt();
 
             assert!(
                 final_norm < initial_norm,
                 "Level {}: smoother did not reduce error norm (initial={:.6e}, final={:.6e})",
-                level, initial_norm, final_norm
+                level,
+                initial_norm,
+                final_norm
             );
         }
     }
@@ -990,7 +1766,9 @@ mod tests {
 
         let mg = build_mg(&resistance, nrows, ncols, 4);
 
-        let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
+        let b_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5)
+            .collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
         let b: Vec<f64> = b_raw.iter().map(|v| v - mean).collect();
 
@@ -1004,7 +1782,10 @@ mod tests {
 
         let b_norm = b.iter().map(|v| v * v).sum::<f64>().sqrt();
         eprintln!("Full-grid test: n={}", n);
-        eprintln!("  ||b|| = {:.6e}, r·z = {:.6e}, z·Az = {:.6e}", b_norm, rz, z_az);
+        eprintln!(
+            "  ||b|| = {:.6e}, r·z = {:.6e}, z·Az = {:.6e}",
+            b_norm, rz, z_az
+        );
 
         assert!(
             z_az > 0.0,
@@ -1038,18 +1819,25 @@ mod tests {
                     max_inv = d;
                 }
             }
-            eprintln!("Level {}: diag_inv range = [{:.6e}, {:.6e}] (ratio = {:.2e})",
-                level, min_inv, max_inv, max_inv / min_inv.max(1e-30));
+            eprintln!(
+                "Level {}: diag_inv range = [{:.6e}, {:.6e}] (ratio = {:.2e})",
+                level,
+                min_inv,
+                max_inv,
+                max_inv / min_inv.max(1e-30)
+            );
 
             assert!(
                 min_inv > 1e-15,
                 "Level {}: diag_inv too small: min = {:.6e}",
-                level, min_inv
+                level,
+                min_inv
             );
             assert!(
                 max_inv < 1e10,
                 "Level {}: diag_inv too large: max = {:.6e}",
-                level, max_inv
+                level,
+                max_inv
             );
         }
     }
@@ -1070,11 +1858,13 @@ mod tests {
         );
 
         let l = lvl.cholesky_l.as_ref().unwrap();
-        let b: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.5 + 0.3).sin() + 1.0) * 0.5).collect();
+        let b: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.5 + 0.3).sin() + 1.0) * 0.5)
+            .collect();
         let x = crate::linalg::cholesky::cholesky_solve(l, &b, n);
 
         let mut ax = vec![0.0; n];
-        pcg::mat_vec_mul_into(&lvl.laplacian, &x, &mut ax);
+        lvl.operator(&mg.fine).matvec(&x, &mut ax);
 
         let mut max_err = 0.0;
         for i in 0..n {
@@ -1116,14 +1906,25 @@ mod tests {
             let mut min_d = f64::MAX;
             let mut max_d = 0.0;
             for &d in &diag_inv {
-                if d < min_d { min_d = d; }
-                if d > max_d { max_d = d; }
+                if d < min_d {
+                    min_d = d;
+                }
+                if d > max_d {
+                    max_d = d;
+                }
             }
-            eprintln!("Level {}: diag_inv [{:.4e}, {:.4e}] ratio {:.2e}",
-                level, min_d, max_d, max_d / min_d.max(1e-30));
+            eprintln!(
+                "Level {}: diag_inv [{:.4e}, {:.4e}] ratio {:.2e}",
+                level,
+                min_d,
+                max_d,
+                max_d / min_d.max(1e-30)
+            );
         }
 
-        let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
+        let b_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5)
+            .collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
         let b: Vec<f64> = b_raw.iter().map(|v| v - mean).collect();
 
@@ -1144,8 +1945,10 @@ mod tests {
             pcg::mat_vec_mul_into(fine_csmat(&mg), &z, &mut az);
             let z_az: f64 = z.iter().zip(az.iter()).map(|(a, b)| a * b).sum();
             let rz: f64 = r.iter().zip(z.iter()).map(|(a, b)| a * b).sum();
-            eprintln!("  iter {}: ||r||={:.4e} r·z={:.4e} z·Az={:.4e}",
-                _iter, r_norm, rz, z_az);
+            eprintln!(
+                "  iter {}: ||r||={:.4e} r·z={:.4e} z·Az={:.4e}",
+                _iter, r_norm, rz, z_az
+            );
 
             if z_az.abs() < 1e-30 {
                 break;
@@ -1165,8 +1968,15 @@ mod tests {
 
         let r0 = residuals[0];
         let r_last = residuals[residuals.len() - 1];
-        eprintln!("Variable coeff {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
-            nrows, ncols, residuals.len(), r0, r_last, r_last / r0);
+        eprintln!(
+            "Variable coeff {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
+            nrows,
+            ncols,
+            residuals.len(),
+            r0,
+            r_last,
+            r_last / r0
+        );
         assert!(
             r_last < r0,
             "MG-preconditioned CG diverged on variable coefficient grid: ||r|| went from {:.6e} to {:.6e}",
@@ -1195,7 +2005,9 @@ mod tests {
 
         let mg = build_mg(&resistance, nrows, ncols, 6);
 
-        let b_raw: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5).collect();
+        let b_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.3).sin() + 1.0) * 0.5)
+            .collect();
         let mean: f64 = b_raw.iter().sum::<f64>() / n as f64;
         let b: Vec<f64> = b_raw.iter().map(|v| v - mean).collect();
 
@@ -1235,7 +2047,14 @@ mod tests {
 
         let r0 = residuals[0];
         let r_last = residuals[residuals.len() - 1];
-        eprintln!("Smoother-only {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
-            nrows, ncols, residuals.len(), r0, r_last, r_last / r0);
+        eprintln!(
+            "Smoother-only {}x{}: {} iters, ||r|| went from {:.6e} to {:.6e} (ratio {:.4e})",
+            nrows,
+            ncols,
+            residuals.len(),
+            r0,
+            r_last,
+            r_last / r0
+        );
     }
 }

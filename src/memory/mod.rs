@@ -78,6 +78,9 @@ pub struct GalerkinScratch {
     pub p_csr_bytes: u64,
     /// Prolongation transposed (`P_l` as CSC, i.e. the restriction `R_l`).
     pub p_csc_bytes: u64,
+    /// Bounded stack accumulator used to reconstruct an implicit Galerkin row.
+    /// This is reused per row, not multiplied by the level's node count.
+    pub row_accumulator_bytes: u64,
 }
 
 /// Memory footprint of one level of the geometric multigrid hierarchy.
@@ -91,9 +94,11 @@ pub struct LevelMemory {
     /// Structural entries in `L_l`, including boundary/ground effects.
     /// Stencil entries are computed on demand and occupy zero matrix bytes.
     pub nnz: usize,
+    /// `explicit`, `stencil`, or `galerkin-stencil`.
+    pub operator_repr: String,
     /// Bytes of this level's Laplacian `L_l`.
     pub laplacian_bytes: u64,
-    /// Bytes of the prolongation triplets `P_l` (empty for level 0).
+    /// Transfer entry-array bytes; zero for generated geometric transfers.
     pub prolongation_p_bytes: u64,
     /// Bytes of the dense Cholesky factor (coarsest level only).
     pub cholesky_factor_bytes: u64,
@@ -103,6 +108,14 @@ pub struct LevelMemory {
     pub workspace_d_bytes: u64,
     /// Bytes of the workspace vector `d'_l`.
     pub workspace_d_prime_bytes: u64,
+    /// Cached inverse diagonal for weighted Jacobi (nonterminal levels only).
+    pub smoother_diag_bytes: u64,
+    /// `weighted-jacobi`, `symmetric-gauss-seidel`, or `none` at the terminal level.
+    pub smoother_repr: String,
+    /// Effective damping after the Jacobi stability bound, if smoothing is used.
+    pub smoother_omega: Option<f64>,
+    /// Persistent scratch used by a composed operator application.
+    pub operator_matvec_scratch_bytes: u64,
     /// Freed Galerkin scratch used to build this level (empty for level 0).
     pub galerkin_scratch: GalerkinScratch,
 }
@@ -333,6 +346,7 @@ pub fn record_level(
             level,
             nodes,
             nnz,
+            operator_repr: "explicit".into(),
             laplacian_bytes,
             prolongation_p_bytes,
             cholesky_factor_bytes,
@@ -340,6 +354,7 @@ pub fn record_level(
             workspace_d_bytes: workspace,
             workspace_d_prime_bytes: workspace,
             galerkin_scratch,
+            ..LevelMemory::default()
         });
     });
 }
@@ -355,6 +370,7 @@ pub fn record_fine_level(cholesky_factor_bytes: u64) {
             level: 0,
             nodes: profile.laplacian_nodes,
             nnz: profile.laplacian_nnz,
+            operator_repr: profile.operator_repr.clone(),
             laplacian_bytes: profile.laplacian_bytes,
             cholesky_factor_bytes,
             workspace_e_bytes: workspace,
@@ -362,6 +378,48 @@ pub fn record_fine_level(cholesky_factor_bytes: u64) {
             workspace_d_prime_bytes: workspace,
             ..LevelMemory::default()
         });
+    });
+}
+
+/// Set the representation of a previously recorded hierarchy level.
+#[inline]
+#[allow(unused_variables)]
+pub fn record_level_representation(level: usize, representation: &str) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        if let Some(entry) = profile
+            .hierarchy
+            .iter_mut()
+            .find(|entry| entry.level == level)
+        {
+            entry.operator_repr = representation.into();
+        }
+    });
+}
+
+/// Record persistent smoother and matrix-free operator buffers separately
+/// from the temporary setup allocations in GalerkinScratch.
+#[inline]
+#[allow(unused_variables)]
+pub fn record_level_runtime(
+    level: usize,
+    smoother: &str,
+    diag_bytes: u64,
+    omega: Option<f64>,
+    matvec_bytes: u64,
+) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        if let Some(entry) = profile
+            .hierarchy
+            .iter_mut()
+            .find(|entry| entry.level == level)
+        {
+            entry.smoother_repr = smoother.into();
+            entry.smoother_diag_bytes = diag_bytes;
+            entry.smoother_omega = omega;
+            entry.operator_matvec_scratch_bytes = matvec_bytes;
+        }
     });
 }
 
@@ -482,7 +540,10 @@ mod tests {
         {
             record_cg_vectors(3);
             record_fine_laplacian(&small_csmat());
-            assert!(take_profile().is_none(), "disabled recording must be a no-op");
+            assert!(
+                take_profile().is_none(),
+                "disabled recording must be a no-op"
+            );
         }
     }
 
@@ -528,8 +589,8 @@ mod tests {
         let resistance = vec![1.0; 100];
         let mut mask = vec![false; 100];
         mask[0] = true;
-        let operator = StencilOperator::new(10, 10, -9999.0, &resistance,
-            GroundSpec::Dirichlet(mask));
+        let operator =
+            StencilOperator::new(10, 10, -9999.0, &resistance, GroundSpec::Dirichlet(mask));
         record_stencil_fine(&operator);
         record_fine_level(0);
         let profile = take_profile().unwrap();

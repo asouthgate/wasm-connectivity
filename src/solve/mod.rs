@@ -1,10 +1,10 @@
-use sprs::CsMat;
-use serde::Serialize;
-use std::collections::HashSet;
-use crate::linalg::pcg as solver;
 use crate::linalg::multigrid::{MgOptions, MgPreconditioner};
 use crate::linalg::operator::{FineOperator, GroundSpec, StencilOperator};
+use crate::linalg::pcg as solver;
 use crate::memory;
+use serde::Serialize;
+use sprs::CsMat;
+use std::collections::HashSet;
 
 pub mod cache;
 pub mod current;
@@ -143,14 +143,14 @@ pub fn solve_raster_cached(
     let (laplacian, cell_to_node, num_nodes, prior_voltages) =
         obtain_circuit(&filled, nrows, ncols, nodata, rebuild_laplacian);
     memory::record_cell_to_node_map(cell_to_node.len());
-    let current_global = build_global_currents(
-        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
-    );
+    let current_global =
+        build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
 
     let grounds_present;
     let (laplacian, mut s) = match ground_mode {
         GroundMode::Neumann => {
-            let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            let g =
+                build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
             grounds_present = g.iter().any(|&x| x > 0.0);
             let laplacian = if grounds_present {
@@ -195,13 +195,22 @@ pub fn solve_raster_cached(
     let res = solver::cg_solve(&laplacian, &s, max_iter, tol, prior_seed);
 
     let out = build_raster_output(
-        &res.v, resistance_data, ground_data,
-        &cell_to_node, nrows, ncols, nodata, ground_mode,
+        &res.v,
+        resistance_data,
+        ground_data,
+        &cell_to_node,
+        nrows,
+        ncols,
+        nodata,
+        ground_mode,
     );
 
     cache::store_last_voltages(&res.v);
 
-    AnnotatedOutput { output: out, total_iters: res.iters }
+    AnnotatedOutput {
+        output: out,
+        total_iters: res.iters,
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -228,11 +237,18 @@ fn obtain_circuit(
                 let cached = cache::take().expect("peek_meta indicated cache present");
                 let prior_out = if prior.is_empty() { None } else { Some(prior) };
                 cache::store(
-                    cached.laplacian.clone(), cached.cell_to_node.clone(),
-                    cached.num_nodes, cached.nrows, cached.ncols, cached.nodata,
+                    cached.laplacian.clone(),
+                    cached.cell_to_node.clone(),
+                    cached.num_nodes,
+                    cached.nrows,
+                    cached.ncols,
+                    cached.nodata,
                 );
                 return (
-                    cached.laplacian, cached.cell_to_node, cached.num_nodes, prior_out,
+                    cached.laplacian,
+                    cached.cell_to_node,
+                    cached.num_nodes,
+                    prior_out,
                 );
             }
         }
@@ -243,10 +259,18 @@ fn obtain_circuit(
     let (cell_to_node, num_nodes, _, laplacian) =
         crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
     cache::store(
-        laplacian.clone(), cell_to_node.clone(), num_nodes,
-        nrows, ncols, nodata,
+        laplacian.clone(),
+        cell_to_node.clone(),
+        num_nodes,
+        nrows,
+        ncols,
+        nodata,
     );
-    let prior_out = if rebuild && !prior.is_empty() { Some(prior) } else { None };
+    let prior_out = if rebuild && !prior.is_empty() {
+        Some(prior)
+    } else {
+        None
+    };
     (laplacian, cell_to_node, num_nodes, prior_out)
 }
 
@@ -458,7 +482,13 @@ fn valid_ground_value(gv: f64, nodata: f64) -> bool {
 fn build_source_identity(source_data: &[f64], nodata: f64) -> Vec<f64> {
     source_data
         .iter()
-        .map(|&sv| if valid_source_value(sv, nodata) { sv } else { 0.0 })
+        .map(|&sv| {
+            if valid_source_value(sv, nodata) {
+                sv
+            } else {
+                0.0
+            }
+        })
         .collect()
 }
 
@@ -466,18 +496,30 @@ fn build_source_identity(source_data: &[f64], nodata: f64) -> Vec<f64> {
 fn build_neumann_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
     ground_data
         .iter()
-        .map(|&gv| if valid_ground_value(gv, nodata) { gv } else { 0.0 })
+        .map(|&gv| {
+            if valid_ground_value(gv, nodata) {
+                gv
+            } else {
+                0.0
+            }
+        })
         .collect()
 }
 
 /// Per-node Dirichlet pinned mask (node index == flat cell index).
 fn build_dirichlet_mask_identity(ground_data: &[f64], nodata: f64) -> Vec<bool> {
-    ground_data.iter().map(|&gv| valid_ground_value(gv, nodata)).collect()
+    ground_data
+        .iter()
+        .map(|&gv| valid_ground_value(gv, nodata))
+        .collect()
 }
 
 /// Matrix-free (low-memory) MG solve: the retained fine Laplacian is a stencil
-/// over the input resistance raster. The coarse hierarchy is materialised as
-/// usual; an uncoarsened small system can use a temporary dense direct solve.
+/// over the input resistance raster; level 1 reconstructs Galerkin rows on
+/// demand during setup and level 2 is the first CSR. Matvecs compose transfers
+/// with the fine operator; nonterminal levels use weighted Jacobi smoothing.
+/// All transfers are geometric stencils.
+/// A terminal matrix-free level can use a temporary dense direct solve.
 pub fn solve_raster_sources_mg_stencil(
     resistance_data: &[f64],
     nrows: usize,
@@ -773,8 +815,17 @@ mod tests {
 
         // Populate the cache with the original solve.
         let _primed = solve_raster_cached(
-            &res, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
+            &res,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            false,
+            GroundMode::Neumann,
         );
 
         // Modify sources only — resistance is unchanged so the no-rebuild
@@ -784,16 +835,36 @@ mod tests {
         src2[5 * size + 5] = 5.0;
 
         let warm = solve_raster_cached(
-            &res, size, size, crate::NODATA_SENTINEL,
-            &src2, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
-        ).output;
+            &res,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src2,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            false,
+            GroundMode::Neumann,
+        )
+        .output;
 
         let cold2 = {
             cache::reset();
             solve_raster_cached(
-                &res, size, size, crate::NODATA_SENTINEL,
-                &src2, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
-            ).output
+                &res,
+                size,
+                size,
+                crate::NODATA_SENTINEL,
+                &src2,
+                &gnd,
+                crate::DEFAULT_MAX_ITER,
+                crate::DEFAULT_TOL,
+                true,
+                false,
+                GroundMode::Neumann,
+            )
+            .output
         };
 
         // The Laplacian is near-singular (constant vector null space), so
@@ -801,9 +872,13 @@ mod tests {
         // and warm solves; currents (which depend on voltage DIFFERENCES)
         // are invariant to that shift and must match.
         for i in 0..cold2.current_map.len() {
-            assert!((warm.current_map[i] - cold2.current_map[i]).abs() < 1e-4,
+            assert!(
+                (warm.current_map[i] - cold2.current_map[i]).abs() < 1e-4,
                 "warm (no-rebuild) current diverged at {}: warm={} cold={}",
-                i, warm.current_map[i], cold2.current_map[i]);
+                i,
+                warm.current_map[i],
+                cold2.current_map[i]
+            );
         }
         cache::reset();
     }
@@ -816,30 +891,63 @@ mod tests {
 
         // Initial solve to populate the cache with a baseline voltage field.
         let _ = solve_raster_cached(
-            &res, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
+            &res,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            false,
+            GroundMode::Neumann,
         );
 
         // Small edit to the resistance raster; should rebuild and warm-start.
         res[5 * size + 5] = 2.0;
 
         let warm = solve_raster_cached(
-            &res, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, true, GroundMode::Neumann,
-        ).output;
+            &res,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            true,
+            GroundMode::Neumann,
+        )
+        .output;
 
         let cold = {
             cache::reset();
             solve_raster_cached(
-                &res, size, size, crate::NODATA_SENTINEL,
-                &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
-            ).output
+                &res,
+                size,
+                size,
+                crate::NODATA_SENTINEL,
+                &src,
+                &gnd,
+                crate::DEFAULT_MAX_ITER,
+                crate::DEFAULT_TOL,
+                true,
+                false,
+                GroundMode::Neumann,
+            )
+            .output
         };
 
         for i in 0..cold.current_map.len() {
-            assert!((warm.current_map[i] - cold.current_map[i]).abs() < 1e-4,
+            assert!(
+                (warm.current_map[i] - cold.current_map[i]).abs() < 1e-4,
                 "warm (rebuild) current diverged at {}: warm={} cold={}",
-                i, warm.current_map[i], cold.current_map[i]);
+                i,
+                warm.current_map[i],
+                cold.current_map[i]
+            );
         }
         cache::reset();
     }
@@ -857,8 +965,17 @@ mod tests {
 
         // Build baseline voltage field on the original resistance.
         let _ = solve_raster_cached(
-            &res_orig, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
+            &res_orig,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            false,
+            GroundMode::Neumann,
         );
 
         // Edit the resistance raster by one cell.
@@ -869,8 +986,17 @@ mod tests {
         // without a prior voltage seed.
         cache::reset();
         let cold = solve_raster_cached(
-            &res_edited, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, true, GroundMode::Neumann,
+            &res_edited,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            true,
+            GroundMode::Neumann,
         );
 
         // WARM: rebuild the baseline on the original resistance to re-fill
@@ -878,18 +1004,37 @@ mod tests {
         // the edited resistance with that field as a CG seed.
         cache::reset();
         let _baseline = solve_raster_cached(
-            &res_orig, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, false, GroundMode::Neumann,
+            &res_orig,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            false,
+            GroundMode::Neumann,
         );
         let warm = solve_raster_cached(
-            &res_edited, size, size, crate::NODATA_SENTINEL,
-            &src, &gnd, crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, true, GroundMode::Neumann,
+            &res_edited,
+            size,
+            size,
+            crate::NODATA_SENTINEL,
+            &src,
+            &gnd,
+            crate::DEFAULT_MAX_ITER,
+            crate::DEFAULT_TOL,
+            true,
+            true,
+            GroundMode::Neumann,
         );
 
         assert!(
             warm.total_iters <= cold.total_iters,
             "warm-start should not require more PCG iterations; cold={} warm={}",
-            cold.total_iters, warm.total_iters
+            cold.total_iters,
+            warm.total_iters
         );
         cache::reset();
     }

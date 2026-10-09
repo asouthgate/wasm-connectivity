@@ -6,7 +6,7 @@ Usage:
     python3 tests/scripts/plot_profile_nnz.py profile.json --output nnz.png
 
 Accepts the NDJSON emitted by instrumentation-profile at any resolution.
-Matrices are fixed across CG iterations: these counts describe hierarchy
+Operators are fixed across CG iterations: these counts describe hierarchy
 levels, not iteration history. Stencil counts describe structural entries,
 even though the fine matrix is not stored.
 """

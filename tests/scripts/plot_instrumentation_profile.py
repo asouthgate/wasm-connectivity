@@ -3,7 +3,8 @@
 
 Input: NDJSON records with resolution, solver, ground, total_iters, and profile.
 Produces per-MG-hierarchy figures including level 0, and a scaling comparison
-of named solver buffers across Jacobi, explicit MG, and stencil MG. Setup
+of named solver buffers across Jacobi, explicit MG, and MG with matrix-free
+levels 0 and 1. Both MG paths generate transfers without entry arrays. Setup
 buffers and allocator overhead are excluded; these totals are not heap peaks.
 
 Usage:
@@ -20,7 +21,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 SOLVER_COLORS = {'jacobi': '#444444', 'mg': '#e66101', 'mg-stencil': '#2c7fb8'}
-SOLVER_LABELS = {'jacobi': 'Jacobi CG', 'mg': 'CGMG', 'mg-stencil': 'CGMG (low-memory)'}
+SOLVER_LABELS = {'jacobi': 'Jacobi CG', 'mg': 'CGMG', 'mg-stencil': 'CGMG (matrix-free levels 0–1)'}
 
 
 def load(filename=None):
@@ -33,7 +34,8 @@ def load(filename=None):
 def total_level_bytes(level):
     return sum(level[key] for key in (
         'laplacian_bytes', 'prolongation_p_bytes', 'cholesky_factor_bytes',
-        'workspace_e_bytes', 'workspace_d_bytes', 'workspace_d_prime_bytes'))
+        'workspace_e_bytes', 'workspace_d_bytes', 'workspace_d_prime_bytes')) + sum(
+            level.get(key, 0) for key in ('smoother_diag_bytes', 'operator_matvec_scratch_bytes'))
 
 
 def solver_storage_bytes(profile):
@@ -66,7 +68,13 @@ def plot_hierarchy(rows, out_prefix):
              [sum(level[key] for key in ('workspace_e_bytes', 'workspace_d_bytes',
                                         'workspace_d_prime_bytes')) for level in levels]),
             ('Cholesky factor', '#2c7fb8', [level['cholesky_factor_bytes'] for level in levels]),
+            ('Jacobi diagonal', '#8e44ad', [level.get('smoother_diag_bytes', 0) for level in levels]),
+            ('Operator scratch', '#16a085', [level.get('operator_matvec_scratch_bytes', 0) for level in levels]),
         ]
+        # New profiles generate P geometrically; omit its empty legend entry.
+        # Keep the category for older profiles containing stored transfers.
+        components = [(label, color, values) for label, color, values in components
+                      if any(values)]
         fig, ax = plt.subplots(figsize=(8, 5))
         bottom = [0.0] * len(levels)
         for label, color, values in components:
