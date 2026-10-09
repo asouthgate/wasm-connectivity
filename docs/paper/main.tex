@@ -272,6 +272,22 @@ i.e. $\mathbf{d}'_l = \mathbf{d}_l - \mathbf{L}_l\mathbf{e}_l $.}
 \end{algorithmic}
 \end{algorithm}
 
+\subsubsection{Memory optimisation}
+
+We implement a low-memory mode for the solver in order to trade time for memory efficiency in
+the browser context where memory constraints can be more important.
+
+The first optimisation we make is to take a hybdrid approach to stencils and explicit
+sparse matrix storage. This strategy depends on the operator that is used. 
+
+For the fine matrix, we use a stencil representation in order
+to avoid storing the whole fine matrix. During the V-cycle, it may be expected that each
+coarse matrix geometrically reduces in size. However, this does not always hold,
+especially for the first coarsening, where fill-in occurs.
+
+For memory optimisation, we found that the plain MG hierarchy consumed more memory than expected
+due to fill-in, as shown in Appendix Figure \ref{fig:nnz}. This motivated a hybrid approach, where
+only the coarse matrices from level 2 onward were stored.
 
 \subsection{Example datasets and resistance map calculation}
 
@@ -366,8 +382,6 @@ circuitscape in a web-application context, even though the circuitscape solver i
 especially if the solver does not dominate the time taken for an
 analysis round trip from browser to server and back.
 
-
-
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=1.0\textwidth]{figures/cs_vs_wasm.png}
@@ -414,5 +428,16 @@ Thomas E. Woolley: paper editing; conceptualization of improvements to benchmark
 
 \bibliographystyle{unsrt}
 \bibliography{refs} 
+
+\section{Appendix}
+
+\begin{figure}[htb!]
+\centering
+\makebox[\textwidth][c]{%
+    \includegraphics[width=1.2\textwidth]{figures/profile_nnz.png}%
+}
+\caption{Number of non-zero Laplacian elements at each level of the multigrid hierarchy}
+\label{fig:nnz}
+\end{figure}
 
 \end{document}

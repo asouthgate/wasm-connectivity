@@ -31,7 +31,7 @@ Then use the plotter for visualisation.
 
 ```sh
 cargo run --profile release-prof --features bin,instrumentation-profile \
-  --bin instrumentation-profile -- 500 --solver all --ground all > profile.jsonl
+  --bin instrumentation-profile -- 500 --solver mg --ground neumann > profile.json
 python3 tests/scripts/plot_instrumentation_profile.py profile.jsonl
 ```
 
