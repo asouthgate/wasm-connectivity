@@ -14,8 +14,11 @@ pub fn build_circuit_model(
     nodata: f64,
 ) -> (Vec<i32>, usize, graph::EdgeTriplets, sprs::CsMat<f64>) {
     let conductance = grid::Grid::to_conductance(resistance_data, nrows, ncols, nodata);
+    crate::memory::record_conductance_grid(nrows * ncols);
     let (cell_to_node, num_nodes) = grid::build_cell_to_node(&conductance);
+    crate::memory::record_cell_to_node_map(nrows * ncols);
     let edges = graph::build_conductance_edges(&conductance, &cell_to_node);
+    crate::memory::record_edge_triplets(edges.len());
     let laplacian = laplacian::build_laplacian(&edges, num_nodes);
     (cell_to_node, num_nodes, edges, laplacian)
 }

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runGeospatialPipelineCachedMgAsync, resetCacheAsync } from '@wasm-connect/lib';
+import { runGeospatialPipelineCachedMgAsync, runGeospatialPipelineCachedMgStencilAsync, resetCacheAsync } from '@wasm-connect/lib';
 import { renderMap } from '../render';
 import MapView from '../components/MapView';
 import { StatusBar } from '../components/StatusBar';
@@ -39,6 +39,7 @@ export default function Example() {
   const [riverWidth, setRiverWidth] = useState(4);
   const [buildRes, setBuildRes] = useState(500);
   const [dirichlet, setDirichlet] = useState(true);
+  const [lowMem, setLowMem] = useState(false);
 
   const loadData = useCallback(async (res) => {
     setResolution(res);
@@ -80,7 +81,8 @@ export default function Example() {
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
       const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
 
-      const json = await runGeospatialPipelineCachedMgAsync(
+      const solve = lowMem ? runGeospatialPipelineCachedMgStencilAsync : runGeospatialPipelineCachedMgAsync;
+      const json = await solve(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(params),
         baseMeta.xllcorner, ymax, baseMeta.cellsize,
@@ -99,7 +101,7 @@ export default function Example() {
       setLoading(false);
       setComputing(false);
     }
-  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes, dirichlet]);
+  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes, dirichlet, lowMem]);
 
   const hasData = !!(baseData && srcData && geojsonStr);
 
@@ -154,6 +156,17 @@ export default function Example() {
                 <div className={'preset' + (dirichlet ? ' sel' : '') + (loading ? ' loading' : '')}
                   onClick={() => !loading && setDirichlet(true)}>
                   Dirichlet ground (V=0)
+                </div>
+              </div>
+              <h3>Memory</h3>
+              <div style={{display:'flex', gap:8}}>
+                <div className={'preset' + (!lowMem ? ' sel' : '') + (loading ? ' loading' : '')}
+                  onClick={() => !loading && setLowMem(false)}>
+                  Standard (matrix)
+                </div>
+                <div className={'preset' + (lowMem ? ' sel' : '') + (loading ? ' loading' : '')}
+                  onClick={() => !loading && setLowMem(true)}>
+                  Low-memory (stencil)
                 </div>
               </div>
             </div>

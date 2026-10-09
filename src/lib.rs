@@ -1,6 +1,7 @@
 pub mod circuit;
 pub mod geospatial;
 pub mod linalg;
+pub mod memory;
 pub mod raster;
 pub mod resistance;
 pub mod roost;
@@ -121,6 +122,34 @@ pub fn solve_raster_sources_mg(
 }
 
 #[wasm_bindgen]
+pub fn solve_raster_sources_mg_stencil(
+    resistance_data: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+    use_dirichlet_ground: bool,
+) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
+    let annotated = solve::solve_raster_sources_mg_stencil(
+        &resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+        true,
+        ground_mode,
+    );
+    json_response(&annotated)
+}
+
+#[wasm_bindgen]
 pub fn reset_cache() {
     cache::reset();
 }
@@ -144,6 +173,43 @@ pub fn run_geospatial_pipeline_cached_mg(
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
     let output = geospatial::run_geospatial_pipeline_cached_mg(
+        &base_raster,
+        nrows,
+        ncols,
+        nodata,
+        &geojson_str,
+        &layer_params_str,
+        xmin,
+        ymax,
+        cellsize,
+        &source_data,
+        &ground_data,
+        max_iter,
+        tol,
+        ground_mode,
+    );
+    json_response(&output)
+}
+
+#[wasm_bindgen]
+pub fn run_geospatial_pipeline_cached_mg_stencil(
+    base_raster: Vec<f64>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
+    max_iter: usize,
+    tol: f64,
+    use_dirichlet_ground: bool,
+) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
+    let output = geospatial::run_geospatial_pipeline_cached_mg_stencil(
         &base_raster,
         nrows,
         ncols,

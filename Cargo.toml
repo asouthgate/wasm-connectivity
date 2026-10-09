@@ -20,6 +20,7 @@ image = { version = "0.24", default-features = false, features = ["png"], option
 
 [features]
 bin = ["tiff", "image"]
+instrumentation-profile = []
 
 [[bin]]
 name = "resistance-pipeline"
@@ -30,6 +31,11 @@ required-features = ["bin"]
 name = "prof-solve"
 path = "src/bin/prof_solve.rs"
 required-features = ["bin"]
+
+[[bin]]
+name = "instrumentation-profile"
+path = "src/bin/instrumentation_profile.rs"
+required-features = ["bin", "instrumentation-profile"]
 
 [[bin]]
 name = "roost-locate"

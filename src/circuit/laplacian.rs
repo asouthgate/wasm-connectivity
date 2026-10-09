@@ -50,6 +50,7 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
     let mut row_sums = vec![0.0f64; num_nodes];
 
     let nnz = edges.len() + num_nodes;
+    crate::memory::record_assembly_scratch(num_nodes, nnz);
     let mut lap_rows: Vec<usize> = Vec::with_capacity(nnz);
     let mut lap_cols: Vec<usize> = Vec::with_capacity(nnz);
     let mut lap_vals: Vec<f64> = Vec::with_capacity(nnz);

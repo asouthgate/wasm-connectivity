@@ -13,7 +13,13 @@ const DEFAULT_PARAMS = {
   buildings:{ resistance: 500, width: 0 },
 };
 
-const RUNS = ['jacobi', 'gmg'];
+const RUNS = ['jacobi', 'gmg', 'gmg-lowmem'];
+
+const RUN_LABELS = {
+  jacobi: 'Jacobi CG',
+  gmg: 'GMG CG',
+  'gmg-lowmem': 'GMG CG (low-mem)',
+};
 
 export const BENCHMARK_HEADERS = [
   'resolution',
@@ -57,6 +63,9 @@ function benchmarkJacobi(baseRaster, nrows, ncols, nodata, geojsonStr, layerPara
 }
 function benchmarkGmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
   return callBenchWorker('benchmark_gmg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
+}
+function benchmarkGmgStencil(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
+  return callBenchWorker('benchmark_gmg-lowmem', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
 }
 
 export default function Benchmark() {
@@ -115,6 +124,8 @@ export default function Benchmark() {
             let result;
             if (runName === 'jacobi') {
               result = await benchmarkJacobi(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
+            } else if (runName === 'gmg-lowmem') {
+              result = await benchmarkGmgStencil(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
             } else {
               result = await benchmarkGmg(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
             }
@@ -136,7 +147,7 @@ export default function Benchmark() {
   const hasData = !!(baseData && srcData && geojsonStr);
 
   const fmtMs = (ms) => (ms / 1000).toFixed(3) + 's';
-  const fmtMb = (mb) => mb.toFixed(1) + ' MB';
+  const fmtMb = (mb) => mb.toFixed(1) + ' MiB';
 
   const totalRuns = RESOLUTIONS.length * reps * RUNS.length;
 
@@ -153,7 +164,7 @@ export default function Benchmark() {
 
       {hasData && (
         <div className="bench-info">
-          Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} rep{reps !== 1 ? 's' : ''} · 2 solvers per rep: Jacobi CG, GMG CG
+          Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} rep{reps !== 1 ? 's' : ''} · 3 solvers per rep: Jacobi CG, GMG CG, GMG CG (low-mem)
         </div>
       )}
 
@@ -170,7 +181,7 @@ export default function Benchmark() {
             {runs.map((r, i) => (
               <tr key={i} className={r.error ? 'bench-log-row--error' : ''}>
                 <td>{r.resolution}</td><td>{r.repeat}</td>
-                <td>{r.run}</td>
+                <td>{RUN_LABELS[r.run] || r.run}</td>
                 <td>{r.error ? 'err' : fmtMs(r.prepTimeMs)}</td>
                 <td>{r.error ? 'err' : fmtMb(r.prepMemMb)}</td>
                 <td>{r.error ? 'err' : fmtMs(r.connTimeMs)}</td>

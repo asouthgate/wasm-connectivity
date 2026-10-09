@@ -4,6 +4,7 @@ import {
   __reset,
   solve_raster_sources_jacobi_cached,
   solve_raster_sources_mg,
+  solve_raster_sources_mg_stencil,
   rasterize_geojson,
   reset_cache,
 } from '@wasm-connect/lib/wasm_connect.js';
@@ -11,6 +12,7 @@ import wasmUrl from '@wasm-connect/lib/wasm_connect_bg.wasm?url';
 
 let compiledModule = null;
 
+// Linear-memory capacity after the run, not live heap usage. Values are MiB.
 function getWasmAllocatedMB() { return get_memory().buffer.byteLength / (1024 * 1024); }
 
 async function getCompiledModule() {
@@ -39,9 +41,14 @@ function solveGmg(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
   return solve_raster_sources_mg(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
 }
 
+function solveGmgStencil(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
+  return solve_raster_sources_mg_stencil(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
+}
+
 const SOLVERS = {
   jacobi: solveJacobi,
   gmg: solveGmg,
+  'gmg-lowmem': solveGmgStencil,
 };
 
 function runBenchmark(solveFn, [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]) {

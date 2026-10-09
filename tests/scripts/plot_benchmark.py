@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Plot benchmark time and memory trajectories for two solvers.
+"""Plot benchmark time and memory trajectories for Jacobi CG, CGMG, and low-memory CGMG.
 
-CSV schema (emitted by web/src/pages/Benchmark.jsx):
+CSV schema (emitted by example/src/pages/Benchmark.jsx):
     resolution,repeat,run,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb,total_iters
 
-run is one of: jacobi, gmg.
+run is one of: jacobi, gmg, gmg-lowmem. Legacy two-solver CSVs also work.
+Memory columns contain WASM linear-memory capacity in MiB, despite their historical _mb suffix.
 Per row: total_time_s = prep_time_s + conn_time_s.
 """
 import sys
@@ -14,18 +15,21 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-RUNS = ('jacobi', 'gmg')
+RUNS = ('jacobi', 'gmg', 'gmg-lowmem')
 RUN_LABELS = {
     'jacobi':  'Jacobi CG',
-    'gmg':     'GMG CG',
+    'gmg':     'CGMG',
+    'gmg-lowmem': 'CGMG (low-memory)',
 }
 RUN_LINESTYLES = {
     'jacobi':  '-',
     'gmg':     '--',
+    'gmg-lowmem': ':',
 }
 RUN_COLORS = {
     'jacobi':  '#444444',
-    'gmg':     '#e66101',  # Distinct color scheme for clarity
+    'gmg':     '#e66101',
+    'gmg-lowmem': '#2c7fb8',
 }
 
 
@@ -81,6 +85,8 @@ def plot(csv_path, out_path):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
     for run in RUNS:
+        if not any((res, run) in time_by_key for res in res_all):
+            continue
         # Scatter individual data points
         xs, ys = [], []
         for res in res_all:
@@ -95,6 +101,8 @@ def plot(csv_path, out_path):
                  lw=2, ms=6, label=f'{RUN_LABELS[run]}', zorder=3)
 
     for run in RUNS:
+        if not any((res, run) in time_by_key for res in res_all):
+            continue
         # Scatter individual data points
         xs, ys = [], []
         for res in res_all:
@@ -114,7 +122,7 @@ def plot(csv_path, out_path):
     # Polish Left Axes (Time)
     ax1.set_xlabel('Resolution (pixels)')
     ax1.set_ylabel('Total time (s)')
-    ax1.set_title('Execution Time Breakdown')
+    ax1.set_title('Total Execution Time')
     ax1.set_xticks(res_all)
     ax1.set_xticklabels([res2str(r) for r in res_all])
     ax1.grid(True, alpha=0.3)
@@ -126,8 +134,8 @@ def plot(csv_path, out_path):
 
     # Polish Right Axes (Memory)
     ax2.set_xlabel('Resolution (pixels)')
-    ax2.set_ylabel('Peak memory (MB)')
-    ax2.set_title('Peak Connection Memory Usage')
+    ax2.set_ylabel('WASM linear memory (MiB)')
+    ax2.set_title('WASM Memory Capacity After Solving')
     ax2.set_xticks(res_all)
     ax2.set_xticklabels([res2str(r) for r in res_all])
     ax2.grid(True, alpha=0.3)
