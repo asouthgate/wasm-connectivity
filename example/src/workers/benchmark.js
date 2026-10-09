@@ -12,6 +12,7 @@ import wasmUrl from '@wasm-connect/lib/wasm_connect_bg.wasm?url';
 
 let compiledModule = null;
 
+// Linear-memory capacity after the run, not live heap usage. Values are MiB.
 function getWasmAllocatedMB() { return get_memory().buffer.byteLength / (1024 * 1024); }
 
 async function getCompiledModule() {

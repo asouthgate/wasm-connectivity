@@ -147,7 +147,7 @@ export default function Benchmark() {
   const hasData = !!(baseData && srcData && geojsonStr);
 
   const fmtMs = (ms) => (ms / 1000).toFixed(3) + 's';
-  const fmtMb = (mb) => mb.toFixed(1) + ' MB';
+  const fmtMb = (mb) => mb.toFixed(1) + ' MiB';
 
   const totalRuns = RESOLUTIONS.length * reps * RUNS.length;
 

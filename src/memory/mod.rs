@@ -1,21 +1,17 @@
-//! Feature-gated memory accounting for the connectivity solve.
+//! Analytical instrumentation of the connectivity solver's named buffers.
 //!
-//! Reports the byte size of every data structure the algorithm allocates,
-//! using the paper's naming: the graph Laplacian `L`, the coarse Laplacians
-//! `L_l`, the prolongation operator `P_l` (with restriction `R_l = P_l^T`),
-//! the per-level workspace vectors `e_l`, `d_l`, `d'_l`, the coarsest-level
-//! Cholesky factor, and the CG vectors `v`, `r`, `e0`, `p`, `s`.
+//! Reports matrix/vector payload sizes using lengths and structural entry
+//! counts. These estimates exclude allocation capacity, container overhead,
+//! caller-owned inputs, raster preparation, returned maps, and warm-start copies.
+//! Setup buffers are reported separately from retained solver structures;
+//! summing them does not measure concurrently live memory or a heap peak.
+//! Boundary reconstruction and sparse-format conversion internals are excluded;
+//! setup fields cover the named buffers, not every allocation in dependencies.
 //!
-//! Sizes are *analytical*: they are computed from each structure's dimensions
-//! (node counts, stored-entry counts, vector lengths), not from a heap
-//! profiler. Freed intermediates (conductance grid, cell-to-node map, edge
-//! triplets, Galerkin scratch buffers, the dense coarsest matrix) are reported
-//! too, so the story accounts for memory the algorithm touches and releases
-//! along the way.
-//!
-//! Compile-time toggled by the `memory-story` feature. When the feature is
-//! disabled, every `record_*` call is a no-op and `take_story` returns `None`,
-//! so there is zero runtime and (effectively) zero binary overhead.
+//! Enable with `cargo test --features instrumentation-profile` or run the native
+//! harness with `cargo run --profile release-prof --features bin,instrumentation-profile
+//! --bin instrumentation-profile -- 500`. Without that Cargo feature, recording
+//! and reset bodies are no-ops and `take_profile` returns None.
 
 use serde::Serialize;
 use sprs::CsMat;
@@ -64,26 +60,20 @@ pub fn dense_bytes(n: usize) -> u64 {
     n as u64 * n as u64 * 8
 }
 
-/// Freed Galerkin-coarsening scratch buffers used to build a coarse level
+/// Temporary Galerkin-coarsening buffers used to build a coarse level
 /// `L_{l+1} = P_l^T L_l P_l`.
 #[derive(Serialize, Clone, Default, Debug)]
 pub struct GalerkinScratch {
-    /// `seen` (pass 1), length `coarse_n`.
+    /// `seen`, reused by both passes, length `coarse_n`.
     pub symbolic_seen_bytes: u64,
     /// `row_nnz` (pass 1), length `coarse_n`.
     pub symbolic_row_nnz_bytes: u64,
-    /// `seen` (pass 2), length `coarse_n`.
-    pub numeric_seen_bytes: u64,
     /// `pos` (pass 2), length `coarse_n`.
     pub numeric_pos_bytes: u64,
     /// `row_count` (pass 2), length `coarse_n`.
     pub numeric_row_count_bytes: u64,
-    /// `indptr`, length `coarse_n + 1`.
-    pub numeric_indptr_bytes: u64,
-    /// `cols`, length `nnz`.
-    pub numeric_cols_bytes: u64,
-    /// `vals`, length `nnz`.
-    pub numeric_vals_bytes: u64,
+    /// Cloned prolongation triplets used to construct the temporary CSR.
+    pub p_triplets_clone_bytes: u64,
     /// Prolongation `P_l` materialised as CSR.
     pub p_csr_bytes: u64,
     /// Prolongation transposed (`P_l` as CSC, i.e. the restriction `R_l`).
@@ -98,7 +88,8 @@ pub struct LevelMemory {
     pub level: usize,
     /// Number of nodes `n_l` on this level.
     pub nodes: usize,
-    /// Stored (non-zero) entries in this level's Laplacian `L_l`.
+    /// Structural entries in `L_l`, including boundary/ground effects.
+    /// Stencil entries are computed on demand and occupy zero matrix bytes.
     pub nnz: usize,
     /// Bytes of this level's Laplacian `L_l`.
     pub laplacian_bytes: u64,
@@ -116,19 +107,29 @@ pub struct LevelMemory {
     pub galerkin_scratch: GalerkinScratch,
 }
 
-/// Complete memory story of one solve, one field per data structure.
+/// Analytical solver payload profile. Hierarchy level 0 repeats the top-level
+/// matrix size; count it only once when calculating totals.
 #[derive(Serialize, Clone, Default, Debug)]
-pub struct MemoryStory {
-    // ---- assembly intermediates (freed once L is built) ----
+pub struct InstrumentationProfile {
+    // ---- assembly buffers (not a concurrent peak) ----
     /// Conductance grid `C = 1/R` (per cell).
     pub conductance_grid_bytes: u64,
     /// Cell-to-node map (per cell, `i32`).
     pub cell_to_node_map_bytes: u64,
     /// Edge triplets (symmetric conductance pairs).
     pub edge_triplets_bytes: u64,
+    pub assembly_row_sums_bytes: u64,
+    pub assembly_laplacian_triplets_bytes: u64,
+    /// Filled resistance copy used by the explicit solve.
+    pub filled_resistance_bytes: u64,
+    /// Ground construction buffers in the explicit solve (setup category).
+    pub ground_setup_bytes: u64,
+    /// Owned stencil ground shunts or mask; excludes the borrowed raster.
+    pub ground_storage_bytes: u64,
 
     // ---- fine graph Laplacian L (the system matrix) ----
     pub laplacian_nodes: usize,
+    /// Structural entry count; stencil entries occupy zero stored matrix bytes.
     pub laplacian_nnz: usize,
     pub laplacian_bytes: u64,
     /// How the fine Laplacian is represented: `"explicit"` (CSR) or
@@ -141,6 +142,13 @@ pub struct MemoryStory {
     // ---- coarsest-level direct solve ----
     /// Dense coarsest matrix built before factorisation (freed).
     pub coarse_dense_bytes: u64,
+    pub requested_cholesky_size: Option<usize>,
+    pub coarsest_nodes: usize,
+    pub cholesky_available: bool,
+    /// Temporary forward/back substitution outputs per direct solve.
+    pub cholesky_solve_scratch_bytes: u64,
+    /// CG/Jacobi buffers when direct factorization is unavailable.
+    pub coarse_fallback_scratch_bytes: u64,
 
     // ---- CG workspace vectors (persistent through the solve) ----
     /// Voltage `v`.
@@ -164,50 +172,50 @@ pub struct MemoryStory {
     pub cache_last_voltages_bytes: u64,
 }
 
-#[cfg(feature = "memory-story")]
+#[cfg(feature = "instrumentation-profile")]
 mod imp {
     use super::*;
     use std::cell::RefCell;
 
     thread_local! {
-        static STORY: RefCell<Option<MemoryStory>> = RefCell::new(None);
+        static PROFILE: RefCell<Option<InstrumentationProfile>> = RefCell::new(None);
     }
 
-    pub(super) fn with_story<F: FnOnce(&mut MemoryStory)>(f: F) {
-        STORY.with(|slot| {
+    pub(super) fn with_profile<F: FnOnce(&mut InstrumentationProfile)>(f: F) {
+        PROFILE.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.is_none() {
-                *slot = Some(MemoryStory::default());
+                *slot = Some(InstrumentationProfile::default());
             }
             f(slot.as_mut().unwrap());
         });
     }
 
     pub fn reset() {
-        STORY.with(|slot| *slot.borrow_mut() = None);
+        PROFILE.with(|slot| *slot.borrow_mut() = None);
     }
 
-    pub fn take() -> Option<MemoryStory> {
-        STORY.with(|slot| slot.borrow_mut().take())
+    pub fn take() -> Option<InstrumentationProfile> {
+        PROFILE.with(|slot| slot.borrow_mut().take())
     }
 }
 
-/// Clear the in-progress memory story. Call at the start of a solve so each
-/// run reports a fresh story.
+/// Clear the in-progress memory profile. Call at the start of a solve so each
+/// run reports a fresh profile.
 #[inline]
 pub fn reset() {
-    #[cfg(feature = "memory-story")]
+    #[cfg(feature = "instrumentation-profile")]
     imp::reset();
 }
 
-/// Take (and clear) the accumulated memory story, if the feature is enabled.
+/// Take (and clear) the accumulated memory profile, if the feature is enabled.
 #[inline]
-pub fn take_story() -> Option<MemoryStory> {
-    #[cfg(feature = "memory-story")]
+pub fn take_profile() -> Option<InstrumentationProfile> {
+    #[cfg(feature = "instrumentation-profile")]
     {
         imp::take()
     }
-    #[cfg(not(feature = "memory-story"))]
+    #[cfg(not(feature = "instrumentation-profile"))]
     {
         None
     }
@@ -218,50 +226,91 @@ pub fn take_story() -> Option<MemoryStory> {
 #[inline]
 #[allow(unused_variables)]
 pub fn record_conductance_grid(n_cells: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.conductance_grid_bytes = vec_f64_bytes(n_cells));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.conductance_grid_bytes = vec_f64_bytes(n_cells));
 }
 
 #[inline]
 #[allow(unused_variables)]
 pub fn record_cell_to_node_map(n_cells: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.cell_to_node_map_bytes = vec_i32_bytes(n_cells));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.cell_to_node_map_bytes = vec_i32_bytes(n_cells));
 }
 
 #[inline]
 #[allow(unused_variables)]
 pub fn record_edge_triplets(n_triplets: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.edge_triplets_bytes = triplets_bytes(n_triplets));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.edge_triplets_bytes = triplets_bytes(n_triplets));
 }
 
 // ---- fine Laplacian ----
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_fine_laplacian(a: &CsMat<f64>) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| {
-        s.laplacian_nodes = a.rows();
-        s.laplacian_nnz = a.nnz();
-        s.laplacian_bytes = csmat_bytes(a);
+pub fn record_fine_laplacian(laplacian: &CsMat<f64>) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| {
+        s.laplacian_nodes = laplacian.rows();
+        s.laplacian_nnz = laplacian.nnz();
+        s.laplacian_bytes = csmat_bytes(laplacian);
         s.operator_repr = "explicit".to_string();
     });
 }
 
-/// Record a matrix-free (stencil) fine Laplacian: nothing is stored, so
-/// `laplacian_bytes` is 0 and `nnz` is the logical 5-point count.
+/// Record stencil structure without claiming stored matrix entries or bytes.
 #[inline]
 #[allow(unused_variables)]
-pub fn record_stencil_fine(nodes: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| {
-        s.laplacian_nodes = nodes;
-        s.laplacian_nnz = 5 * nodes;
-        s.laplacian_bytes = 0;
-        s.operator_repr = "stencil".to_string();
+pub fn record_stencil_fine(operator: &crate::linalg::operator::StencilOperator<'_>) {
+    #[cfg(feature = "instrumentation-profile")]
+    {
+        use crate::linalg::operator::Operator;
+        let mut entries = 0;
+        for row in 0..operator.n() {
+            operator.for_each_entry(row, &mut |_, _| entries += 1);
+        }
+        imp::with_profile(|profile| {
+            profile.laplacian_nodes = operator.n();
+            profile.laplacian_nnz = entries;
+            profile.laplacian_bytes = 0;
+            profile.ground_storage_bytes = operator.ground_storage_bytes();
+            profile.operator_repr = "stencil".to_string();
+        });
+    }
+}
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_fine_operator(operator: &crate::linalg::operator::FineOperator<'_>) {
+    #[cfg(feature = "instrumentation-profile")]
+    match operator {
+        crate::linalg::operator::FineOperator::Explicit(matrix) => record_fine_laplacian(matrix),
+        crate::linalg::operator::FineOperator::Stencil(stencil) => record_stencil_fine(stencil),
+    }
+}
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_assembly_scratch(nodes: usize, entries: usize) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        profile.assembly_row_sums_bytes = vec_f64_bytes(nodes);
+        profile.assembly_laplacian_triplets_bytes = triplets_bytes(entries);
     });
+}
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_filled_resistance(cells: usize) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| profile.filled_resistance_bytes = vec_f64_bytes(cells));
+}
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_ground_setup(bytes: u64) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| profile.ground_setup_bytes = bytes);
 }
 
 // ---- hierarchy ----
@@ -277,8 +326,8 @@ pub fn record_level(
     cholesky_factor_bytes: u64,
     galerkin_scratch: GalerkinScratch,
 ) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| {
         let workspace = vec_f64_bytes(nodes);
         s.hierarchy.push(LevelMemory {
             level,
@@ -295,13 +344,50 @@ pub fn record_level(
     });
 }
 
+/// Include fine-grid scratch vectors even when its matrix is a stencil.
+#[inline]
+#[allow(unused_variables)]
+pub fn record_fine_level(cholesky_factor_bytes: u64) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        let workspace = vec_f64_bytes(profile.laplacian_nodes);
+        profile.hierarchy.push(LevelMemory {
+            level: 0,
+            nodes: profile.laplacian_nodes,
+            nnz: profile.laplacian_nnz,
+            laplacian_bytes: profile.laplacian_bytes,
+            cholesky_factor_bytes,
+            workspace_e_bytes: workspace,
+            workspace_d_bytes: workspace,
+            workspace_d_prime_bytes: workspace,
+            ..LevelMemory::default()
+        });
+    });
+}
+
 // ---- coarsest direct solve ----
 
 #[inline]
 #[allow(unused_variables)]
+pub fn record_coarsest(nodes: usize, requested: Option<usize>, cholesky_available: bool) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        profile.coarsest_nodes = nodes;
+        profile.requested_cholesky_size = requested;
+        profile.cholesky_available = cholesky_available;
+        if cholesky_available {
+            profile.cholesky_solve_scratch_bytes = 2 * vec_f64_bytes(nodes);
+        } else {
+            profile.coarse_fallback_scratch_bytes = 6 * vec_f64_bytes(nodes);
+        }
+    });
+}
+
+#[inline]
+#[allow(unused_variables)]
 pub fn record_coarse_dense(n: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.coarse_dense_bytes = dense_bytes(n));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.coarse_dense_bytes = dense_bytes(n));
 }
 
 // ---- CG vectors ----
@@ -309,8 +395,8 @@ pub fn record_coarse_dense(n: usize) {
 #[inline]
 #[allow(unused_variables)]
 pub fn record_cg_vectors(n: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| {
         let bytes = vec_f64_bytes(n);
         s.voltage_v_bytes = bytes;
         s.residual_r_bytes = bytes;
@@ -324,8 +410,8 @@ pub fn record_cg_vectors(n: usize) {
 #[inline]
 #[allow(unused_variables)]
 pub fn record_jacobi_diag(n: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.jacobi_diag_bytes = vec_f64_bytes(n));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.jacobi_diag_bytes = vec_f64_bytes(n));
 }
 
 // ---- cache ----
@@ -333,22 +419,22 @@ pub fn record_jacobi_diag(n: usize) {
 #[inline]
 #[allow(unused_variables)]
 pub fn record_cache_laplacian(a: &CsMat<f64>) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.cache_laplacian_bytes = csmat_bytes(a));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.cache_laplacian_bytes = csmat_bytes(a));
 }
 
 #[inline]
 #[allow(unused_variables)]
 pub fn record_cache_cell_to_node(n_cells: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.cache_cell_to_node_bytes = vec_i32_bytes(n_cells));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.cache_cell_to_node_bytes = vec_i32_bytes(n_cells));
 }
 
 #[inline]
 #[allow(unused_variables)]
 pub fn record_cache_last_voltages(n: usize) {
-    #[cfg(feature = "memory-story")]
-    imp::with_story(|s| s.cache_last_voltages_bytes = vec_f64_bytes(n));
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.cache_last_voltages_bytes = vec_f64_bytes(n));
 }
 
 #[cfg(test)]
@@ -388,13 +474,19 @@ mod tests {
     }
 
     #[test]
-    fn test_take_story_none_by_default() {
+    fn test_take_profile_none_by_default() {
         // A fresh thread (no records) should return None.
         reset();
-        assert!(take_story().is_none());
+        assert!(take_profile().is_none());
+        #[cfg(not(feature = "instrumentation-profile"))]
+        {
+            record_cg_vectors(3);
+            record_fine_laplacian(&small_csmat());
+            assert!(take_profile().is_none(), "disabled recording must be a no-op");
+        }
     }
 
-    #[cfg(feature = "memory-story")]
+    #[cfg(feature = "instrumentation-profile")]
     #[test]
     fn test_record_accumulates() {
         reset();
@@ -403,24 +495,24 @@ mod tests {
         let a = small_csmat();
         record_fine_laplacian(&a);
 
-        let story = take_story().expect("feature enabled -> story present");
-        assert_eq!(story.conductance_grid_bytes, vec_f64_bytes(100));
-        assert_eq!(story.cell_to_node_map_bytes, vec_i32_bytes(100));
-        assert_eq!(story.laplacian_nodes, 3);
-        assert_eq!(story.laplacian_nnz, 5);
-        assert_eq!(story.laplacian_bytes, csmat_bytes(&a));
+        let profile = take_profile().expect("feature enabled -> profile present");
+        assert_eq!(profile.conductance_grid_bytes, vec_f64_bytes(100));
+        assert_eq!(profile.cell_to_node_map_bytes, vec_i32_bytes(100));
+        assert_eq!(profile.laplacian_nodes, 3);
+        assert_eq!(profile.laplacian_nnz, 5);
+        assert_eq!(profile.laplacian_bytes, csmat_bytes(&a));
 
-        // take() clears the story
-        assert!(take_story().is_none());
+        // take() clears the profile
+        assert!(take_profile().is_none());
     }
 
-    #[cfg(feature = "memory-story")]
+    #[cfg(feature = "instrumentation-profile")]
     #[test]
     fn test_record_level_workspace_sizing() {
         reset();
         record_level(1, 64, 9, 1000, 500, 0, GalerkinScratch::default());
-        let story = take_story().unwrap();
-        let lvl = &story.hierarchy[0];
+        let profile = take_profile().unwrap();
+        let lvl = &profile.hierarchy[0];
         assert_eq!(lvl.level, 1);
         assert_eq!(lvl.nodes, 64);
         assert_eq!(lvl.workspace_e_bytes, vec_f64_bytes(64));
@@ -428,25 +520,40 @@ mod tests {
         assert_eq!(lvl.workspace_d_prime_bytes, vec_f64_bytes(64));
     }
 
-    #[cfg(feature = "memory-story")]
+    #[cfg(feature = "instrumentation-profile")]
     #[test]
     fn test_record_stencil_fine_zero_bytes() {
         reset();
-        record_stencil_fine(100);
-        let story = take_story().unwrap();
-        assert_eq!(story.operator_repr, "stencil");
-        assert_eq!(story.laplacian_nodes, 100);
-        assert_eq!(story.laplacian_nnz, 5 * 100);
-        assert_eq!(story.laplacian_bytes, 0);
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let resistance = vec![1.0; 100];
+        let mut mask = vec![false; 100];
+        mask[0] = true;
+        let operator = StencilOperator::new(10, 10, -9999.0, &resistance,
+            GroundSpec::Dirichlet(mask));
+        record_stencil_fine(&operator);
+        record_fine_level(0);
+        let profile = take_profile().unwrap();
+        assert_eq!(profile.operator_repr, "stencil");
+        assert_eq!(profile.laplacian_nodes, 100);
+        // 100 diagonal entries + 360 directed edges - 4 edges touching ground.
+        assert_eq!(profile.laplacian_nnz, 456);
+        assert_eq!(profile.laplacian_bytes, 0);
+        assert_eq!(profile.ground_storage_bytes, 100);
+        assert_eq!(profile.hierarchy[0].level, 0);
+        assert_eq!(profile.hierarchy[0].laplacian_bytes, 0);
+        assert_eq!(profile.hierarchy[0].workspace_e_bytes, 800);
     }
 
-    #[cfg(feature = "memory-story")]
+    #[cfg(feature = "instrumentation-profile")]
     #[test]
     fn test_record_fine_laplacian_explicit_repr() {
         reset();
         let a = small_csmat();
         record_fine_laplacian(&a);
-        let story = take_story().unwrap();
-        assert_eq!(story.operator_repr, "explicit");
+        record_fine_level(0);
+        let profile = take_profile().unwrap();
+        assert_eq!(profile.operator_repr, "explicit");
+        assert_eq!(profile.hierarchy[0].level, 0);
+        assert_eq!(profile.hierarchy[0].laplacian_bytes, csmat_bytes(&a));
     }
 }

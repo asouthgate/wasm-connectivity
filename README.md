@@ -21,3 +21,22 @@ To build the optional profiling dependencies, see (or run) `scripts/profile-mem.
 ```
 make serve
 ```
+
+## Manual Instrumentation
+
+The optional `instrumentation-profile` feature records analytical payload sizes
+for specific solver buffers for optimisation purposes. 
+Then use the plotter for visualisation.
+
+
+```sh
+cargo run --profile release-prof --features bin,instrumentation-profile \
+  --bin instrumentation-profile -- 500 --solver all --ground all > profile.jsonl
+python3 tests/scripts/plot_instrumentation_profile.py profile.jsonl
+```
+
+To plot benchmarking results:
+
+```sh
+python3 tests/scripts/plot_benchmark.py benchmark.csv
+```

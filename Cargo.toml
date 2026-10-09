@@ -20,7 +20,7 @@ image = { version = "0.24", default-features = false, features = ["png"], option
 
 [features]
 bin = ["tiff", "image"]
-memory-story = []
+instrumentation-profile = []
 
 [[bin]]
 name = "resistance-pipeline"
@@ -33,9 +33,9 @@ path = "src/bin/prof_solve.rs"
 required-features = ["bin"]
 
 [[bin]]
-name = "mem-story"
-path = "src/bin/mem_story.rs"
-required-features = ["bin", "memory-story"]
+name = "instrumentation-profile"
+path = "src/bin/instrumentation_profile.rs"
+required-features = ["bin", "instrumentation-profile"]
 
 [[bin]]
 name = "roost-locate"

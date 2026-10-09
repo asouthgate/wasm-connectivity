@@ -2,7 +2,7 @@ use sprs::CsMat;
 use serde::Serialize;
 use std::collections::HashSet;
 use crate::linalg::pcg as solver;
-use crate::linalg::multigrid::MgPreconditioner;
+use crate::linalg::multigrid::{MgOptions, MgPreconditioner};
 use crate::linalg::operator::{FineOperator, GroundSpec, StencilOperator};
 use crate::memory;
 
@@ -46,7 +46,7 @@ fn collect_ground_nodes(
 /// Apply Dirichlet BC (V=0) at ground nodes.
 /// Returns a new Laplacian with ground-node rows replaced by identity
 /// and ground-node columns removed from non-ground rows.
-/// Also zeros b at ground entries.
+/// The caller must also zero the source vector at ground entries.
 pub(crate) fn apply_dirichlet_ground_lap(
     laplacian: &CsMat<f64>,
     ground_nodes: &[usize],
@@ -79,11 +79,11 @@ pub(crate) fn apply_dirichlet_ground_lap(
     sprs::TriMat::from_triplets((n, n), rows, cols, vals).to_csr()
 }
 
-/// Zero out b entries at ground node positions.
-pub(crate) fn zero_ground_rhs(b: &mut [f64], ground_nodes: &[usize]) {
+/// Zero out source entries at ground node positions.
+pub(crate) fn zero_ground_rhs(s: &mut [f64], ground_nodes: &[usize]) {
     for &gn in ground_nodes {
-        if gn < b.len() {
-            b[gn] = 0.0;
+        if gn < s.len() {
+            s[gn] = 0.0;
         }
     }
 }
@@ -138,43 +138,45 @@ pub fn solve_raster_cached(
 ) -> AnnotatedOutput<RasterOutput> {
     memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
+    memory::record_filled_resistance(filled.len());
 
     let (laplacian, cell_to_node, num_nodes, prior_voltages) =
         obtain_circuit(&filled, nrows, ncols, nodata, rebuild_laplacian);
-
-    let ground_nodes = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
-
+    memory::record_cell_to_node_map(cell_to_node.len());
     let current_global = build_global_currents(
         &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
     );
 
     let grounds_present;
-    let (a, mut s) = match ground_mode {
+    let (laplacian, mut s) = match ground_mode {
         GroundMode::Neumann => {
             let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
             grounds_present = g.iter().any(|&x| x > 0.0);
-            let a = if grounds_present {
+            let laplacian = if grounds_present {
                 crate::circuit::laplacian::add_diagonal(&laplacian, &g)
             } else {
                 laplacian
             };
-            (a, current_global)
+            (laplacian, current_global)
         }
         GroundMode::Dirichlet => {
-            let gns = ground_nodes;
+            let gns = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
+            memory::record_ground_setup(memory::vec_usize_bytes(gns.len()));
             grounds_present = !gns.is_empty();
-            let a = if grounds_present {
+            let laplacian = if grounds_present {
                 apply_dirichlet_ground_lap(&laplacian, &gns)
             } else {
                 laplacian
             };
             let mut s = current_global;
             zero_ground_rhs(&mut s, &gns);
-            (a, s)
+            (laplacian, s)
         }
     };
 
-    // Mean removal is only needed for singular (ground-free) systems.
+    // Balance source injection for ground-free systems; numerical regularization
+    // independently supplies a potential reference.
     if remove_average && !grounds_present {
         let sum: f64 = s.iter().sum();
         if sum.abs() > 1e-15 {
@@ -185,11 +187,12 @@ pub fn solve_raster_cached(
         }
     }
 
-    memory::record_fine_laplacian(&a);
+    memory::record_fine_laplacian(&laplacian);
     memory::record_cg_vectors(num_nodes);
 
     let prior_seed = prior_voltages.as_deref().filter(|v| v.len() == num_nodes);
-    let res = solver::cg_solve(&a, &s, max_iter, tol, prior_seed);
+    memory::record_jacobi_diag(num_nodes);
+    let res = solver::cg_solve(&laplacian, &s, max_iter, tol, prior_seed);
 
     let out = build_raster_output(
         &res.v, resistance_data, ground_data,
@@ -236,7 +239,8 @@ fn obtain_circuit(
     }
 
     // Rebuild path, or no-rebuild path with a stale/missing cache.
-    let (cell_to_node, num_nodes, _edges, laplacian) =
+    // Discard assembly edges once the CSR matrix has been built.
+    let (cell_to_node, num_nodes, _, laplacian) =
         crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
     cache::store(
         laplacian.clone(), cell_to_node.clone(), num_nodes,
@@ -324,54 +328,92 @@ pub fn solve_raster_sources_mg(
     remove_average: bool,
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
+    solve_raster_sources_mg_with_options(
+        resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        source_data,
+        ground_data,
+        max_iter,
+        tol,
+        remove_average,
+        ground_mode,
+        MgOptions::default(),
+    )
+}
+
+/// Native variant accepting multigrid setup controls; browser calls use defaults.
+pub fn solve_raster_sources_mg_with_options(
+    resistance_data: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    remove_average: bool,
+    ground_mode: GroundMode,
+    options: MgOptions,
+) -> AnnotatedOutput<RasterOutput> {
     // Fill nodata → every cell is a node → rectangular grid
     memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
+    memory::record_filled_resistance(filled.len());
 
-    let (cell_to_node, num_nodes, _edges, laplacian) =
+    // Discard assembly edges once the CSR matrix has been built.
+    let (cell_to_node, num_nodes, _, laplacian) =
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
 
-    let current_global = build_global_currents(
-        &cell_to_node, num_nodes, nrows, ncols, nodata, source_data,
-    );
+    let current_global =
+        build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
 
     // Declare the system matrix up front, then run the whole algorithm on
     // it. Neumann adds finite ground conductances to the diagonal; Dirichlet
     // pins ground nodes at V=0. The MG hierarchy is built from the same
     // matrix, so Galerkin coarsening propagates ground effects to all levels.
     let grounds_present;
-    let (a, mut s) = match ground_mode {
+    let (laplacian, mut s) = match ground_mode {
         GroundMode::Neumann => {
-            let g = build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            let g =
+                build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+            memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
             grounds_present = g.iter().any(|&x| x > 0.0);
-            let a = if grounds_present {
+            let laplacian = if grounds_present {
                 crate::circuit::laplacian::add_diagonal(&laplacian, &g)
             } else {
                 laplacian
             };
-            (a, current_global)
+            (laplacian, current_global)
         }
         GroundMode::Dirichlet => {
             let gns = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
+            memory::record_ground_setup(memory::vec_usize_bytes(gns.len()));
             grounds_present = !gns.is_empty();
-            let a = if grounds_present {
+            let laplacian = if grounds_present {
                 apply_dirichlet_ground_lap(&laplacian, &gns)
             } else {
                 laplacian
             };
             let mut s = current_global;
             zero_ground_rhs(&mut s, &gns);
-            (a, s)
+            (laplacian, s)
         }
     };
 
-    memory::record_fine_laplacian(&a);
+    memory::record_fine_laplacian(&laplacian);
     memory::record_cg_vectors(num_nodes);
 
-    let mg = MgPreconditioner::build_from_operator(FineOperator::Explicit(a), nrows, ncols, 8);
+    let mg = MgPreconditioner::build_with_options(
+        FineOperator::Explicit(laplacian),
+        nrows,
+        ncols,
+        options,
+    );
 
-    // Mean removal is only needed for singular (ground-free) systems; with
-    // grounds the system is anchored and Julia solves b as-is.
+    // Balance source injection when there are no physical grounds. Numerical
+    // regularization supplies a reference independently of this source policy.
     if remove_average && !grounds_present {
         let sum: f64 = s.iter().sum();
         if sum.abs() > 1e-15 {
@@ -384,11 +426,20 @@ pub fn solve_raster_sources_mg(
     let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, None, &mg);
 
     let out = build_raster_output(
-        &res.v, resistance_data, ground_data,
-        &cell_to_node, nrows, ncols, nodata, ground_mode,
+        &res.v,
+        resistance_data,
+        ground_data,
+        &cell_to_node,
+        nrows,
+        ncols,
+        nodata,
+        ground_mode,
     );
 
-    AnnotatedOutput { output: out, total_iters: res.iters }
+    AnnotatedOutput {
+        output: out,
+        total_iters: res.iters,
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -424,9 +475,9 @@ fn build_dirichlet_mask_identity(ground_data: &[f64], nodata: f64) -> Vec<bool> 
     ground_data.iter().map(|&gv| valid_ground_value(gv, nodata)).collect()
 }
 
-/// Matrix-free (low-memory) MG solve: the fine Laplacian is a stencil over
-/// the input resistance raster and is never materialised. The coarse hierarchy
-/// is materialised as usual.
+/// Matrix-free (low-memory) MG solve: the retained fine Laplacian is a stencil
+/// over the input resistance raster. The coarse hierarchy is materialised as
+/// usual; an uncoarsened small system can use a temporary dense direct solve.
 pub fn solve_raster_sources_mg_stencil(
     resistance_data: &[f64],
     nrows: usize,
@@ -438,6 +489,35 @@ pub fn solve_raster_sources_mg_stencil(
     tol: f64,
     remove_average: bool,
     ground_mode: GroundMode,
+) -> AnnotatedOutput<RasterOutput> {
+    solve_raster_sources_mg_stencil_with_options(
+        resistance_data,
+        nrows,
+        ncols,
+        nodata,
+        source_data,
+        ground_data,
+        max_iter,
+        tol,
+        remove_average,
+        ground_mode,
+        MgOptions::default(),
+    )
+}
+
+/// Native variant accepting multigrid setup controls; browser calls use defaults.
+pub fn solve_raster_sources_mg_stencil_with_options(
+    resistance_data: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    max_iter: usize,
+    tol: f64,
+    remove_average: bool,
+    ground_mode: GroundMode,
+    options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
     memory::reset();
     let num_nodes = nrows * ncols;
@@ -464,7 +544,8 @@ pub fn solve_raster_sources_mg_stencil(
         }
     };
 
-    // Mean removal is only needed for singular (ground-free) systems.
+    // Balance source injection for ground-free systems; numerical regularization
+    // independently supplies a potential reference.
     if remove_average && !grounds_present {
         let sum: f64 = s.iter().sum();
         if sum.abs() > 1e-15 {
@@ -477,17 +558,25 @@ pub fn solve_raster_sources_mg_stencil(
 
     let op = StencilOperator::new(nrows, ncols, nodata, resistance_data, ground_spec);
 
-    memory::record_stencil_fine(num_nodes);
     memory::record_cg_vectors(num_nodes);
 
-    let mg = MgPreconditioner::build_from_operator(FineOperator::Stencil(op), nrows, ncols, 8);
+    let mg = MgPreconditioner::build_with_options(FineOperator::Stencil(op), nrows, ncols, options);
     let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, None, &mg);
 
     let out = build_raster_output_identity(
-        &res.v, resistance_data, ground_data, nrows, ncols, nodata, ground_mode,
+        &res.v,
+        resistance_data,
+        ground_data,
+        nrows,
+        ncols,
+        nodata,
+        ground_mode,
     );
 
-    AnnotatedOutput { output: out, total_iters: res.iters }
+    AnnotatedOutput {
+        output: out,
+        total_iters: res.iters,
+    }
 }
 
 /// Raster output for the full-grid (identity mapping) case: the voltage field
@@ -562,6 +651,118 @@ mod tests {
             gnd[row * size + (size - 1)] = 1.0;
         }
         (res, src, gnd)
+    }
+
+    #[test]
+    fn stencil_solve_matches_explicit_outputs() {
+        for (nrows, ncols) in [(3, 5), (15, 17), (16, 16)] {
+            let n = nrows * ncols;
+            let nodata = crate::NODATA_SENTINEL;
+            let mut resistance: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64).collect();
+            resistance[ncols + 1] = nodata;
+            resistance[ncols + 2] = f64::NAN;
+            resistance[ncols + 3] = 0.0;
+            let mut source = vec![0.0; n];
+            let mut ground = vec![0.0; n];
+            for row in 0..nrows {
+                source[row * ncols] = 1.0;
+                ground[row * ncols + ncols - 1] = 2.0;
+            }
+            ground[0] = 1.0; // Also exercise a pinned regularization node.
+            for mode in [GroundMode::Neumann, GroundMode::Dirichlet] {
+                for grounded in [true, false] {
+                    let grounds = if grounded {
+                        ground.clone()
+                    } else {
+                        vec![0.0; n]
+                    };
+                    let explicit = solve_raster_sources_mg(
+                        &resistance,
+                        nrows,
+                        ncols,
+                        nodata,
+                        &source,
+                        &grounds,
+                        5000,
+                        1e-9,
+                        true,
+                        mode,
+                    );
+                    let stencil = solve_raster_sources_mg_stencil(
+                        &resistance,
+                        nrows,
+                        ncols,
+                        nodata,
+                        &source,
+                        &grounds,
+                        5000,
+                        1e-9,
+                        true,
+                        mode,
+                    );
+                    assert!(explicit.total_iters < 5000 && stencil.total_iters < 5000);
+                    let spec = match mode {
+                        GroundMode::Neumann => GroundSpec::Neumann(grounds.clone()),
+                        GroundMode::Dirichlet => GroundSpec::Dirichlet(
+                            grounds.iter().map(|&value| value > 0.0).collect(),
+                        ),
+                    };
+                    let operator = StencilOperator::new(nrows, ncols, nodata, &resistance, spec);
+                    let mut rhs = source.clone();
+                    if mode == GroundMode::Dirichlet {
+                        for (value, &ground) in rhs.iter_mut().zip(&grounds) {
+                            if ground > 0.0 {
+                                *value = 0.0;
+                            }
+                        }
+                    }
+                    if !grounded {
+                        let mean = rhs.iter().sum::<f64>() / n as f64;
+                        for value in &mut rhs {
+                            *value -= mean;
+                        }
+                    }
+                    let mut product = vec![0.0; n];
+                    crate::linalg::operator::Operator::matvec(
+                        &operator,
+                        &stencil.output.voltages,
+                        &mut product,
+                    );
+                    let error = product
+                        .iter()
+                        .zip(&rhs)
+                        .map(|(&value, &source)| (value - source).powi(2))
+                        .sum::<f64>()
+                        .sqrt();
+                    let norm = rhs.iter().map(|value| value * value).sum::<f64>().sqrt();
+                    assert!(
+                        error / norm < 1e-7,
+                        "true relative residual: {}",
+                        error / norm
+                    );
+                    for (label, left, right) in [
+                        (
+                            "voltage",
+                            &explicit.output.voltages,
+                            &stencil.output.voltages,
+                        ),
+                        (
+                            "current",
+                            &explicit.output.current_map,
+                            &stencil.output.current_map,
+                        ),
+                    ] {
+                        for (&a, &b) in left.iter().zip(right) {
+                            assert!(a.is_finite() && b.is_finite());
+                            assert!(
+                                (a - b).abs() <= 1e-5 * (1.0 + a.abs()),
+                                "{nrows}x{ncols} {mode:?} grounded={grounded} {label}: {a} vs {b}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

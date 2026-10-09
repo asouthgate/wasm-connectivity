@@ -10,16 +10,18 @@
 //! The default (explicit) path uses a `CsMat<f64>` directly, which implements
 //! [`Operator`]. [`StencilOperator`] borrows the input resistance raster and
 //! reconstructs the 5-point Laplacian row by row from
-//! `conductance(i, j) = 2 / (r_i + r_j)`, so the fine Laplacian and its
+//! `conductance(i, j) = 2 / (r_i + r_j)`, avoiding a fine CSR matrix and its
 //! construction intermediates (conductance grid, cell-to-node map, edge
-//! triplets) are never materialised.
+//! triplets). An uncoarsened small system may use a temporary dense matrix
+//! for direct factorization; the retained operator remains a stencil.
 
 use sprs::CsMat;
 
 /// Ground boundary conditions, declared in terms of the full grid (one entry
 /// per node, node index == flat cell index).
 pub enum GroundSpec {
-    /// No grounds: the system is singular unless `remove_average` is used.
+    /// No physical grounds. The usual numerical regularization is retained;
+    /// the solver may separately remove the source mean to balance injection.
     None,
     /// Conductance-to-ground (Neumann): `shunt[i]` is added to `L[i,i]`.
     Neumann(Vec<f64>),
@@ -41,16 +43,6 @@ pub trait Operator {
     /// Invoke `f(col, val)` for every stored entry of row `row` (diagonal and
     /// off-diagonal). For a stencil these are computed on the fly.
     fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64));
-
-    /// Logical stored-entry count (for memory reporting). For a stencil this
-    /// is the 5-point count even though nothing is stored.
-    fn nnz(&self) -> usize;
-
-    /// Bytes of the stored operator. Zero for the matrix-free stencil.
-    fn bytes(&self) -> u64;
-
-    /// Short representation name for reporting: `"explicit"` or `"stencil"`.
-    fn repr(&self) -> &'static str;
 }
 
 /// The explicit CSR Laplacian implements the operator directly.
@@ -73,18 +65,6 @@ impl Operator for CsMat<f64> {
                 f(col, val);
             }
         }
-    }
-
-    fn nnz(&self) -> usize {
-        CsMat::nnz(self)
-    }
-
-    fn bytes(&self) -> u64 {
-        crate::memory::csmat_bytes(self)
-    }
-
-    fn repr(&self) -> &'static str {
-        "explicit"
     }
 }
 
@@ -130,7 +110,13 @@ impl<'a> StencilOperator<'a> {
         resistance: &'a [f64],
         ground: GroundSpec,
     ) -> Self {
-        debug_assert_eq!(resistance.len(), nrows * ncols);
+        assert!(nrows > 0 && ncols > 0, "Stencil requires nonempty dimensions");
+        assert_eq!(resistance.len(), nrows * ncols);
+        match &ground {
+            GroundSpec::None => {},
+            GroundSpec::Neumann(shunt) => assert_eq!(shunt.len(), resistance.len()),
+            GroundSpec::Dirichlet(mask) => assert_eq!(mask.len(), resistance.len()),
+        }
         let reg_diag0 = compute_reg_diag0(nrows, ncols, nodata, resistance);
         Self {
             nrows,
@@ -139,6 +125,15 @@ impl<'a> StencilOperator<'a> {
             resistance,
             ground,
             reg_diag0,
+        }
+    }
+
+    #[cfg(feature = "instrumentation-profile")]
+    pub(crate) fn ground_storage_bytes(&self) -> u64 {
+        match &self.ground {
+            GroundSpec::None => 0,
+            GroundSpec::Neumann(shunt) => std::mem::size_of_val(shunt.as_slice()) as u64,
+            GroundSpec::Dirichlet(mask) => std::mem::size_of_val(mask.as_slice()) as u64,
         }
     }
 
@@ -328,18 +323,6 @@ impl<'a> Operator for StencilOperator<'a> {
         }
         f(row, d);
     }
-
-    fn nnz(&self) -> usize {
-        5 * self.n()
-    }
-
-    fn bytes(&self) -> u64 {
-        0
-    }
-
-    fn repr(&self) -> &'static str {
-        "stencil"
-    }
 }
 
 /// Recompute the `1e-5 * ||L||` regularization that
@@ -417,27 +400,6 @@ impl<'a> Operator for FineOperator<'a> {
         match self {
             FineOperator::Explicit(m) => m.for_each_entry(row, f),
             FineOperator::Stencil(s) => s.for_each_entry(row, f),
-        }
-    }
-
-    fn nnz(&self) -> usize {
-        match self {
-            FineOperator::Explicit(m) => m.nnz(),
-            FineOperator::Stencil(s) => s.nnz(),
-        }
-    }
-
-    fn bytes(&self) -> u64 {
-        match self {
-            FineOperator::Explicit(m) => m.bytes(),
-            FineOperator::Stencil(s) => s.bytes(),
-        }
-    }
-
-    fn repr(&self) -> &'static str {
-        match self {
-            FineOperator::Explicit(m) => m.repr(),
-            FineOperator::Stencil(s) => s.repr(),
         }
     }
 }
