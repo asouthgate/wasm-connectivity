@@ -30,14 +30,15 @@
 \begin{abstract}
 Circuit theory has been successfully applied to ecological connectivity modelling, 
 notably via the Circuitscape \cite{mcrae2007circuit} software, 
-which is typically run locally on a laptop or via a server. 
+which is typically run locally on a laptop or remotely on a server. 
 For downstream geospatial web applications relying on connectivity analysis, 
 backend infrastructure is required, which can be costly and require advanced data governance. 
 Recent developments in WebAssembly (Wasm) now allow fast \Cpp{} or 
 Rust code to be run directly in a sandboxed browser environment for edge computing. 
-We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient implementation of connectivity analysis. 
-This approach may be useful for geospatial modelling software where rasters and 
-memory footprint are small enough for the browser context. 
+We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient,
+memory-optimised implementation of connectivity analysis. 
+This approach may be useful for geospatial modelling software where raster sizes and 
+memory are constrained, such as in the browser context. 
 Our approach has the potential to reduce backend operational complexity, resource requirements, and overall cost.
 \end{abstract}
 
@@ -279,9 +280,8 @@ the browser context where memory constraints can be more important.
 
 The first optimisation we make is to take a hybdrid approach to stencils and explicit
 sparse matrix storage. This strategy depends on the operator that is used. 
-
-For the fine matrix, we use a stencil representation in order
-to avoid storing the whole fine matrix. During the V-cycle, it may be expected that each
+For the 5-point bilinear transfer operator fine matrix, we use a stencil representation in order
+to avoid storage. During the V-cycle, it may be expected that each
 coarse matrix geometrically reduces in size. 
 However, this is complicated by an increased proportion of non-zero elements 
 (`fill-in', which also occurs in AMG, see \cite{livne2012lean}),
@@ -292,7 +292,8 @@ non-zero elements in both cases.
 
 For memory optimisation, we found that the plain MG hierarchy consumed more memory than expected
 due to fill-in, as shown in Appendix Figure \ref{fig:nnz}. This motivated a hybrid approach, where
-only the coarse matrices from level 2 onward were stored.
+only the coarse matrices from level 2 onward were stored. For level 0 and level 1, stencils are used
+for lazy evaluation of operators. 
 
 \subsection{Example datasets and resistance map calculation}
 
@@ -339,7 +340,10 @@ This code contains several simple examples. All results can be easily reproduced
 Figure \ref{fig:wasm-connectivity} gives an example of a $1000\times1000$ resistance input and current map output
 rendered in a frontend using raster source mode (referred to as advanced mode in Circuitscape) for the test region.
 Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. As shown,
-the CG MG preconditioner was much faster than Jacobi preconditioning, while taking modestly more memory.
+the CG MG preconditioner was much faster than Jacobi preconditioning, while taking modestly more memory. 
+For the low-memory mode, run-time increased modestly for a large ($>2\times$) reduction in memory.
+For the browser context, this trade-off can enable workloads not practically possible otherwise,
+such as for high-resolution LIDAR data.
 
 \begin{figure}[htb!]
 \centering
