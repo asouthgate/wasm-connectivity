@@ -583,7 +583,7 @@ impl<'a> MgPreconditioner<'a> {
                     cholesky_bytes,
                     scratch,
                 );
-                memory::record_level_representation(k + 1, repr);
+                memory::set_level_operator_representation(k + 1, repr);
             }
         }
 
@@ -629,7 +629,13 @@ impl<'a> MgPreconditioner<'a> {
                 } else {
                     0
                 };
-                memory::record_level_runtime(level, repr, diag_bytes, omega, matvec_bytes);
+                memory::set_level_smoother_and_operator_scratch(
+                    level,
+                    repr,
+                    diag_bytes,
+                    omega,
+                    matvec_bytes,
+                );
             }
             workspaces.push(LevelWorkspace {
                 e: vec![0.0; n],

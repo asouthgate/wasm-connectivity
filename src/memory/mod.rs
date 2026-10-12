@@ -97,7 +97,8 @@ pub struct LevelMemory {
     pub workspace_d_prime_bytes: u64,
     /// Cached inverse diagonal for weighted Jacobi (nonterminal levels only).
     pub smoother_diag_bytes: u64,
-    /// `weighted-jacobi`, `symmetric-gauss-seidel`, or `none` at the terminal level.
+    /// Reported smoother: `weighted-jacobi`, `symmetric-gauss-seidel`, or
+    /// `none` when no smoothing is used.
     pub smoother_repr: String,
     /// Effective damping after the Jacobi stability bound, if smoothing is used.
     pub smoother_omega: Option<f64>,
@@ -177,10 +178,13 @@ mod imp {
     use super::*;
     use std::cell::RefCell;
 
+    // Each thread owns an independent profile so concurrent solves do not
+    // overwrite one another's instrumentation.
     thread_local! {
         static PROFILE: RefCell<Option<InstrumentationProfile>> = RefCell::new(None);
     }
 
+    // Closure-based access keeps the mutable RefCell borrow within this update.
     pub(super) fn with_profile<F: FnOnce(&mut InstrumentationProfile)>(f: F) {
         PROFILE.with(|slot| {
             let mut slot = slot.borrow_mut();
@@ -371,7 +375,7 @@ pub fn record_fine_level(cholesky_factor_bytes: u64) {
 /// Set the representation of a previously recorded hierarchy level.
 #[inline]
 #[allow(unused_variables)]
-pub fn record_level_representation(level: usize, representation: &str) {
+pub fn set_level_operator_representation(level: usize, representation: &str) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|profile| {
         if let Some(entry) = profile
@@ -384,11 +388,11 @@ pub fn record_level_representation(level: usize, representation: &str) {
     });
 }
 
-/// Record persistent smoother and matrix-free operator buffers separately
+/// Set persistent smoother and matrix-free operator buffer details separately
 /// from the temporary setup allocations in GalerkinScratch.
 #[inline]
 #[allow(unused_variables)]
-pub fn record_level_runtime(
+pub fn set_level_smoother_and_operator_scratch(
     level: usize,
     smoother: &str,
     diag_bytes: u64,

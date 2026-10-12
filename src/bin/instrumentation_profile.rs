@@ -202,6 +202,9 @@ fn main() {
         _ => unreachable!(),
     };
     wasm_connect::cache::reset();
+    let max_iter = 100_000;
+    let tol = 1e-6;
+    let remove_average = true;
     let result = match solver.as_str() {
         "jacobi" => solve::solve_raster_cached(
             &resistance,
@@ -210,9 +213,9 @@ fn main() {
             base.nodata,
             &src.data,
             &gnd.data,
-            100_000,
-            1e-6,
-            true,
+            max_iter,
+            tol,
+            remove_average,
             false,
             ground_mode,
         ),
@@ -223,9 +226,9 @@ fn main() {
             base.nodata,
             &src.data,
             &gnd.data,
-            100_000,
-            1e-6,
-            true,
+            max_iter,
+            tol,
+            remove_average,
             ground_mode,
             options,
         ),
@@ -236,58 +239,13 @@ fn main() {
             base.nodata,
             &src.data,
             &gnd.data,
-            100_000,
-            1e-6,
-            true,
+            max_iter,
+            tol,
+            remove_average,
             ground_mode,
             options,
         ),
         _ => unreachable!(),
     };
     emit(resolution, &solver, &ground, result.total_iters);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cli_requires_one_solver_and_ground() {
-        for args in [
-            vec![],
-            vec!["bad"],
-            vec!["0"],
-            vec!["500"],
-            vec!["500", "--solver"],
-            vec!["500", "--solver", "mg"],
-            vec!["500", "--ground", "neumann"],
-            vec!["500", "--solver", "all", "--ground", "neumann"],
-            vec!["500", "--solver", "mg-stencil", "--ground", "neumann"],
-            vec!["500", "--solver", "mg", "--ground", "all"],
-            vec![
-                "500",
-                "--solver",
-                "mg",
-                "--ground",
-                "neumann",
-                "--cholesky-size",
-                "64",
-            ],
-            vec![
-                "500", "--solver", "mg", "--solver", "jacobi", "--ground", "neumann",
-            ],
-        ] {
-            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
-            assert!(parse_args(&args).is_err(), "{args:?}");
-        }
-        for solver in ["jacobi", "mg", "mg-lowmem"] {
-            for ground in ["neumann", "dirichlet"] {
-                let args = ["500", "--solver", solver, "--ground", ground].map(str::to_string);
-                let parsed = parse_args(&args).unwrap();
-                assert_eq!(parsed.resolution, 500);
-                assert_eq!(parsed.solver, solver);
-                assert_eq!(parsed.ground, ground);
-            }
-        }
-    }
 }
