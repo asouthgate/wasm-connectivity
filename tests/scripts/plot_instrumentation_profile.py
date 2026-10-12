@@ -32,19 +32,6 @@ def total_level_bytes(level):
             level.get(key, 0) for key in ('smoother_diag_bytes', 'operator_matvec_scratch_bytes'))
 
 
-# def solver_storage_bytes(profile):
-#     levels = profile.get('hierarchy', [])
-#     # MG includes its fine matrix at level 0; Jacobi has no hierarchy.
-#     matrix_and_workspace = (sum(total_level_bytes(level) for level in levels)
-#                             if levels else profile['laplacian_bytes'])
-#     return matrix_and_workspace + sum(profile.get(key, 0) for key in (
-#         'ground_storage_bytes', 'filled_resistance_bytes', 'cell_to_node_map_bytes',
-#         'voltage_v_bytes', 'residual_r_bytes', 'preconditioned_residual_e0_bytes',
-#         'search_direction_p_bytes', 'matvec_lp_bytes', 'source_s_bytes',
-#         'jacobi_diag_bytes', 'cache_laplacian_bytes', 'cache_cell_to_node_bytes',
-#         'cache_last_voltages_bytes'))
-
-
 def plot_hierarchy(rows, out_prefix):
     groups = defaultdict(list)
     for record in rows:

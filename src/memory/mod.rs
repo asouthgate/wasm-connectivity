@@ -1,17 +1,4 @@
 //! Analytical instrumentation of the connectivity solver's named buffers.
-//!
-//! Reports matrix/vector payload sizes using lengths and structural entry
-//! counts. These estimates exclude allocation capacity, container overhead,
-//! caller-owned inputs, raster preparation, returned maps, and warm-start copies.
-//! Setup buffers are reported separately from retained solver structures;
-//! summing them does not measure concurrently live memory or a heap peak.
-//! Boundary reconstruction and sparse-format conversion internals are excluded;
-//! setup fields cover the named buffers, not every allocation in dependencies.
-//!
-//! Enable with `cargo test --features instrumentation-profile` or run the native
-//! harness with `cargo run --profile release-prof --features bin,instrumentation-profile
-//! --bin instrumentation-profile -- 500`. Without that Cargo feature, recording
-//! and reset bodies are no-ops and `take_profile` returns None.
 
 use serde::Serialize;
 use sprs::CsMat;
@@ -124,7 +111,7 @@ pub struct LevelMemory {
 /// matrix size; count it only once when calculating totals.
 #[derive(Serialize, Clone, Default, Debug)]
 pub struct InstrumentationProfile {
-    // ---- assembly buffers (not a concurrent peak) ----
+    /// Assembly buffers (not a concurrent peak)
     /// Conductance grid `C = 1/R` (per cell).
     pub conductance_grid_bytes: u64,
     /// Cell-to-node map (per cell, `i32`).
@@ -140,7 +127,7 @@ pub struct InstrumentationProfile {
     /// Owned stencil ground shunts or mask; excludes the borrowed raster.
     pub ground_storage_bytes: u64,
 
-    // ---- fine graph Laplacian L (the system matrix) ----
+    /// Fine graph Laplacian L (the system matrix)
     pub laplacian_nodes: usize,
     /// Structural entry count; stencil entries occupy zero stored matrix bytes.
     pub laplacian_nnz: usize,
@@ -149,10 +136,10 @@ pub struct InstrumentationProfile {
     /// `"stencil"` (matrix-free). Empty if not yet recorded.
     pub operator_repr: String,
 
-    // ---- multigrid hierarchy (level 0 = fine, then coarser) ----
+    /// Multigrid hierarchy (level 0 = fine, then coarser)
     pub hierarchy: Vec<LevelMemory>,
 
-    // ---- coarsest-level direct solve ----
+    /// Coarsest-level direct solve
     /// Dense coarsest matrix built before factorisation (freed).
     pub coarse_dense_bytes: u64,
     pub requested_cholesky_size: Option<usize>,
@@ -163,7 +150,7 @@ pub struct InstrumentationProfile {
     /// CG/Jacobi buffers when direct factorization is unavailable.
     pub coarse_fallback_scratch_bytes: u64,
 
-    // ---- CG workspace vectors (persistent through the solve) ----
+    /// CG workspace vectors (persistent through the solve)
     /// Voltage `v`.
     pub voltage_v_bytes: u64,
     /// Residual `r`.
@@ -179,7 +166,7 @@ pub struct InstrumentationProfile {
     /// Jacobi diagonal `diag(L)` inverse (Jacobi path only).
     pub jacobi_diag_bytes: u64,
 
-    // ---- warm-start cache (cached Jacobi path) ----
+    /// warm-start cache (cached Jacobi path)
     pub cache_laplacian_bytes: u64,
     pub cache_cell_to_node_bytes: u64,
     pub cache_last_voltages_bytes: u64,
@@ -234,7 +221,7 @@ pub fn take_profile() -> Option<InstrumentationProfile> {
     }
 }
 
-// ---- assembly ----
+// Assembly
 
 #[inline]
 #[allow(unused_variables)]
@@ -257,7 +244,7 @@ pub fn record_edge_triplets(n_triplets: usize) {
     imp::with_profile(|s| s.edge_triplets_bytes = triplets_bytes(n_triplets));
 }
 
-// ---- fine Laplacian ----
+// Fine Laplacian
 
 #[inline]
 #[allow(unused_variables)]
@@ -326,7 +313,7 @@ pub fn record_ground_setup(bytes: u64) {
     imp::with_profile(|profile| profile.ground_setup_bytes = bytes);
 }
 
-// ---- hierarchy ----
+// Hierarcy
 
 #[inline]
 #[allow(unused_variables)]
@@ -423,7 +410,7 @@ pub fn record_level_runtime(
     });
 }
 
-// ---- coarsest direct solve ----
+// Coarsest direct solve
 
 #[inline]
 #[allow(unused_variables)]
@@ -448,7 +435,7 @@ pub fn record_coarse_dense(n: usize) {
     imp::with_profile(|s| s.coarse_dense_bytes = dense_bytes(n));
 }
 
-// ---- CG vectors ----
+// CG vectors
 
 #[inline]
 #[allow(unused_variables)]
@@ -472,7 +459,7 @@ pub fn record_jacobi_diag(n: usize) {
     imp::with_profile(|s| s.jacobi_diag_bytes = vec_f64_bytes(n));
 }
 
-// ---- cache ----
+// Cache
 
 #[inline]
 #[allow(unused_variables)]
