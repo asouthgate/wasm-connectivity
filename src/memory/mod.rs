@@ -1,17 +1,4 @@
 //! Analytical instrumentation of the connectivity solver's named buffers.
-//!
-//! Reports matrix/vector payload sizes using lengths and structural entry
-//! counts. These estimates exclude allocation capacity, container overhead,
-//! caller-owned inputs, raster preparation, returned maps, and warm-start copies.
-//! Setup buffers are reported separately from retained solver structures;
-//! summing them does not measure concurrently live memory or a heap peak.
-//! Boundary reconstruction and sparse-format conversion internals are excluded;
-//! setup fields cover the named buffers, not every allocation in dependencies.
-//!
-//! Enable with `cargo test --features instrumentation-profile` or run the native
-//! harness with `cargo run --profile release-prof --features bin,instrumentation-profile
-//! --bin instrumentation-profile -- 500`. Without that Cargo feature, recording
-//! and reset bodies are no-ops and `take_profile` returns None.
 
 use serde::Serialize;
 use sprs::CsMat;
@@ -78,6 +65,9 @@ pub struct GalerkinScratch {
     pub p_csr_bytes: u64,
     /// Prolongation transposed (`P_l` as CSC, i.e. the restriction `R_l`).
     pub p_csc_bytes: u64,
+    /// Bounded stack accumulator used to reconstruct an implicit Galerkin row.
+    /// This is reused per row, not multiplied by the level's node count.
+    pub row_accumulator_bytes: u64,
 }
 
 /// Memory footprint of one level of the geometric multigrid hierarchy.
@@ -91,9 +81,11 @@ pub struct LevelMemory {
     /// Structural entries in `L_l`, including boundary/ground effects.
     /// Stencil entries are computed on demand and occupy zero matrix bytes.
     pub nnz: usize,
+    /// `explicit`, `stencil`, or `galerkin-stencil`.
+    pub operator_repr: String,
     /// Bytes of this level's Laplacian `L_l`.
     pub laplacian_bytes: u64,
-    /// Bytes of the prolongation triplets `P_l` (empty for level 0).
+    /// Transfer entry-array bytes; zero for generated geometric transfers.
     pub prolongation_p_bytes: u64,
     /// Bytes of the dense Cholesky factor (coarsest level only).
     pub cholesky_factor_bytes: u64,
@@ -103,6 +95,15 @@ pub struct LevelMemory {
     pub workspace_d_bytes: u64,
     /// Bytes of the workspace vector `d'_l`.
     pub workspace_d_prime_bytes: u64,
+    /// Cached inverse diagonal for weighted Jacobi (nonterminal levels only).
+    pub smoother_diag_bytes: u64,
+    /// Reported smoother: `weighted-jacobi`, `symmetric-gauss-seidel`, or
+    /// `none` when no smoothing is used.
+    pub smoother_repr: String,
+    /// Effective damping after the Jacobi stability bound, if smoothing is used.
+    pub smoother_omega: Option<f64>,
+    /// Persistent scratch used by a composed operator application.
+    pub operator_matvec_scratch_bytes: u64,
     /// Freed Galerkin scratch used to build this level (empty for level 0).
     pub galerkin_scratch: GalerkinScratch,
 }
@@ -111,7 +112,7 @@ pub struct LevelMemory {
 /// matrix size; count it only once when calculating totals.
 #[derive(Serialize, Clone, Default, Debug)]
 pub struct InstrumentationProfile {
-    // ---- assembly buffers (not a concurrent peak) ----
+    /// Assembly buffers (not a concurrent peak)
     /// Conductance grid `C = 1/R` (per cell).
     pub conductance_grid_bytes: u64,
     /// Cell-to-node map (per cell, `i32`).
@@ -127,7 +128,7 @@ pub struct InstrumentationProfile {
     /// Owned stencil ground shunts or mask; excludes the borrowed raster.
     pub ground_storage_bytes: u64,
 
-    // ---- fine graph Laplacian L (the system matrix) ----
+    /// Fine graph Laplacian L (the system matrix)
     pub laplacian_nodes: usize,
     /// Structural entry count; stencil entries occupy zero stored matrix bytes.
     pub laplacian_nnz: usize,
@@ -136,10 +137,10 @@ pub struct InstrumentationProfile {
     /// `"stencil"` (matrix-free). Empty if not yet recorded.
     pub operator_repr: String,
 
-    // ---- multigrid hierarchy (level 0 = fine, then coarser) ----
+    /// Multigrid hierarchy (level 0 = fine, then coarser)
     pub hierarchy: Vec<LevelMemory>,
 
-    // ---- coarsest-level direct solve ----
+    /// Coarsest-level direct solve
     /// Dense coarsest matrix built before factorisation (freed).
     pub coarse_dense_bytes: u64,
     pub requested_cholesky_size: Option<usize>,
@@ -150,7 +151,7 @@ pub struct InstrumentationProfile {
     /// CG/Jacobi buffers when direct factorization is unavailable.
     pub coarse_fallback_scratch_bytes: u64,
 
-    // ---- CG workspace vectors (persistent through the solve) ----
+    /// CG workspace vectors (persistent through the solve)
     /// Voltage `v`.
     pub voltage_v_bytes: u64,
     /// Residual `r`.
@@ -166,7 +167,7 @@ pub struct InstrumentationProfile {
     /// Jacobi diagonal `diag(L)` inverse (Jacobi path only).
     pub jacobi_diag_bytes: u64,
 
-    // ---- warm-start cache (cached Jacobi path) ----
+    /// warm-start cache (cached Jacobi path)
     pub cache_laplacian_bytes: u64,
     pub cache_cell_to_node_bytes: u64,
     pub cache_last_voltages_bytes: u64,
@@ -177,10 +178,13 @@ mod imp {
     use super::*;
     use std::cell::RefCell;
 
+    // Each thread owns an independent profile so concurrent solves do not
+    // overwrite one another's instrumentation.
     thread_local! {
         static PROFILE: RefCell<Option<InstrumentationProfile>> = RefCell::new(None);
     }
 
+    // Closure-based access keeps the mutable RefCell borrow within this update.
     pub(super) fn with_profile<F: FnOnce(&mut InstrumentationProfile)>(f: F) {
         PROFILE.with(|slot| {
             let mut slot = slot.borrow_mut();
@@ -221,7 +225,7 @@ pub fn take_profile() -> Option<InstrumentationProfile> {
     }
 }
 
-// ---- assembly ----
+// Assembly
 
 #[inline]
 #[allow(unused_variables)]
@@ -244,7 +248,7 @@ pub fn record_edge_triplets(n_triplets: usize) {
     imp::with_profile(|s| s.edge_triplets_bytes = triplets_bytes(n_triplets));
 }
 
-// ---- fine Laplacian ----
+// Fine Laplacian
 
 #[inline]
 #[allow(unused_variables)]
@@ -313,7 +317,7 @@ pub fn record_ground_setup(bytes: u64) {
     imp::with_profile(|profile| profile.ground_setup_bytes = bytes);
 }
 
-// ---- hierarchy ----
+// Hierarcy
 
 #[inline]
 #[allow(unused_variables)]
@@ -333,6 +337,7 @@ pub fn record_level(
             level,
             nodes,
             nnz,
+            operator_repr: "explicit".into(),
             laplacian_bytes,
             prolongation_p_bytes,
             cholesky_factor_bytes,
@@ -340,6 +345,7 @@ pub fn record_level(
             workspace_d_bytes: workspace,
             workspace_d_prime_bytes: workspace,
             galerkin_scratch,
+            ..LevelMemory::default()
         });
     });
 }
@@ -355,6 +361,7 @@ pub fn record_fine_level(cholesky_factor_bytes: u64) {
             level: 0,
             nodes: profile.laplacian_nodes,
             nnz: profile.laplacian_nnz,
+            operator_repr: profile.operator_repr.clone(),
             laplacian_bytes: profile.laplacian_bytes,
             cholesky_factor_bytes,
             workspace_e_bytes: workspace,
@@ -365,7 +372,49 @@ pub fn record_fine_level(cholesky_factor_bytes: u64) {
     });
 }
 
-// ---- coarsest direct solve ----
+/// Set the representation of a previously recorded hierarchy level.
+#[inline]
+#[allow(unused_variables)]
+pub fn set_level_operator_representation(level: usize, representation: &str) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        if let Some(entry) = profile
+            .hierarchy
+            .iter_mut()
+            .find(|entry| entry.level == level)
+        {
+            entry.operator_repr = representation.into();
+        }
+    });
+}
+
+/// Set persistent smoother and matrix-free operator buffer details separately
+/// from the temporary setup allocations in GalerkinScratch.
+#[inline]
+#[allow(unused_variables)]
+pub fn set_level_smoother_and_operator_scratch(
+    level: usize,
+    smoother: &str,
+    diag_bytes: u64,
+    omega: Option<f64>,
+    matvec_bytes: u64,
+) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        if let Some(entry) = profile
+            .hierarchy
+            .iter_mut()
+            .find(|entry| entry.level == level)
+        {
+            entry.smoother_repr = smoother.into();
+            entry.smoother_diag_bytes = diag_bytes;
+            entry.smoother_omega = omega;
+            entry.operator_matvec_scratch_bytes = matvec_bytes;
+        }
+    });
+}
+
+// Coarsest direct solve
 
 #[inline]
 #[allow(unused_variables)]
@@ -390,7 +439,7 @@ pub fn record_coarse_dense(n: usize) {
     imp::with_profile(|s| s.coarse_dense_bytes = dense_bytes(n));
 }
 
-// ---- CG vectors ----
+// CG vectors
 
 #[inline]
 #[allow(unused_variables)]
@@ -414,7 +463,7 @@ pub fn record_jacobi_diag(n: usize) {
     imp::with_profile(|s| s.jacobi_diag_bytes = vec_f64_bytes(n));
 }
 
-// ---- cache ----
+// Cache
 
 #[inline]
 #[allow(unused_variables)]
@@ -482,7 +531,10 @@ mod tests {
         {
             record_cg_vectors(3);
             record_fine_laplacian(&small_csmat());
-            assert!(take_profile().is_none(), "disabled recording must be a no-op");
+            assert!(
+                take_profile().is_none(),
+                "disabled recording must be a no-op"
+            );
         }
     }
 
@@ -528,8 +580,8 @@ mod tests {
         let resistance = vec![1.0; 100];
         let mut mask = vec![false; 100];
         mask[0] = true;
-        let operator = StencilOperator::new(10, 10, -9999.0, &resistance,
-            GroundSpec::Dirichlet(mask));
+        let operator =
+            StencilOperator::new(10, 10, -9999.0, &resistance, GroundSpec::Dirichlet(mask));
         record_stencil_fine(&operator);
         record_fine_level(0);
         let profile = take_profile().unwrap();

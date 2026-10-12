@@ -405,7 +405,8 @@ pub fn run_geospatial_pipeline_cached_mg(
 }
 
 /// Like [`run_geospatial_pipeline_cached_mg`], but solves with the
-/// matrix-free (low-memory) fine-level stencil.
+/// low-memory hierarchy: levels 0 and 1 are matrix-free and all transfers
+/// are geometric stencils.
 pub fn run_geospatial_pipeline_cached_mg_stencil(
     base_raster: &[f64],
     nrows: usize,

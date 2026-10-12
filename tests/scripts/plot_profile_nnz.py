@@ -5,8 +5,8 @@ Usage:
     python3 tests/scripts/plot_profile_nnz.py profile.json
     python3 tests/scripts/plot_profile_nnz.py profile.json --output nnz.png
 
-Accepts the NDJSON emitted by instrumentation-profile at any resolution.
-Matrices are fixed across CG iterations: these counts describe hierarchy
+Accepts the JSON object emitted by instrumentation-profile at any resolution.
+Operators are fixed across CG iterations: these counts describe hierarchy
 levels, not iteration history. Stencil counts describe structural entries,
 even though the fine matrix is not stored.
 """
@@ -24,17 +24,17 @@ from matplotlib.ticker import MaxNLocator, StrMethodFormatter
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("profile", type=Path, help="Instrumentation NDJSON file")
+    parser.add_argument("profile", type=Path, help="Instrumentation JSON file")
     parser.add_argument("--output", type=Path, help="Output image (default: PROFILE_nnz.png)")
     args = parser.parse_args()
 
     try:
         with args.profile.open() as stream:
-            records = [json.loads(line) for line in stream if line.strip()]
+            records = [json.load(stream)]
         records = [record for record in records
                    if (record.get("profile") or {}).get("hierarchy")]
         if not records:
-            parser.error("No multigrid hierarchy found; generate a profile with --solver mg or mg-stencil")
+            parser.error("No multigrid hierarchy found; generate a profile with --solver mg or mg-lowmem")
         # Extract before plotting so malformed records produce a useful error.
         curves = [(record, sorted(record["profile"]["hierarchy"],
                                   key=lambda level: level["level"])) for record in records]
