@@ -1,17 +1,9 @@
-//! Native instrumentation-profile harness for the connectivity solve.
-//!
-//! Runs the same pipeline as `prof_solve` (rasterize GeoJSON -> solve MG /
-//! Jacobi x Neumann / Dirichlet) and, for each solve, emits the analytical
-//! memory profile produced by the `instrumentation-profile` feature as NDJSON on stdout.
+//! Profile one connectivity solve and emit one JSON object on stdout.
 //!
 //! Usage:
-//!   cargo run --profile release-prof --bin instrumentation-profile \
-//!       --features bin,instrumentation-profile -- [500|1000] \
-//!       [--solver jacobi|mg|mg-stencil|all] [--ground neumann|dirichlet|all]
-//!       [--cholesky-size N]
-//!
-//! Each output line is a JSON object:
-//!   { "resolution", "solver", "ground", "total_iters", "profile": <InstrumentationProfile> }
+//!   cargo run --profile release-prof --features bin,instrumentation-profile \
+//!       --bin instrumentation-profile -- 500 --solver mg-lowmem --ground neumann
+//! Diagnostics go to stderr.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -109,59 +101,51 @@ fn emit(resolution: usize, solver: &str, ground: &str, total_iters: usize) {
         total_iters,
         profile: take_profile(),
     };
-    println!("{}", serde_json::to_string(&rec).unwrap());
+    println!("{}", serde_json::to_string_pretty(&rec).unwrap());
 }
 
-const USAGE: &str = "Usage: instrumentation-profile RESOLUTION [--solver jacobi|mg|mg-stencil|all] [--ground neumann|dirichlet|all] [--cholesky-size N]";
+const USAGE: &str = "Usage: instrumentation-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground neumann|dirichlet";
 
 struct Args {
     resolution: usize,
     solver: String,
     ground: String,
-    cholesky_size: Option<usize>,
-}
-
-fn positive(value: &str, name: &str) -> Result<usize, String> {
-    value
-        .parse::<usize>()
-        .ok()
-        .filter(|&n| n > 0)
-        .ok_or_else(|| format!("{name} must be a positive integer"))
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
-    let resolution = positive(args.first().ok_or("resolution is required")?, "resolution")?;
-    let mut parsed = Args {
-        resolution,
-        solver: "all".into(),
-        ground: "all".into(),
-        cholesky_size: None,
-    };
+    let resolution = args
+        .first()
+        .ok_or("resolution is required")?
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n > 0)
+        .ok_or("resolution must be a positive integer")?;
+    let mut solver = None;
+    let mut ground = None;
     let mut i = 1;
     while i < args.len() {
         let flag = args[i].as_str();
-        if !matches!(flag, "--solver" | "--ground" | "--cholesky-size") {
+        if !matches!(flag, "--solver" | "--ground") {
             return Err(format!("unknown argument: {flag}"));
         }
         let value = args
             .get(i + 1)
             .ok_or_else(|| format!("missing value for {flag}"))?;
-        match flag {
-            "--solver" if matches!(value.as_str(), "jacobi" | "mg" | "mg-stencil" | "all") => {
-                parsed.solver = value.clone()
-            }
-            "--ground" if matches!(value.as_str(), "neumann" | "dirichlet" | "all") => {
-                parsed.ground = value.clone()
-            }
-            "--cholesky-size" => parsed.cholesky_size = Some(positive(value, "Cholesky size")?),
+        let target = match flag {
+            "--solver" if matches!(value.as_str(), "jacobi" | "mg" | "mg-lowmem") => &mut solver,
+            "--ground" if matches!(value.as_str(), "neumann" | "dirichlet") => &mut ground,
             _ => return Err(format!("unsupported value for {flag}: {value}")),
+        };
+        if target.replace(value.clone()).is_some() {
+            return Err(format!("duplicate argument: {flag}"));
         }
         i += 2;
     }
-    if parsed.solver == "jacobi" && parsed.cholesky_size.is_some() {
-        return Err("--cholesky-size requires an MG solver".into());
-    }
-    Ok(parsed)
+    Ok(Args {
+        resolution,
+        solver: solver.ok_or("--solver is required")?,
+        ground: ground.ok_or("--ground is required")?,
+    })
 }
 
 fn main() {
@@ -174,15 +158,11 @@ fn main() {
         resolution,
         solver,
         ground,
-        cholesky_size,
     } = parse_args(&arguments).unwrap_or_else(|error| {
         eprintln!("{error}\n{USAGE}");
         std::process::exit(2);
     });
-    let options = MgOptions {
-        cholesky_size,
-        ..MgOptions::default()
-    };
+    let options = MgOptions::default();
 
     let base = parse_asc(&format!("{DATA_DIR}/base_resistance_{resolution}.asc"));
     let src = parse_asc(&format!("{DATA_DIR}/source_{resolution}.asc"));
@@ -216,70 +196,55 @@ fn main() {
         eprintln!("[rasterize warn] {w}");
     }
 
-    let modes: Vec<(GroundMode, &str)> = match ground.as_str() {
-        "neumann" => vec![(GroundMode::Neumann, "neumann")],
-        "dirichlet" => vec![(GroundMode::Dirichlet, "dirichlet")],
-        _ => vec![
-            (GroundMode::Neumann, "neumann"),
-            (GroundMode::Dirichlet, "dirichlet"),
-        ],
+    let ground_mode = match ground.as_str() {
+        "neumann" => GroundMode::Neumann,
+        "dirichlet" => GroundMode::Dirichlet,
+        _ => unreachable!(),
     };
-
-    for &(ground_mode, suffix) in &modes {
-        if solver == "jacobi" || solver == "all" {
-            wasm_connect::cache::reset();
-            let jacobi = solve::solve_raster_cached(
-                &resistance,
-                base.nrows,
-                base.ncols,
-                base.nodata,
-                &src.data,
-                &gnd.data,
-                100_000,
-                1e-6,
-                true,
-                false,
-                ground_mode,
-            );
-            emit(resolution, "jacobi", suffix, jacobi.total_iters);
-        }
-
-        if solver == "mg" || solver == "all" {
-            wasm_connect::cache::reset();
-            let mg = solve::solve_raster_sources_mg_with_options(
-                &resistance,
-                base.nrows,
-                base.ncols,
-                base.nodata,
-                &src.data,
-                &gnd.data,
-                100_000,
-                1e-6,
-                true,
-                ground_mode,
-                options,
-            );
-            emit(resolution, "mg", suffix, mg.total_iters);
-        }
-
-        if solver == "mg-stencil" || solver == "all" {
-            wasm_connect::cache::reset();
-            let mg = solve::solve_raster_sources_mg_stencil_with_options(
-                &resistance,
-                base.nrows,
-                base.ncols,
-                base.nodata,
-                &src.data,
-                &gnd.data,
-                100_000,
-                1e-6,
-                true,
-                ground_mode,
-                options,
-            );
-            emit(resolution, "mg-stencil", suffix, mg.total_iters);
-        }
-    }
+    wasm_connect::cache::reset();
+    let result = match solver.as_str() {
+        "jacobi" => solve::solve_raster_cached(
+            &resistance,
+            base.nrows,
+            base.ncols,
+            base.nodata,
+            &src.data,
+            &gnd.data,
+            100_000,
+            1e-6,
+            true,
+            false,
+            ground_mode,
+        ),
+        "mg" => solve::solve_raster_sources_mg_with_options(
+            &resistance,
+            base.nrows,
+            base.ncols,
+            base.nodata,
+            &src.data,
+            &gnd.data,
+            100_000,
+            1e-6,
+            true,
+            ground_mode,
+            options,
+        ),
+        "mg-lowmem" => solve::solve_raster_sources_mg_stencil_with_options(
+            &resistance,
+            base.nrows,
+            base.ncols,
+            base.nodata,
+            &src.data,
+            &gnd.data,
+            100_000,
+            1e-6,
+            true,
+            ground_mode,
+            options,
+        ),
+        _ => unreachable!(),
+    };
+    emit(resolution, &solver, &ground, result.total_iters);
 }
 
 #[cfg(test)]
@@ -287,36 +252,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_requires_valid_explicit_arguments() {
+    fn cli_requires_one_solver_and_ground() {
         for args in [
             vec![],
             vec!["bad"],
             vec!["0"],
+            vec!["500"],
             vec!["500", "--solver"],
-            vec!["500", "--solver", "typo"],
-            vec!["500", "--ground", "typo"],
-            vec!["500", "--cholesky-size", "0"],
-            vec!["500", "--unknown", "1"],
-            vec!["500", "--solver", "jacobi", "--cholesky-size", "49"],
+            vec!["500", "--solver", "mg"],
+            vec!["500", "--ground", "neumann"],
+            vec!["500", "--solver", "all", "--ground", "neumann"],
+            vec!["500", "--solver", "mg-stencil", "--ground", "neumann"],
+            vec!["500", "--solver", "mg", "--ground", "all"],
+            vec![
+                "500",
+                "--solver",
+                "mg",
+                "--ground",
+                "neumann",
+                "--cholesky-size",
+                "64",
+            ],
+            vec![
+                "500", "--solver", "mg", "--solver", "jacobi", "--ground", "neumann",
+            ],
         ] {
             let args: Vec<String> = args.into_iter().map(str::to_string).collect();
-            assert!(parse_args(&args).is_err());
+            assert!(parse_args(&args).is_err(), "{args:?}");
         }
-        let args = [
-            "1000",
-            "--solver",
-            "mg-stencil",
-            "--ground",
-            "dirichlet",
-            "--cholesky-size",
-            "64",
-        ]
-        .map(str::to_string);
-        let parsed = parse_args(&args).unwrap();
-        assert_eq!(parsed.resolution, 1000);
-        assert_eq!(parsed.solver, "mg-stencil");
-        assert_eq!(parsed.ground, "dirichlet");
-        assert_eq!(parsed.cholesky_size, Some(64));
-        assert_eq!(parse_args(&["500".into()]).unwrap().cholesky_size, None);
+        for solver in ["jacobi", "mg", "mg-lowmem"] {
+            for ground in ["neumann", "dirichlet"] {
+                let args = ["500", "--solver", solver, "--ground", ground].map(str::to_string);
+                let parsed = parse_args(&args).unwrap();
+                assert_eq!(parsed.resolution, 500);
+                assert_eq!(parsed.solver, solver);
+                assert_eq!(parsed.ground, ground);
+            }
+        }
     }
 }
