@@ -5,7 +5,6 @@ CSV schema (emitted by example/src/pages/Benchmark.jsx):
     resolution,repeat,run,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb,total_iters
 
 run is one of: jacobi, gmg, gmg-lowmem. Legacy two-solver CSVs also work.
-Memory columns contain WASM linear-memory capacity in MiB, despite their historical _mb suffix.
 Per row: total_time_s = prep_time_s + conn_time_s.
 """
 import sys
@@ -135,7 +134,7 @@ def plot(csv_path, out_path):
     # Polish Right Axes (Memory)
     ax2.set_xlabel('Resolution (pixels)')
     ax2.set_ylabel('WASM linear memory (MiB)')
-    ax2.set_title('WASM Memory Capacity After Solving')
+    ax2.set_title('Memory usage')
     ax2.set_xticks(res_all)
     ax2.set_xticklabels([res2str(r) for r in res_all])
     ax2.grid(True, alpha=0.3)
