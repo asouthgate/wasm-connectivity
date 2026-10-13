@@ -1,12 +1,4 @@
-//! Bilinear geometric transfers: dimensions are stored, entries are generated.
-
-// One-dimensional interpolation coefficients at fine offsets -1, 0, 1, 2
-// from twice a coarse coordinate. Two-dimensional weights are their products.
-const STENCIL_WEIGHTS: [f64; 4] = [0.25, 0.75, 0.75, 0.25];
-const ROW_WEIGHTS: [[f64; 2]; 2] = [
-    [STENCIL_WEIGHTS[3], STENCIL_WEIGHTS[1]],
-    [STENCIL_WEIGHTS[2], STENCIL_WEIGHTS[0]],
-];
+//! Node-centred bilinear transfers: dimensions are stored, entries are generated.
 
 #[derive(Clone, Copy)]
 pub(super) struct Transfer {
@@ -24,21 +16,32 @@ impl Transfer {
     /// P maps coarse-grid values to fine-grid values, so a column selects one
     /// coarse cell and visits the fine cells it influences, in fine-index order.
     /// In P^T A P, this supplies P[a, i] for a selected coarse index i.
-    /// Out-of-grid contributions are omitted; retained coefficients are unchanged.
+    /// Out-of-grid contributions are omitted; unmatched final fine points copy
+    /// the nearest coarse endpoint.
     #[inline]
     pub fn for_each_column(&self, coarse: usize, mut f: impl FnMut(usize, f64)) {
         let cr = coarse / self.coarse_ncols;
         let cc = coarse % self.coarse_ncols;
-        for (ri, &rw) in STENCIL_WEIGHTS.iter().enumerate() {
+        for (ri, &rw) in [0.5, 1.0, 0.5].iter().enumerate() {
             let fr = 2 * cr as isize + ri as isize - 1;
             if fr < 0 || fr >= self.fine_nrows as isize {
                 continue;
             }
-            for (ci, &cw) in STENCIL_WEIGHTS.iter().enumerate() {
+            for (ci, &cw) in [0.5, 1.0, 0.5].iter().enumerate() {
                 let fc = 2 * cc as isize + ci as isize - 1;
                 if fc < 0 || fc >= self.fine_ncols as isize {
                     continue;
                 }
+                let rw = if fr as usize == self.fine_nrows - 1 && ri == 2 {
+                    1.0
+                } else {
+                    rw
+                };
+                let cw = if fc as usize == self.fine_ncols - 1 && ci == 2 {
+                    1.0
+                } else {
+                    cw
+                };
                 f(fr as usize * self.fine_ncols + fc as usize, rw * cw);
             }
         }
@@ -58,29 +61,16 @@ impl Transfer {
     /// accumulating into a local stencil centred on a known coarse cell.
     #[inline]
     pub fn for_each_row_coordinate(&self, fine: usize, mut f: impl FnMut(usize, usize, f64)) {
-        let fr = fine / self.fine_ncols; // Fine row.
-        let fc = fine % self.fine_ncols; // Fine column.
-
-        // For an even fine coordinate 2k, coarse neighbours (k-1, k)
-        // contribute via stencil offsets (2, 0), at coefficient indices (3, 1).
-        // For an odd coordinate 2k+1, neighbours (k, k+1) use offsets (1, -1),
-        // at coefficient indices (2, 0). Parity selects
-        // the corresponding coefficients, ordered by coarse coordinate.
-        let rstart = ((fr + 1) / 2) as isize - 1;
-        let cstart = ((fc + 1) / 2) as isize - 1;
-        let rw = ROW_WEIGHTS[fr % 2];
-        let cw = ROW_WEIGHTS[fc % 2];
-        for (ri, &rweight) in rw.iter().enumerate() {
-            let cr = rstart + ri as isize;
-            if cr < 0 || cr >= self.coarse_nrows as isize {
-                continue;
-            }
-            for (ci, &cweight) in cw.iter().enumerate() {
-                let cc = cstart + ci as isize;
-                if cc < 0 || cc >= self.coarse_ncols as isize {
-                    continue;
-                }
-                f(cr as usize, cc as usize, rweight * cweight);
+        let fr = fine / self.fine_ncols;
+        let fc = fine % self.fine_ncols;
+        let r0 = fr / 2;
+        let c0 = fc / 2;
+        let r1 = (r0 + fr % 2).min(self.coarse_nrows - 1);
+        let c1 = (c0 + fc % 2).min(self.coarse_ncols - 1);
+        let weight = 1.0 / ((r1 - r0 + 1) * (c1 - c0 + 1)) as f64;
+        for cr in r0..=r1 {
+            for cc in c0..=c1 {
+                f(cr, cc, weight);
             }
         }
     }
@@ -109,20 +99,16 @@ mod tests {
         let nr = transfer.fine_nrows;
         let nc = transfer.fine_ncols;
         let mut reference = sprs::TriMat::new((nr * nc, transfer.coarse_n()));
-        let weights = [0.25, 0.75, 0.75, 0.25];
-        for cr in 0..nr / 2 {
-            for cc in 0..nc / 2 {
-                for dr in 0..4 {
-                    for dc in 0..4 {
-                        let r = 2 * cr as isize + dr as isize - 1;
-                        let c = 2 * cc as isize + dc as isize - 1;
-                        if r >= 0 && c >= 0 && r < nr as isize && c < nc as isize {
-                            reference.add_triplet(
-                                r as usize * nc + c as usize,
-                                cr * (nc / 2) + cc,
-                                weights[dr] * weights[dc],
-                            );
-                        }
+        for r in 0..nr {
+            for c in 0..nc {
+                let cr = r / 2;
+                let cc = c / 2;
+                let last_r = (cr + r % 2).min(transfer.coarse_nrows - 1);
+                let last_c = (cc + c % 2).min(transfer.coarse_ncols - 1);
+                let weight = 1.0 / ((last_r - cr + 1) * (last_c - cc + 1)) as f64;
+                for i in cr..=last_r {
+                    for j in cc..=last_c {
+                        reference.add_triplet(r * nc + c, i * transfer.coarse_ncols + j, weight);
                     }
                 }
             }
@@ -198,15 +184,72 @@ mod tests {
     }
 
     #[test]
+    fn interior_weights_and_even_endpoint_copy() {
+        let transfer = Transfer {
+            fine_nrows: 5,
+            fine_ncols: 5,
+            coarse_nrows: 3,
+            coarse_ncols: 3,
+        };
+        let mut column = Vec::new();
+        transfer.for_each_column(4, |row, weight| column.push((row, weight)));
+        assert_eq!(
+            column,
+            vec![
+                (6, 0.25),
+                (7, 0.5),
+                (8, 0.25),
+                (11, 0.5),
+                (12, 1.0),
+                (13, 0.5),
+                (16, 0.25),
+                (17, 0.5),
+                (18, 0.25),
+            ]
+        );
+        let even = Transfer {
+            fine_nrows: 4,
+            fine_ncols: 4,
+            coarse_nrows: 2,
+            coarse_ncols: 2,
+        };
+        let mut corner = Vec::new();
+        even.for_each_row(15, |col, weight| corner.push((col, weight)));
+        assert_eq!(corner, vec![(3, 1.0)]);
+    }
+
+    #[test]
     fn transfers_match_triplets_and_are_transposes() {
-        for (nr, nc) in [(2, 2), (3, 5), (8, 8), (15, 16), (16, 15), (2, 19), (19, 2)] {
+        for (nr, nc) in [
+            (1, 1),
+            (1, 8),
+            (9, 1),
+            (2, 2),
+            (3, 5),
+            (8, 8),
+            (15, 16),
+            (16, 15),
+            (2, 19),
+            (19, 2),
+        ] {
             let transfer = Transfer {
                 fine_nrows: nr,
                 fine_ncols: nc,
-                coarse_nrows: nr / 2,
-                coarse_ncols: nc / 2,
+                coarse_nrows: nr.div_ceil(2),
+                coarse_ncols: nc.div_ceil(2),
             };
             let reference = reference_matrix(&transfer);
+            for (row, entries) in reference.outer_iterator().enumerate() {
+                assert!((entries.data().iter().sum::<f64>() - 1.0).abs() < 1e-12);
+                if row / nc % 2 == 0 && row % nc % 2 == 0 {
+                    assert_eq!(entries.nnz(), 1);
+                    assert_eq!(entries.data(), &[1.0]);
+                }
+            }
+            assert!(reference
+                .to_csc()
+                .outer_iterator()
+                .all(|column| column.nnz() <= 9));
             assert_entries_match(&transfer, &reference);
             assert_transfers_and_transpose(&transfer, &reference);
         }
