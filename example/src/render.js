@@ -42,7 +42,7 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
 
   let minRaw = Infinity, maxRaw = -Infinity;
   for (const v of data) {
-    if (v === nodata || isNaN(v)) continue;
+    if (v === nodata || !Number.isFinite(v)) continue;
     if (v < minRaw) minRaw = v;
     if (v > maxRaw) maxRaw = v;
   }
@@ -55,8 +55,8 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
   for (let r = 0; r < nrows; r++) {
     for (let c = 0; c < ncols; c++) {
       const v = data[r * ncols + c];
-      let rr = 17, gg = 17, bb = 17;
-      if (v !== nodata && !isNaN(v)) {
+      let rr = 0, gg = 0, bb = 0;
+      if (v !== nodata && Number.isFinite(v)) {
         let s;
         if (logScale && v > 0) {
           const scaled = 1 + ((v - minRaw) / span) * 99;

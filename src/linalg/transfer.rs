@@ -1,5 +1,8 @@
 //! Node-centred bilinear transfers: dimensions are stored, entries are generated.
 
+// One-dimensional weights at fine offsets -1, 0, 1 from a coarse node.
+const STENCIL_WEIGHTS: [f64; 3] = [0.5, 1.0, 0.5];
+
 #[derive(Clone, Copy)]
 pub(super) struct Transfer {
     pub fine_nrows: usize,
@@ -22,23 +25,23 @@ impl Transfer {
     pub fn for_each_column(&self, coarse: usize, mut f: impl FnMut(usize, f64)) {
         let cr = coarse / self.coarse_ncols;
         let cc = coarse % self.coarse_ncols;
-        for (ri, &rw) in [0.5, 1.0, 0.5].iter().enumerate() {
+        for (ri, &rw) in STENCIL_WEIGHTS.iter().enumerate() {
             let fr = 2 * cr as isize + ri as isize - 1;
             if fr < 0 || fr >= self.fine_nrows as isize {
                 continue;
             }
-            for (ci, &cw) in [0.5, 1.0, 0.5].iter().enumerate() {
+            for (ci, &cw) in STENCIL_WEIGHTS.iter().enumerate() {
                 let fc = 2 * cc as isize + ci as isize - 1;
                 if fc < 0 || fc >= self.fine_ncols as isize {
                     continue;
                 }
                 let rw = if fr as usize == self.fine_nrows - 1 && ri == 2 {
-                    1.0
+                    STENCIL_WEIGHTS[1]
                 } else {
                     rw
                 };
                 let cw = if fc as usize == self.fine_ncols - 1 && ci == 2 {
-                    1.0
+                    STENCIL_WEIGHTS[1]
                 } else {
                     cw
                 };
@@ -67,7 +70,8 @@ impl Transfer {
         let c0 = fc / 2;
         let r1 = (r0 + fr % 2).min(self.coarse_nrows - 1);
         let c1 = (c0 + fc % 2).min(self.coarse_ncols - 1);
-        let weight = 1.0 / ((r1 - r0 + 1) * (c1 - c0 + 1)) as f64;
+        let weight =
+            STENCIL_WEIGHTS[usize::from(r0 == r1)] * STENCIL_WEIGHTS[usize::from(c0 == c1)];
         for cr in r0..=r1 {
             for cc in c0..=c1 {
                 f(cr, cc, weight);

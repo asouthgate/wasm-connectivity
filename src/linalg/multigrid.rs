@@ -1203,7 +1203,8 @@ mod tests {
             (16, 16, 2, Some(1), 64),
         ] {
             let resistance = vec![1.0; nr * nc];
-            let (_, _, _, laplacian) = crate::build_circuit_model(&resistance, nr, nc, -9999.0);
+            let (_, _, _, mut laplacian) = crate::build_circuit_model(&resistance, nr, nc, -9999.0);
+            crate::circuit::laplacian::remove_reference_ground(&mut laplacian);
             let laplacian =
                 crate::circuit::laplacian::add_diagonal(&laplacian, &vec![1.0; nr * nc]);
             let options = MgOptions {
@@ -1401,6 +1402,8 @@ mod tests {
 
         // Neumann ground
         {
+            let mut lap = lap.clone();
+            crate::circuit::laplacian::remove_reference_ground(&mut lap);
             let a = crate::circuit::laplacian::add_diagonal(&lap, &shunt);
             let mg_e = MgPreconditioner::build_from_laplacian(a, nrows, ncols, 5);
             let st = StencilOperator::new(
@@ -1417,6 +1420,8 @@ mod tests {
 
         // Dirichlet ground
         {
+            let mut lap = lap.clone();
+            crate::circuit::laplacian::remove_reference_ground(&mut lap);
             let a = crate::solve::apply_dirichlet_ground_lap(&lap, &gns);
             let mg_e = MgPreconditioner::build_from_laplacian(a, nrows, ncols, 5);
             let st = StencilOperator::new(

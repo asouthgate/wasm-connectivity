@@ -80,7 +80,7 @@ pub struct StencilOperator<'a> {
     nodata: f64,
     resistance: &'a [f64],
     ground: GroundSpec,
-    /// Regularization `1e-5 * ||L||` added to node 0, matching
+    /// For ground-free systems, `1e-5 * ||L||` added to node 0, matching
     /// [`crate::circuit::laplacian::regularize_laplacian`].
     reg_diag0: f64,
 }
@@ -117,7 +117,16 @@ impl<'a> StencilOperator<'a> {
             GroundSpec::Neumann(shunt) => assert_eq!(shunt.len(), resistance.len()),
             GroundSpec::Dirichlet(mask) => assert_eq!(mask.len(), resistance.len()),
         }
-        let reg_diag0 = compute_reg_diag0(nrows, ncols, nodata, resistance);
+        let grounded = match &ground {
+            GroundSpec::None => false,
+            GroundSpec::Neumann(shunt) => shunt.iter().any(|&value| value.is_finite() && value > 0.0),
+            GroundSpec::Dirichlet(mask) => mask.iter().any(|&value| value),
+        };
+        let reg_diag0 = if grounded {
+            0.0
+        } else {
+            compute_reg_diag0(nrows, ncols, nodata, resistance)
+        };
         Self {
             nrows,
             ncols,
