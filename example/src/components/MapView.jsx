@@ -22,22 +22,16 @@ export default function MapView({ type, data, meta, logScale, onToggleScale, pre
       {showHeader && <div className="map-header">
         <span>{label || labels[type] || type}{preview ? ' preview' : ''} {dim && dim}</span>
         {onToggleScale && (
-          <div className="map-scale-toggles">
-            {['log', 'lin'].map(s => {
-              const isActive = logScale === (s === 'log');
-              return (
-                <span key={s} onClick={() => onToggleScale(s)}
-                  className={`map-scale-btn ${isActive ? 'map-scale-btn--active' : ''}`}>
-                  {s}
-                </span>
-              );
-            })}
-          </div>
+          <select aria-label={`${label || labels[type] || type} scale`} value={logScale ? 'log' : 'lin'}
+            onChange={e => onToggleScale(e.target.value)}>
+            <option value="log">log</option>
+            <option value="lin">lin</option>
+          </select>
         )}
       </div>}
       <canvas ref={canvasRef} className="map-canvas" />
       <div className="map-legend">
-        <span className="map-legend-label map-legend-label--right">{fmt(range.min)}</span>
+        <span className="map-legend-label">{fmt(range.min)}</span>
         <div className="map-legend-gradient" style={{ '--legend-bg': isCurVolt ? PLASMA_GRADIENT : VIRIDIS_GRADIENT }} />
         <span className="map-legend-label">{fmt(range.max)}</span>
       </div>

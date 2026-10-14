@@ -1,221 +1,144 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from '@wasm-connect/lib';
 import { renderMap } from '../render';
 import MapView from '../components/MapView';
 import { StatusBar } from '../components/StatusBar';
-import { ComputeModal } from '../components/ComputeModal';
 import { loadExampleData } from '../data';
 
 function LayerMaskCanvas({ data, nrows, ncols }) {
   const canvasRef = useRef(null);
   useEffect(() => {
-    const c = canvasRef.current;
-    if (c && data) renderMap(c, data, nrows, ncols, -1, false);
+    if (canvasRef.current && data) renderMap(canvasRef.current, data, nrows, ncols, -1, false);
   }, [data, nrows, ncols]);
-  return <canvas ref={canvasRef} className="layer-mask-canvas" />;
+  return <canvas ref={canvasRef} />;
 }
 
 export default function Example() {
   const [resolution, setResolution] = useState('500');
-  const [baseData, setBaseData] = useState(null);
-  const [baseMeta, setBaseMeta] = useState(null);
-  const [srcData, setSrcData] = useState(null);
-  const [gndData, setGndData] = useState(null);
-  const [geojsonStr, setGeojsonStr] = useState('');
+  const [data, setData] = useState(null);
   const [result, setResult] = useState(null);
-  const [resScale, setResScale] = useState('log');
-  const [curScale, setCurScale] = useState('log');
-  const [voltScale, setVoltScale] = useState('lin');
+  const [scales, setScales] = useState({ res: 'log', cur: 'log', volt: 'lin' });
   const [loading, setLoading] = useState(false);
-  const [computing, setComputing] = useState(false);
-  const [status, setStatus] = useState('Pick a resolution and load data.');
-  const [timer, setTimer] = useState('');
+  const [status, setStatus] = useState('Loading Chudleigh data...');
   const [error, setError] = useState(false);
-
-  const [terrainRes, setTerrainRes] = useState(100.0);
-  const [roadRes, setRoadRes] = useState(5);
-  const [roadWidth, setRoadWidth] = useState(3);
-  const [riverRes, setRiverRes] = useState(0.5);
-  const [riverWidth, setRiverWidth] = useState(4);
-  const [buildRes, setBuildRes] = useState(500);
+  const [params, setParams] = useState({
+    terrainRes: 100, roadRes: 5, roadWidth: 3,
+    riverRes: 0.5, riverWidth: 4, buildRes: 500,
+  });
   const [dirichlet, setDirichlet] = useState(true);
   const [lowMem, setLowMem] = useState(false);
 
-  const loadData = useCallback(async (res) => {
-    setResolution(res);
-    setResult(null); setTimer(''); setLoading(true); setError(false);
+  async function loadData(res) {
+    setResolution(res); setData(null); setResult(null); setLoading(true); setError(false);
     setStatus(`loading Chudleigh ${res}x${res} data...`);
-
-    const {baseData, baseMeta, srcData, gndData, geojsonStr} = await loadExampleData(res)
-
-    setBaseData(baseData); 
-    setBaseMeta(baseMeta);
-    setSrcData(srcData);
-    setGndData(gndData);
-    setGeojsonStr(geojsonStr);
-    
-    const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
-    setStatus(`loaded Chudleigh ${res}x${res} — ${nc.toLocaleString()} conductive cells`);
-    setLoading(false);
-  }, []);
+    try {
+      const loaded = await loadExampleData(res);
+      setData(loaded);
+      const nc = loaded.baseData.reduce((c, v) => v !== loaded.baseMeta.nodata && v > 0 ? c + 1 : c, 0);
+      setStatus(`loaded Chudleigh ${res}x${res} — ${nc.toLocaleString()} conductive cells`);
+    } catch (err) {
+      setError(true); setStatus(`error: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => { loadData('500'); }, []);
 
-  const run = useCallback(async () => {
-    if (!baseData || !srcData || !geojsonStr) return;
-    setComputing(true); setLoading(true); setError(false);
-    setStatus('rasterising features + solving (MG CG)...'); setTimer('');
+  async function run() {
+    if (!data || loading) return;
+    setLoading(true); setError(false);
+    setStatus('rasterising features + solving (MG CG)...');
     const t0 = performance.now();
     try {
-      const nd = baseMeta.nodata || -9999;
+      const { baseData, baseMeta, srcData, gndData, geojsonStr } = data;
+      const { terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes } = params;
+      const nd = baseMeta.nodata ?? -9999;
       const scaledBase = baseData.map(v => v !== nd ? v * terrainRes : v);
-      const params = {
-        roads:    { resistance: roadRes,    width: roadWidth },
-        rivers:   { resistance: riverRes,   width: riverWidth },
-        buildings:{ resistance: buildRes,   width: 0 },
+      const layers = {
+        roads: { resistance: roadRes, width: roadWidth },
+        rivers: { resistance: riverRes, width: riverWidth },
+        buildings: { resistance: buildRes, width: 0 },
       };
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
-      const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
-
       const solve = lowMem ? runGeospatialPipelineMgStencilAsync : runGeospatialPipelineMgAsync;
-      const json = await solve(
+      const r = JSON.parse(await solve(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
-        geojsonStr, JSON.stringify(params),
-        baseMeta.xllcorner, ymax, baseMeta.cellsize,
-        srcData, gd, 100_000, 1e-6, dirichlet,
-      );
-      const r = JSON.parse(json);
+        geojsonStr, JSON.stringify(layers), baseMeta.xllcorner, ymax, baseMeta.cellsize,
+        srcData, gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols),
+        100_000, 1e-6, dirichlet,
+      ));
+      if (r.error) throw new Error(r.error);
       setResult(r);
-      const s = ((performance.now() - t0) / 1000).toFixed(2);
-      setTimer(`${s}s`);
-      const iters = r.total_iters || 0;
-      setStatus(`${s}s · ${iters} iters`);
+      setStatus(`${((performance.now() - t0) / 1000).toFixed(2)}s · ${r.total_iters || 0} iters`);
     } catch (err) {
-      setError(true);
-      setStatus(`error: ${err.message}`);
+      setError(true); setStatus(`error: ${err.message}`);
     } finally {
       setLoading(false);
-      setComputing(false);
     }
-  }, [baseData, srcData, gndData, geojsonStr, baseMeta, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes, dirichlet, lowMem]);
+  }
 
-  const hasData = !!(baseData && srcData && geojsonStr);
-
-  const layerMasks = result ? (result.layer_masks || []) : [];
-
-  const numInput = (label, value, setter, min = 0.01, max = 1000, step = 0.01) => (
-    <div className="example-num-wrap">
-      <div className="example-num-label">{label}</div>
-      <input type="number" min={min} max={max} step={step} value={value}
-        onChange={e => setter(+e.target.value || min)} disabled={loading}
-        className="example-num-input" />
-    </div>
-  );
+  function numInput(label, key, min = 0.01, max = 1000, step = 0.01) {
+    return <label>{label}
+      <input type="number" min={min} max={max} step={step} value={params[key]}
+        onChange={e => setParams({ ...params, [key]: +e.target.value || min })} />
+    </label>;
+  }
 
   return (
     <div>
-      <ComputeModal visible={computing} />
-      <div className="row">
-        <button className="btn run" onClick={run} disabled={!hasData || loading}>Run</button>
-        <span className="timer">{timer}</span>
-      </div>
-      <StatusBar status={status} loading={loading && !computing} error={error} />
-
+      <button onClick={run} disabled={!data || loading}>Run</button>
+      <StatusBar status={status} loading={loading} error={error} />
       <div className="layout">
-        <div className="sidebar">
-          <div className="preset-group">
-            <h3>Resolution</h3>
-            {['500', '1000'].map(r => (
-              <div key={r} className={'preset' + (resolution === r ? ' sel' : '') + (loading ? ' loading' : '')}
-                onClick={() => !loading && loadData(r)}>
-                Chudleigh {r}×{r}
-              </div>
-            ))}
-          </div>
-
-          {hasData && (
-            <div className="preset-group">
-              <h3>Resistance Params</h3>
-              {numInput('Terrain ×', terrainRes, setTerrainRes)}
-              {numInput('Road Res', roadRes, setRoadRes)}
-              {numInput('River Res', riverRes, setRiverRes)}
-              {numInput('Build Res', buildRes, setBuildRes)}
-              <h3>Line Widths</h3>
-              {numInput('Road Width', roadWidth, setRoadWidth, 0, 20, 0.5)}
-              {numInput('River Width', riverWidth, setRiverWidth, 0, 20, 0.5)}
-              <h3>Solver</h3>
-              <div style={{display:'flex', gap:8}}>
-                <div className={'preset' + (!dirichlet ? ' sel' : '') + (loading ? ' loading' : '')}
-                  onClick={() => !loading && setDirichlet(false)}>
-                  Shunt ground
-                </div>
-                <div className={'preset' + (dirichlet ? ' sel' : '') + (loading ? ' loading' : '')}
-                  onClick={() => !loading && setDirichlet(true)}>
-                  Dirichlet ground (V=0)
-                </div>
-              </div>
-              <h3>Memory</h3>
-              <div style={{display:'flex', gap:8}}>
-                <div className={'preset' + (!lowMem ? ' sel' : '') + (loading ? ' loading' : '')}
-                  onClick={() => !loading && setLowMem(false)}>
-                  Standard (matrix)
-                </div>
-                <div className={'preset' + (lowMem ? ' sel' : '') + (loading ? ' loading' : '')}
-                  onClick={() => !loading && setLowMem(true)}>
-                  Low-memory (stencil)
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
+        <fieldset className="sidebar" disabled={loading}>
+          <label>Resolution
+            <select value={resolution} onChange={e => loadData(e.target.value)}>
+              {['500', '1000'].map(r => <option key={r} value={r}>Chudleigh {r}×{r}</option>)}
+            </select>
+          </label>
+          {data && <>
+            <h3>Resistance Params</h3>
+            {numInput('Terrain ×', 'terrainRes')}
+            {numInput('Road Res', 'roadRes')}
+            {numInput('River Res', 'riverRes')}
+            {numInput('Build Res', 'buildRes')}
+            <h3>Line Widths</h3>
+            {numInput('Road Width', 'roadWidth', 0, 20, 0.5)}
+            {numInput('River Width', 'riverWidth', 0, 20, 0.5)}
+            <h3>Solver</h3>
+            <label>Ground
+              <select value={String(dirichlet)} onChange={e => setDirichlet(e.target.value === 'true')}>
+                <option value="false">Shunt ground</option>
+                <option value="true">Dirichlet ground (V=0)</option>
+              </select>
+            </label>
+            <label>Memory
+              <select value={String(lowMem)} onChange={e => setLowMem(e.target.value === 'true')}>
+                <option value="false">Standard (matrix)</option>
+                <option value="true">Low-memory (stencil)</option>
+              </select>
+            </label>
+          </>}
+        </fieldset>
         <div className="main">
-          {!hasData && (
-            <div className="example-placeholder">
-              Select a resolution above to load Chudleigh data.
+          {!result && <p>{data ? 'Adjust parameters and press Run to compute.' : 'Select a resolution to load Chudleigh data.'}</p>}
+          {result && <>
+            <div className="maps">
+              {[
+                ['res', result.resistance_map, data.baseMeta.nodata],
+                ['cur', result.current_map, 0],
+                ['volt', result.voltage_map, 0],
+              ].map(([type, values, nodata]) => <MapView key={type} type={type} data={values}
+                meta={{ nrows: result.nrows, ncols: result.ncols, nodata }}
+                logScale={scales[type] === 'log'} onToggleScale={scale => setScales({ ...scales, [type]: scale })} />)}
             </div>
-          )}
-          {hasData && !result && (
-            <div className="example-placeholder">
-              Adjust parameters and press Run to compute.
+            <div className="maps">
+              {(result.layer_masks || []).map(m => <div key={m.name} className="map-view">
+                <div className="map-header">{m.name} mask {result.ncols}×{result.nrows}</div>
+                <LayerMaskCanvas data={m.data} nrows={result.nrows} ncols={result.ncols} />
+              </div>)}
             </div>
-          )}
-          {result && (
-            <>
-              <div className="maps">
-                {[
-                  { type: 'res',  data: result.resistance_map, nodata: baseMeta.nodata, logScale: resScale === 'log', onToggleScale: setResScale },
-                  { type: 'cur',  data: result.current_map,    nodata: 0,               logScale: curScale === 'log', onToggleScale: setCurScale },
-                  { type: 'volt', data: result.voltage_map,    nodata: 0,               logScale: voltScale === 'log', onToggleScale: setVoltScale },
-                ].map((map) => (
-                  <MapView
-                    key={map.type}
-                    type={map.type}
-                    data={map.data}
-                    meta={{
-                      nrows: result.nrows,
-                      ncols: result.ncols,
-                      nodata: map.nodata,
-                    }}
-                    logScale={map.logScale}
-                    onToggleScale={map.onToggleScale}
-                  />
-                ))}
-              </div>
-              {layerMasks.length > 0 && (
-                <div className="maps maps--auto" style={{ '--grid-cols': Math.min(layerMasks.length, 3) }}>
-                  {layerMasks.map(m => (
-                    <div key={m.name} className="layer-mask-card">
-                      <div className="layer-mask-header">
-                        {m.name} mask {result.ncols}×{result.nrows}
-                      </div>
-                      <LayerMaskCanvas data={m.data} nrows={result.nrows} ncols={result.ncols} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
+          </>}
         </div>
       </div>
     </div>

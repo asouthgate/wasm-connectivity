@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
 import { downsampleRaster } from '@wasm-connect/lib';
-import { Spinner } from '../components/Spinner';
 import { StatusBar } from '../components/StatusBar';
 import { downloadCSV } from '../stats';
 import { loadExampleData } from '../data';
@@ -58,37 +57,21 @@ function callBenchWorker(fn, args) {
   });
 }
 
-function benchmarkJacobi(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
-  return callBenchWorker('benchmark_jacobi', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
-}
-function benchmarkGmg(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
-  return callBenchWorker('benchmark_gmg', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
-}
-function benchmarkGmgStencil(baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround = false) {
-  return callBenchWorker('benchmark_gmg-lowmem', [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]);
-}
-
 export default function Benchmark() {
-  const [baseData, setBaseData] = useState(null);
-  const [baseMeta, setBaseMeta] = useState(null);
-  const [srcData, setSrcData] = useState(null);
-  const [gndData, setGndData] = useState(null);
-  const [geojsonStr, setGeojsonStr] = useState('');
+  const [data, setData] = useState(null);
+  const { baseData, baseMeta, srcData, gndData, geojsonStr } = data || {};
   const [reps, setReps] = useState(2);
   const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState([]);
   const [status, setStatus] = useState('Loading Chudleigh data...');
 
   useEffect(() => {
-    loadExampleData(1000).then(({baseData, baseMeta, srcData, gndData, geojsonStr}) => {
-      setBaseData(baseData); 
-      setBaseMeta(baseMeta);
-      setSrcData(srcData);
-      setGndData(gndData);
-      setGeojsonStr(geojsonStr);
+    loadExampleData(1000).then(loaded => {
+      setData(loaded);
+      const { baseData, baseMeta } = loaded;
       const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
       setStatus(`loaded Chudleigh 1000×1000: ${nc.toLocaleString()} conductive cells`);
-    });
+    }).catch(err => setStatus(`error: ${err.message}`));
   }, []);
 
   const start = useCallback(async () => {
@@ -121,14 +104,9 @@ export default function Benchmark() {
         for (const runName of RUNS) {
           setStatus(`running ${res}×${res}, rep ${r}/${reps}: ${runName}...`);
           try {
-            let result;
-            if (runName === 'jacobi') {
-              result = await benchmarkJacobi(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
-            } else if (runName === 'gmg-lowmem') {
-              result = await benchmarkGmgStencil(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
-            } else {
-              result = await benchmarkGmg(rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR);
-            }
+            const result = await callBenchWorker(`benchmark_${runName}`, [
+              rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR, false,
+            ]);
             allResults.push({ resolution: res, repeat: r, run: runName, ...result });
             setRuns([...allResults]);
           } catch (err) {
@@ -154,11 +132,10 @@ export default function Benchmark() {
   return (
     <div>
       <div className="row">
-        <span className="bench-reps-label">repetitions:</span>
-        <input type="number" value={reps} onChange={e => setReps(Math.max(1, Math.min(20, +e.target.value || 1)))}
-          disabled={running} className="bench-input" />
-        <button className="btn run" onClick={start} disabled={!hasData || running}>Run</button>
-        {runs.length > 0 && <button className="btn" onClick={() => buildBenchmarkCSV(runs)}>Download CSV</button>}
+        <label>repetitions: <input type="number" value={reps} onChange={e => setReps(Math.max(1, Math.min(20, +e.target.value || 1)))}
+          disabled={running} /></label>
+        <button onClick={start} disabled={!hasData || running}>Run</button>
+        {runs.length > 0 && <button onClick={() => buildBenchmarkCSV(runs)}>Download CSV</button>}
       </div>
       <StatusBar status={status} loading={running} />
 
@@ -168,7 +145,7 @@ export default function Benchmark() {
         </div>
       )}
 
-      <div className="log log--bench">
+      <div className="log">
         <table>
           <thead>
             <tr>
@@ -179,7 +156,7 @@ export default function Benchmark() {
           </thead>
           <tbody>
             {runs.map((r, i) => (
-              <tr key={i} className={r.error ? 'bench-log-row--error' : ''}>
+              <tr key={i} className={r.error ? 'error' : ''}>
                 <td>{r.resolution}</td><td>{r.repeat}</td>
                 <td>{RUN_LABELS[r.run] || r.run}</td>
                 <td>{r.error ? 'err' : fmtMs(r.prepTimeMs)}</td>
@@ -190,7 +167,7 @@ export default function Benchmark() {
               </tr>
             ))}
             {running && runs.length < totalRuns && (
-              <tr><td colSpan={8}><Spinner size={12} /> running...</td></tr>
+              <tr><td colSpan={8}>running...</td></tr>
             )}
           </tbody>
         </table>
