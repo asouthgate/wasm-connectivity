@@ -129,7 +129,7 @@ Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch.
 For Robin-type boundary conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are shunts to ground (see the similar approach used in \cite{vasilyeva2026multiscale}). In this system, we have:
 
 \[
-L_{{shunt},ii} = L_ii + a_i,
+L_{{shunt},ii} = L_{ii} + a_i,
 \]
 
 and
@@ -310,9 +310,11 @@ with each entry
 L_{1,IJ} = \sum_{i=1}^N\sum_{j=1}^N P^T_{Ii} L{ij} P_{jJ}
 \]
 
-This strategy depends on the operator that is used.
+The number of non-zero terms in this sum depends on the operator used. For a 2D raster grid,
+each row and column of $L$ has at most $5$ non-zero entries, and each row of $P$ has 
+at most $9$ non-zero entries.
 For the 9-point bilinear transfer operator fine matrix, we use a stencil representation in order
-to avoid storage.
+to avoid storage for level-0 and level-1 matrices.
 
 \subsection{Example datasets and resistance map calculation}
 

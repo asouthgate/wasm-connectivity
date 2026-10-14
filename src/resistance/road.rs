@@ -77,7 +77,7 @@ mod tests {
         let road_idx = 2 * ncols + 2;
         assert!(result[road_idx] > 0.0, "at road cell should have resistance");
         let expected = ((1.0 - 0.0 / buffer) * 0.5 + 0.5).powf(xmax) * resmax;
-        assert!((result[road_idx] - expected).abs() < 0.01, "at road, d=0 → res={}", expected);
+        assert!((result[road_idx] - expected).abs() < 0.01, "at road, d=0 -> res={}", expected);
     }
 
     #[test]
@@ -107,7 +107,7 @@ mod tests {
         let result = cal_road_resistance(&binary, nrows, ncols, 5.0, 10.0, 5.0, 1.0);
         assert!(result[0] > 0.0);
         assert!(result[1].is_finite());
-        assert!(result[2].is_nan(), "missing road data → NaN");
+        assert!(result[2].is_nan(), "missing road data -> NaN");
         assert!(result[3].is_finite());
     }
 }

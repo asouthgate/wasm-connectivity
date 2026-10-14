@@ -1,7 +1,7 @@
 export const SCENARIOS = [
-  { id: 'dsm', name: 'Digital surface model', description: 'DSM < 20 sources → DSM > 100 ground' },
-  { id: 'linear_res', name: 'Linear resistance', description: 'Resistance = 1/(1+R) · DSM > 110 source strengths → hard surface > 1 ground', inputs: ['dsm', 'hard_surf'] },
-  { id: 'log_total_res', name: 'Log total resistance', description: 'Hard-surface source strengths → DSM > 125 ground', inputs: ['hard_surf', 'dsm'] },
+  { id: 'dsm', name: 'Digital surface model', description: 'DSM < 20 sources -> DSM > 100 ground' },
+  { id: 'linear_res', name: 'Linear resistance', description: 'Resistance = 1/(1+R) · DSM > 110 source strengths -> hard surface > 1 ground', inputs: ['dsm', 'hard_surf'] },
+  { id: 'log_total_res', name: 'Log total resistance', description: 'Hard-surface source strengths -> DSM > 125 ground', inputs: ['hard_surf', 'dsm'] },
 ];
 
 export function scenarioResistance(id, data, nodata) {

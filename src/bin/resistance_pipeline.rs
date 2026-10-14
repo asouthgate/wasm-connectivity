@@ -144,7 +144,7 @@ fn rasterize_geojson_to_binary(
     let (result, _masks) = rasterize_features(geojson_str, &params_map, &base, nrows, ncols, transform, &mut warnings);
     let non_zero = result.iter().filter(|&&v| v > 0.0 && v.is_finite()).count();
     emit_json_log("INFO", &format!(
-        "rasterized {} ({} bytes) → {} non-zero cells",
+        "rasterized {} ({} bytes) -> {} non-zero cells",
         layer_name, geojson_str.len(), non_zero
     ));
     for w in &warnings {
@@ -485,7 +485,7 @@ fn run() -> io::Result<()> {
             );
             let nz = result.iter().filter(|&&v| v > 0.0 && v.is_finite()).count();
             emit_json_log("INFO", &format!(
-                "rasterized generic_resistance ({} bytes) → {} non-zero cells",
+                "rasterized generic_resistance ({} bytes) -> {} non-zero cells",
                 gj.len(), nz
             ));
             for w in &warnings {

@@ -407,7 +407,7 @@ mod tests {
             &params, None, None,
         );
 
-        assert!(output.generic_res[7].is_nan(), "NA generic → NA generic_res");
+        assert!(output.generic_res[7].is_nan(), "NA generic -> NA generic_res");
         assert!(output.generic_res[0].is_finite());
     }
 }

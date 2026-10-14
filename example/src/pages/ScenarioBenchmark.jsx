@@ -23,7 +23,7 @@ export default function ScenarioBenchmark() {
     })).then(entries => {
       if (!mounted.current) return;
       setPreviews(Object.fromEntries(entries));
-      setStatus('Ready · 2000×2000 · low-memory MG · Shunt ground');
+      setStatus('Ready · 2000x2000 · low-memory MG · Shunt ground');
     }).catch(err => {
       if (err.name === 'AbortError' || !mounted.current) return;
       setStatus(err.message); setError(true);
@@ -96,8 +96,8 @@ export default function ScenarioBenchmark() {
       })}
       <div className="scenario">
         <div className="bench-info">
-          Previews: 200×200 · columns: resistance, source, ground, log current.
-          Full-resolution log current maps: 2000×2000, in the same scenario order.
+          Previews: 200x200 · columns: resistance, source, ground, log current.
+          Full-resolution log current maps: 2000x2000, in the same scenario order.
         </div>
         {SCENARIOS.map((scenario, index) => {
           const result = results[scenario.id];

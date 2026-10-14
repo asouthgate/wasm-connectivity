@@ -383,7 +383,7 @@ pub fn solve_raster_sources_mg_with_options(
     ground_mode: GroundMode,
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
-    // Fill nodata → every cell is a node → rectangular grid
+    // Fill nodata -> every cell is a node -> rectangular grid
     memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
     memory::record_filled_resistance(filled.len());

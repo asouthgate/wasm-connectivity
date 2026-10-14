@@ -17,7 +17,7 @@
 //!   - `detector`      (string, required)
 //!   - `x`             (number, required): British National Grid easting
 //!   - `y`             (number, required): British National Grid northing
-//!   - `n_active_days` (number, optional; blank → `None`)
+//!   - `n_active_days` (number, optional; blank -> `None`)
 //!
 //! * **master**: one row per recorded call:
 //!   - `detector`      (string, required)
