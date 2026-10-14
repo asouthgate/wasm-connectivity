@@ -122,21 +122,23 @@ Equations \eqref{eq:balance1} and \eqref{eq:balance2} can be written in the form
 \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s},
 \end{equation}
 
-where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by either setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation, or by setting $\mathbf{L}_{jj}$ to $1$, off-diagonals to zero, and current $\mathbf{s}_j$ to zero for ground pixels. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected.
+where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected. \hl{citation}
+
 Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. 
-For Robins-type boundary conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are shunts to ground. In this system, we have:
+
+For Robin-type boundary conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are shunts to ground (see the similar approach used in \cite{vasilyeva2026multiscale}). In this system, we have:
 
 \[
-L_{{shunt},ii} = L_ii + g_i,
+L_{{shunt},ii} = L_ii + a_i,
 \]
 
 and
 
 \[
-b_{{shunt},i} = b_i + g_i \cdot v_i,
+b_{{shunt},i} = b_i + a_i \cdot g_i,
 \]
 
-where $g_i$ is the shunt conductance for pixel $i$ and $v_i$ the target voltage. \hl{Requires citations}
+Notice from the units of each side that $a_i$ is a conductance and $a_i \cdot g_i$ a current, so $g_i$ is a voltage. $g_i = 0$ gives a reference ground, but since $g_i$ can be non-zero, the Robin boundary can also specify a source. In this case, sink pixels are coupled by a resistor to an external ground, instead of acting as a ground directly.
 
 \subsection{Modes}
 
