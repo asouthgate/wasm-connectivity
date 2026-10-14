@@ -61,16 +61,20 @@ pub fn euclidean_distance_transform(mask: &[f64], nrows: usize, ncols: usize) ->
         }
     }
 
-    let mut result = vec![0.0f64; total];
+    // Preserve a column's row-pass values before overwriting it in place.
+    let mut column = vec![0.0f64; nrows];
     let mut v = vec![0usize; nrows];
     let mut z = vec![0.0f64; nrows + 1];
 
     // pass 2: compute the distance transform in the column direction
     for c in 0..ncols {
+        for r in 0..nrows {
+            column[r] = f[r * ncols + c];
+        }
         // Find the first valid row in the column, invalid means the value is NaN or infinite
         let mut first_valid: Option<usize> = None;
         for r in 0..nrows {
-            if f[r * ncols + c].is_finite() {
+            if column[r].is_finite() {
                 first_valid = Some(r);
                 break;
             }
@@ -81,7 +85,7 @@ pub fn euclidean_distance_transform(mask: &[f64], nrows: usize, ncols: usize) ->
             Some(sr) => sr,
             None => {
                 for r in 0..nrows {
-                    result[r * ncols + c] = f64::NAN;
+                    f[r * ncols + c] = f64::NAN;
                 }
                 continue;
             }
@@ -94,7 +98,7 @@ pub fn euclidean_distance_transform(mask: &[f64], nrows: usize, ncols: usize) ->
 
         // Iterate over the rows in the column, starting from the first valid row
         for r in (start_row + 1)..nrows {
-            let fr = f[r * ncols + c];
+            let fr = column[r];
             if !fr.is_finite() {
                 continue;
             }
@@ -112,7 +116,7 @@ pub fn euclidean_distance_transform(mask: &[f64], nrows: usize, ncols: usize) ->
                 // If the intersection point s is greater than z[k],
                 // then we have found a new valid row, and recall a
                 // valid row is one that is closer to the current row than the last valid row in v.
-                let fv = f[v[k as usize] * ncols + c];
+                let fv = column[v[k as usize]];
                 let r_f = r as f64;
                 let v_f = v[k as usize] as f64;
                 let denom = 2.0 * r_f - 2.0 * v_f;
@@ -146,11 +150,11 @@ pub fn euclidean_distance_transform(mask: &[f64], nrows: usize, ncols: usize) ->
             }
             let vk_f = v[k2 as usize] as f64;
             let diff = r as f64 - vk_f;
-            result[r * ncols + c] = diff * diff + f[v[k2 as usize] * ncols + c];
+            f[r * ncols + c] = diff * diff + column[v[k2 as usize]];
         }
     }
 
-    for val in result.iter_mut() {
+    for val in f.iter_mut() {
         if val.is_finite() && *val >= 0.0 {
             *val = val.sqrt();
         } else {
@@ -158,7 +162,7 @@ pub fn euclidean_distance_transform(mask: &[f64], nrows: usize, ncols: usize) ->
         }
     }
 
-    result
+    f
 }
 
 #[cfg(test)]
@@ -198,5 +202,39 @@ mod tests {
         for v in result {
             assert!((v - 0.0).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn rectangular_grids_match_nearest_feature_distances() {
+        for (nrows, ncols) in [(1, 6), (6, 1), (3, 4), (4, 3)] {
+            let total = nrows * ncols;
+            for pattern in 0usize..(1 << total) {
+                let mask: Vec<f64> = (0..total)
+                    .map(|i| if pattern & (1 << i) != 0 { 1.0 } else { 0.0 })
+                    .collect();
+                let features: Vec<usize> = (0..total).filter(|&i| mask[i] != 0.0).collect();
+                let distance = euclidean_distance_transform(&mask, nrows, ncols);
+                for (i, &actual) in distance.iter().enumerate() {
+                    if features.is_empty() {
+                        assert!(actual.is_nan());
+                        continue;
+                    }
+                    let expected = features.iter().map(|&j| {
+                        let dr = (i / ncols) as f64 - (j / ncols) as f64;
+                        let dc = (i % ncols) as f64 - (j % ncols) as f64;
+                        dr * dr + dc * dc
+                    }).fold(f64::INFINITY, f64::min).sqrt();
+                    assert!((actual - expected).abs() < 1e-12,
+                        "{nrows}x{ncols}, pattern={pattern}, cell={i}: {actual} vs {expected}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nonfinite_mask_cells_are_background_and_finite_nonzero_cells_are_features() {
+        let mask = [-2.0, f64::NAN, f64::INFINITY, 0.0, 0.0, 3.0];
+        assert_eq!(euclidean_distance_transform(&mask, 2, 3),
+            vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0]);
     }
 }

@@ -56,24 +56,19 @@ fn ukceh_to_rank(class: i32) -> Option<f64> {
 // * xmax: the exponent for the resistance calculation
 // # Returns
 // A 2D array of f64 values representing the resistance for each pixel
-fn ranked_resistance(conductance: &[f64], rankmax: f64, resmax: f64, xmax: f64) -> Vec<f64> {
-    conductance
-        .iter()
-        .map(|&c| {
-            // R reference docstring: "Resistance in interval [0, resmax]".
-            // Ranks at or above rankmax (e.g. buildings, set to rankmax)
-            // collapse to resmax so the value range stays bounded.
-            if c >= rankmax {
-                resmax
-            } else {
-                (c / rankmax).powf(xmax) * resmax
-            }
-        })
-        .collect()
+fn ranked_resistance_in_place(conductance: &mut [f64], rankmax: f64, resmax: f64, xmax: f64) {
+    for value in conductance {
+        // Ranks at or above rankmax (including buildings) collapse to resmax.
+        *value = if *value >= rankmax {
+            resmax
+        } else {
+            (*value / rankmax).powf(xmax) * resmax
+        };
+    }
 }
 
 // Force pixels classified as buildings to the highest rank so they collapse
-// to Rmax in `ranked_resistance` (Buildings = rank 8, the least permeable).
+// to Rmax in `ranked_resistance_in_place` (Buildings = rank 8, the least permeable).
 //
 // # Arguments
 // * conductance: a mutable 2D array of f64 values representing the rank for each pixel
@@ -106,7 +101,8 @@ pub fn get_landscape_resistance_lcm(
 ) -> Vec<f64> {
     let mut conductance = compute_base_rank(lcm);
     apply_building_max(&mut conductance, buildings, rankmax);
-    ranked_resistance(&conductance, rankmax, resmax, xmax)
+    ranked_resistance_in_place(&mut conductance, rankmax, resmax, xmax);
+    conductance
 }
 
 // Compute the landscape resistance based on the base rank, buildings, and resistance parameters
@@ -131,7 +127,8 @@ pub fn get_landscape_resistance_from_conductance(
         .map(|&c| if c.is_finite() && c >= 0.0 { c } else { f64::NAN })
         .collect();
     apply_building_max(&mut conductance, buildings, rankmax);
-    ranked_resistance(&conductance, rankmax, resmax, xmax)
+    ranked_resistance_in_place(&mut conductance, rankmax, resmax, xmax);
+    conductance
 }
 
 #[cfg(test)]
@@ -189,5 +186,16 @@ mod tests {
         let r = get_landscape_resistance_lcm(&lcm, &buildings, 8.0, 100.0, 5.0);
         assert!((r[0] - 100.0).abs() < 1e-6, "building cell should map to Rmax");
         assert!(r[1].is_nan(), "non-building NaN cell stays NaN");
+    }
+
+    #[test]
+    fn supplied_ranks_preserve_invalid_values_building_overrides_and_clamping() {
+        let ranks = [-1.0, f64::NAN, f64::INFINITY, 9.0, 0.0, 4.0];
+        let buildings = [0.0, 1.0, 1.0, 0.0, 0.0, 0.0];
+        let result = get_landscape_resistance_from_conductance(
+            &ranks, &buildings, 8.0, 100.0, 5.0,
+        );
+        assert!(result[0].is_nan());
+        assert_eq!(&result[1..], &[100.0, 100.0, 100.0, 0.0, 3.125]);
     }
 }
