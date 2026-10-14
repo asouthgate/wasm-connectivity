@@ -1,3 +1,6 @@
+#[cfg(all(feature = "bin", not(target_arch = "wasm32")))]
+pub mod io;
+
 use serde::Serialize;
 
 /// Resistance value used to fill nodata cells. 1e9 Ω makes the edge

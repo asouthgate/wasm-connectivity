@@ -4,7 +4,7 @@
 Usage:
     cargo run --profile release-prof --features bin,instrumentation-profile \
         --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt > profile.json
-    python3 tests/scripts/plot_instrumentation_profile.py profile.json
+    python3 scripts/plot_instrumentation_profile.py profile.json
 """
 import json
 import sys

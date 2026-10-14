@@ -6,83 +6,15 @@
 //! Diagnostics go to stderr.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 
 use serde::Serialize;
 
 use wasm_connect::linalg::multigrid::MgOptions;
+use wasm_connect::raster::io::parse_asc;
 use wasm_connect::memory::{take_profile, InstrumentationProfile};
 use wasm_connect::solve::{self, GroundMode};
 
 const DATA_DIR: &str = "example/public/geodata";
-
-struct AscGrid {
-    data: Vec<f64>,
-    nrows: usize,
-    ncols: usize,
-    xllcorner: f64,
-    cellsize: f64,
-    nodata: f64,
-    ymax: f64,
-}
-
-fn parse_asc<P: AsRef<Path>>(path: P) -> AscGrid {
-    let text = fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("cannot read {}: {}", path.as_ref().display(), e));
-
-    let mut ncols = 0usize;
-    let mut nrows = 0usize;
-    let mut xllcorner = 0.0f64;
-    let mut yllcorner = 0.0f64;
-    let mut cellsize = 0.0f64;
-    let mut nodata = -9999.0f64;
-    let mut data = Vec::new();
-
-    for (i, line) in BufReader::new(text.as_bytes()).lines().enumerate() {
-        let line = line.unwrap_or_default();
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if i < 6 {
-            let parts: Vec<&str> = trimmed.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let val = parts[1].parse::<f64>().unwrap_or(0.0);
-                match parts[0].to_lowercase().as_str() {
-                    "ncols" => ncols = val as usize,
-                    "nrows" => nrows = val as usize,
-                    "xllcorner" | "xllcenter" => xllcorner = val,
-                    "yllcorner" | "yllcenter" => yllcorner = val,
-                    "cellsize" => cellsize = val,
-                    "nodata_value" => nodata = val,
-                    _ => {}
-                }
-            }
-        } else {
-            for token in trimmed.split_whitespace() {
-                data.push(token.parse::<f64>().unwrap_or(nodata));
-            }
-        }
-    }
-
-    assert!(nrows > 0 && ncols > 0, "ASC dimensions must be positive");
-    assert_eq!(
-        data.len(),
-        nrows * ncols,
-        "ASC cell count must match dimensions"
-    );
-    let ymax = yllcorner + nrows as f64 * cellsize;
-    AscGrid {
-        data,
-        nrows,
-        ncols,
-        xllcorner,
-        cellsize,
-        nodata,
-        ymax,
-    }
-}
 
 #[derive(Serialize)]
 struct ProfileRecord {
@@ -167,6 +99,11 @@ fn main() {
     let base = parse_asc(&format!("{DATA_DIR}/base_resistance_{resolution}.asc"));
     let src = parse_asc(&format!("{DATA_DIR}/source_{resolution}.asc"));
     let gnd = parse_asc(&format!("{DATA_DIR}/ground_{resolution}.asc"));
+    for grid in [&base, &src, &gnd] {
+        assert!(grid.nrows > 0 && grid.ncols > 0, "ASC dimensions must be positive");
+        assert_eq!(grid.data.len(), grid.nrows * grid.ncols,
+            "ASC cell count must match dimensions");
+    }
     assert_eq!(
         (src.nrows, src.ncols),
         (base.nrows, base.ncols),

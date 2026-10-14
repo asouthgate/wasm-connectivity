@@ -16,10 +16,7 @@ pub struct AscGrid {
 pub fn parse_asc<P: AsRef<Path>>(path: P) -> AscGrid {
     let text = fs::read_to_string(path.as_ref())
         .unwrap_or_else(|e| panic!("cannot read {}: {}", path.as_ref().display(), e));
-    parse_asc_str(&text)
-}
 
-pub fn parse_asc_str(text: &str) -> AscGrid {
     let mut ncols = 0usize;
     let mut nrows = 0usize;
     let mut xllcorner = 0.0f64;
