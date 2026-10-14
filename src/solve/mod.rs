@@ -31,7 +31,7 @@ fn collect_ground_nodes(
             let node = cell_to_node[idx];
             if node > 0 {
                 let gv = ground_data[idx];
-                if gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10 {
+                if valid_positive_value(gv, nodata) {
                     nodes.push((node - 1) as usize);
                 }
             }
@@ -103,10 +103,6 @@ pub struct AnnotatedOutput<T: Serialize> {
     pub total_iters: usize,
 }
 
-// ----------------------------------------------------------------------------
-// Raster-source mode
-// ----------------------------------------------------------------------------
-
 /// Jacobi-preconditioned raster solve. Rebuilds the circuit for every call
 /// and starts PCG from zero. Nodata cells are filled with high resistance
 /// so the full rectangular system is solved in one shot.
@@ -122,21 +118,55 @@ pub fn solve_raster_sources_jacobi(
     remove_average: bool,
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
+    let (laplacian, s, cell_to_node) = prepare_explicit_system(
+        resistance_data, nrows, ncols, nodata, source_data, ground_data,
+        remove_average, ground_mode,
+    );
+    memory::record_jacobi_diag(s.len());
+    let res = solver::cg_solve(&laplacian, &s, max_iter, tol);
+
+    let out = build_raster_output(
+        &res.v,
+        resistance_data,
+        ground_data,
+        &cell_to_node,
+        nrows,
+        ncols,
+        nodata,
+        ground_mode,
+    );
+
+    AnnotatedOutput {
+        output: out,
+        total_iters: res.iters,
+    }
+}
+
+
+fn prepare_explicit_system(
+    resistance_data: &[f64],
+    nrows: usize,
+    ncols: usize,
+    nodata: f64,
+    source_data: &[f64],
+    ground_data: &[f64],
+    remove_average: bool,
+    ground_mode: GroundMode,
+) -> (CsMat<f64>, Vec<f64>, Vec<i32>) {
     memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
     memory::record_filled_resistance(filled.len());
 
     let (cell_to_node, num_nodes, _, laplacian) =
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
-    memory::record_cell_to_node_map(cell_to_node.len());
     let current_global =
-        build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
+        build_node_values(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
 
     let grounds_present;
     let (mut laplacian, mut s) = match ground_mode {
         GroundMode::Shunt => {
             let g =
-                build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
+                build_node_values(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
             grounds_present = g.iter().any(|&x| x > 0.0);
             let laplacian = if grounds_present {
@@ -165,96 +195,47 @@ pub fn solve_raster_sources_jacobi(
         crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
     }
 
-    // Balance source injection for ground-free systems; numerical regularization
-    // independently supplies a potential reference.
-    if remove_average && !grounds_present {
-        let sum: f64 = s.iter().sum();
-        if sum.abs() > 1e-15 {
-            let mean = sum / num_nodes as f64;
-            for v in &mut s {
-                *v -= mean;
-            }
-        }
-    }
+    balance_sources(&mut s, remove_average && !grounds_present);
 
     memory::record_fine_laplacian(&laplacian);
     memory::record_cg_vectors(num_nodes);
 
-    memory::record_jacobi_diag(num_nodes);
-    let res = solver::cg_solve(&laplacian, &s, max_iter, tol);
-
-    let out = build_raster_output(
-        &res.v,
-        resistance_data,
-        ground_data,
-        &cell_to_node,
-        nrows,
-        ncols,
-        nodata,
-        ground_mode,
-    );
-
-    AnnotatedOutput {
-        output: out,
-        total_iters: res.iters,
-    }
+    (laplacian, s, cell_to_node)
 }
 
-// ----------------------------------------------------------------------------
-// Shared solve kernel
-// ----------------------------------------------------------------------------
+fn valid_positive_value(value: f64, nodata: f64) -> bool {
+    value.is_finite() && value > 0.0 && (value - nodata).abs() > 1e-10
+}
 
-/// Build the per-node ground (shunt) diagonal from the ground raster.
-/// Each ground cell contributes its value as a conductance to the 0V
-/// reference.
-fn build_ground_diagonal(
+fn build_node_values(
     cell_to_node: &[i32],
     num_nodes: usize,
     nrows: usize,
     ncols: usize,
     nodata: f64,
-    ground_data: &[f64],
+    data: &[f64],
 ) -> Vec<f64> {
-    let mut conds = vec![0.0f64; num_nodes];
-    for row in 0..nrows {
-        for col in 0..ncols {
-            let idx = row * ncols + col;
-            let node = cell_to_node[idx];
-            if node > 0 {
-                let node_idx = (node - 1) as usize;
-                let gv = ground_data[idx];
-                if gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10 {
-                    conds[node_idx] += gv;
-                }
-            }
+    let mut values = vec![0.0; num_nodes];
+    for idx in 0..nrows * ncols {
+        let node = cell_to_node[idx];
+        if node > 0 && valid_positive_value(data[idx], nodata) {
+            values[(node - 1) as usize] += data[idx];
         }
     }
-    conds
+    values
 }
 
-fn build_global_currents(
-    cell_to_node: &[i32],
-    num_nodes: usize,
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    source_data: &[f64],
-) -> Vec<f64> {
-    let mut current_global = vec![0.0f64; num_nodes];
-    for row in 0..nrows {
-        for col in 0..ncols {
-            let idx = row * ncols + col;
-            let node = cell_to_node[idx];
-            if node > 0 {
-                let node_idx = (node - 1) as usize;
-                let sv = source_data[idx];
-                if sv.is_finite() && sv > 0.0 && (sv - nodata).abs() > 1e-10 {
-                    current_global[node_idx] += sv;
-                }
+/// Balance injection only when requested and there are no physical grounds.
+fn balance_sources(s: &mut [f64], remove_average: bool) {
+    if remove_average {
+        let sum: f64 = s.iter().sum();
+        if sum.abs() > 1e-15 {
+            let mean = sum / s.len() as f64;
+            for value in s {
+                *value -= mean;
             }
         }
     }
-    current_global
 }
 
 /// Multigrid-preconditioned raster-mode solve.  Fills nodata cells with a
@@ -262,9 +243,9 @@ fn build_global_currents(
 /// geometric multigrid hierarchy, and uses MG V-cycles as the CG
 /// preconditioner.  Returns the output plus total PCG iteration count.
 ///
-/// Unlike the Jacobi-preconditioned path, this solves the full-grid system
-/// directly (no component extraction) because the MG hierarchy is built on
-/// the full rectangular grid and its restriction/prolongation operators
+/// This solves the full-grid system directly (no component extraction) because
+/// the MG hierarchy is built on the full rectangular grid and its
+/// restriction/prolongation operators
 /// assume raster-order indexing.
 pub fn solve_raster_sources_mg(
     resistance_data: &[f64],
@@ -307,57 +288,10 @@ pub fn solve_raster_sources_mg_with_options(
     ground_mode: GroundMode,
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
-    // Fill nodata -> every cell is a node -> rectangular grid
-    memory::reset();
-    let filled = crate::raster::fill_nodata(resistance_data, nodata);
-    memory::record_filled_resistance(filled.len());
-
-    // Discard assembly edges once the CSR matrix has been built.
-    let (cell_to_node, num_nodes, _, laplacian) =
-        crate::build_circuit_model(&filled, nrows, ncols, nodata);
-
-    let current_global =
-        build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
-
-    // Declare the system matrix up front, then run the whole algorithm on
-    // it. Shunt adds finite ground conductances to the diagonal; Dirichlet
-    // pins ground nodes at V=0. The MG hierarchy is built from the same
-    // matrix, so Galerkin coarsening propagates ground effects to all levels.
-    let grounds_present;
-    let (mut laplacian, mut s) = match ground_mode {
-        GroundMode::Shunt => {
-            let g =
-                build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
-            memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
-            grounds_present = g.iter().any(|&x| x > 0.0);
-            let laplacian = if grounds_present {
-                crate::circuit::laplacian::add_diagonal(&laplacian, &g)
-            } else {
-                laplacian
-            };
-            (laplacian, current_global)
-        }
-        GroundMode::Dirichlet => {
-            let gns = collect_ground_nodes(&cell_to_node, ground_data, nrows, ncols, nodata);
-            memory::record_ground_setup(memory::vec_usize_bytes(gns.len()));
-            grounds_present = !gns.is_empty();
-            let laplacian = if grounds_present {
-                apply_dirichlet_ground_lap(&laplacian, &gns)
-            } else {
-                laplacian
-            };
-            let mut s = current_global;
-            zero_ground_rhs(&mut s, &gns);
-            (laplacian, s)
-        }
-    };
-
-    if !grounds_present {
-        crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
-    }
-
-    memory::record_fine_laplacian(&laplacian);
-    memory::record_cg_vectors(num_nodes);
+    let (laplacian, s, cell_to_node) = prepare_explicit_system(
+        resistance_data, nrows, ncols, nodata, source_data, ground_data,
+        remove_average, ground_mode,
+    );
 
     let mg = MgPreconditioner::build_with_options(
         FineOperator::Explicit(laplacian),
@@ -366,17 +300,6 @@ pub fn solve_raster_sources_mg_with_options(
         options,
     );
 
-    // Balance source injection when there are no physical grounds. Numerical
-    // regularization supplies a reference independently of this source policy.
-    if remove_average && !grounds_present {
-        let sum: f64 = s.iter().sum();
-        if sum.abs() > 1e-15 {
-            let mean = sum / num_nodes as f64;
-            for v in &mut s {
-                *v -= mean;
-            }
-        }
-    }
     let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
 
     let out = build_raster_output(
@@ -396,43 +319,11 @@ pub fn solve_raster_sources_mg_with_options(
     }
 }
 
-// ----------------------------------------------------------------------------
-// Matrix-free (stencil) fine-level MG solve
-// ----------------------------------------------------------------------------
 
-fn valid_source_value(sv: f64, nodata: f64) -> bool {
-    sv.is_finite() && sv > 0.0 && (sv - nodata).abs() > 1e-10
-}
-
-fn valid_ground_value(gv: f64, nodata: f64) -> bool {
-    gv.is_finite() && gv > 0.0 && (gv - nodata).abs() > 1e-10
-}
-
-/// Per-node source vector `s` (node index == flat cell index).
-fn build_source_identity(source_data: &[f64], nodata: f64) -> Vec<f64> {
-    source_data
-        .iter()
-        .map(|&sv| {
-            if valid_source_value(sv, nodata) {
-                sv
-            } else {
-                0.0
-            }
-        })
-        .collect()
-}
-
-/// Per-node shunt conductances (node index == flat cell index).
-fn build_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
-    ground_data
-        .iter()
-        .map(|&gv| {
-            if valid_ground_value(gv, nodata) {
-                gv
-            } else {
-                0.0
-            }
-        })
+/// Per-cell source values or shunt conductances in raster order.
+fn build_identity_values(data: &[f64], nodata: f64) -> Vec<f64> {
+    data.iter()
+        .map(|&value| if valid_positive_value(value, nodata) { value } else { 0.0 })
         .collect()
 }
 
@@ -440,7 +331,7 @@ fn build_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
 fn build_dirichlet_mask_identity(ground_data: &[f64], nodata: f64) -> Vec<bool> {
     ground_data
         .iter()
-        .map(|&gv| valid_ground_value(gv, nodata))
+        .map(|&gv| valid_positive_value(gv, nodata))
         .collect()
 }
 
@@ -494,12 +385,12 @@ pub fn solve_raster_sources_mg_stencil_with_options(
     memory::reset();
     let num_nodes = nrows * ncols;
 
-    let source_s = build_source_identity(source_data, nodata);
+    let source_s = build_identity_values(source_data, nodata);
 
     let grounds_present;
     let (ground_spec, mut s) = match ground_mode {
         GroundMode::Shunt => {
-            let shunt = build_shunt_identity(ground_data, nodata);
+            let shunt = build_identity_values(ground_data, nodata);
             grounds_present = shunt.iter().any(|&x| x > 0.0);
             (GroundSpec::Shunt(shunt), source_s)
         }
@@ -516,17 +407,7 @@ pub fn solve_raster_sources_mg_stencil_with_options(
         }
     };
 
-    // Balance source injection for ground-free systems; numerical regularization
-    // independently supplies a potential reference.
-    if remove_average && !grounds_present {
-        let sum: f64 = s.iter().sum();
-        if sum.abs() > 1e-15 {
-            let mean = sum / num_nodes as f64;
-            for v in &mut s {
-                *v -= mean;
-            }
-        }
-    }
+    balance_sources(&mut s, remove_average && !grounds_present);
 
     let op = StencilOperator::new(nrows, ncols, nodata, resistance_data, ground_spec);
 
@@ -536,7 +417,7 @@ pub fn solve_raster_sources_mg_stencil_with_options(
     let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
 
     let out = build_raster_output_identity(
-        &res.v,
+        res.v,
         resistance_data,
         ground_data,
         nrows,
@@ -554,7 +435,7 @@ pub fn solve_raster_sources_mg_stencil_with_options(
 /// Raster output for the full-grid (identity mapping) case: the voltage field
 /// is already per-cell, so no node scatter is needed.
 fn build_raster_output_identity(
-    voltages_global: &[f64],
+    voltage_map: Vec<f64>,
     resistance_data: &[f64],
     ground_data: &[f64],
     nrows: usize,
@@ -562,7 +443,6 @@ fn build_raster_output_identity(
     nodata: f64,
     ground_mode: GroundMode,
 ) -> RasterOutput {
-    let voltage_map = voltages_global.to_vec();
     let current_map = current::compute_current_map_from_raster(
         resistance_data,
         ground_data,
@@ -591,22 +471,9 @@ fn build_raster_output(
     ground_mode: GroundMode,
 ) -> RasterOutput {
     let voltage_map = current::reconstruct_grid_map(voltages_global, cell_to_node, nrows * ncols);
-    let current_map = current::compute_current_map_from_raster(
-        resistance_data,
-        ground_data,
-        &voltage_map,
-        nrows,
-        ncols,
-        nodata,
-        ground_mode == GroundMode::Shunt,
-    );
-
-    RasterOutput {
-        voltages: voltage_map,
-        current_map,
-        nrows,
-        ncols,
-    }
+    build_raster_output_identity(
+        voltage_map, resistance_data, ground_data, nrows, ncols, nodata, ground_mode,
+    )
 }
 
 #[cfg(test)]
@@ -680,7 +547,12 @@ mod tests {
             }
             ground[0] = 1.0; // Also exercise a pinned regularization node.
             for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
-                for grounded in [true, false] {
+                for (grounded, remove_average) in [
+                    (true, true),
+                    (true, false),
+                    (false, true),
+                    (false, false),
+                ] {
                     let grounds = if grounded {
                         ground.clone()
                     } else {
@@ -695,7 +567,7 @@ mod tests {
                         &grounds,
                         5000,
                         1e-9,
-                        true,
+                        remove_average,
                         mode,
                     );
                     let stencil = solve_raster_sources_mg_stencil(
@@ -707,10 +579,17 @@ mod tests {
                         &grounds,
                         5000,
                         1e-9,
-                        true,
+                        remove_average,
                         mode,
                     );
-                    assert!(explicit.total_iters < 5000 && stencil.total_iters < 5000);
+                    let jacobi = solve_raster_sources_jacobi(
+                        &resistance, nrows, ncols, nodata, &source, &grounds,
+                        5000, 1e-9, remove_average, mode,
+                    );
+                    assert!(
+                        explicit.total_iters < 5000 && stencil.total_iters < 5000
+                            && jacobi.total_iters < 5000
+                    );
                     let spec = match mode {
                         GroundMode::Shunt => GroundSpec::Shunt(grounds.clone()),
                         GroundMode::Dirichlet => GroundSpec::Dirichlet(
@@ -726,30 +605,32 @@ mod tests {
                             }
                         }
                     }
-                    if !grounded {
+                    if !grounded && remove_average {
                         let mean = rhs.iter().sum::<f64>() / n as f64;
                         for value in &mut rhs {
                             *value -= mean;
                         }
                     }
                     let mut product = vec![0.0; n];
-                    crate::linalg::operator::Operator::matvec(
-                        &operator,
-                        &stencil.output.voltages,
-                        &mut product,
-                    );
-                    let error = product
-                        .iter()
-                        .zip(&rhs)
-                        .map(|(&value, &source)| (value - source).powi(2))
-                        .sum::<f64>()
-                        .sqrt();
-                    let norm = rhs.iter().map(|value| value * value).sum::<f64>().sqrt();
-                    assert!(
-                        error / norm < 1e-7,
-                        "true relative residual: {}",
-                        error / norm
-                    );
+                    for result in [&explicit, &stencil, &jacobi] {
+                        crate::linalg::operator::Operator::matvec(
+                            &operator,
+                            &result.output.voltages,
+                            &mut product,
+                        );
+                        let error = product
+                            .iter()
+                            .zip(&rhs)
+                            .map(|(&value, &source)| (value - source).powi(2))
+                            .sum::<f64>()
+                            .sqrt();
+                        let norm = rhs.iter().map(|value| value * value).sum::<f64>().sqrt();
+                        assert!(
+                            error / norm < 1e-7,
+                            "true relative residual: {}",
+                            error / norm
+                        );
+                    }
                     for (label, left, right) in [
                         (
                             "voltage",
@@ -760,6 +641,11 @@ mod tests {
                             "current",
                             &explicit.output.current_map,
                             &stencil.output.current_map,
+                        ),
+                        (
+                            "jacobi current",
+                            &explicit.output.current_map,
+                            &jacobi.output.current_map,
                         ),
                     ] {
                         for (&a, &b) in left.iter().zip(right) {
