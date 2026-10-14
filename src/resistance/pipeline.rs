@@ -1,9 +1,9 @@
 use super::irradiance::{irradiance_run, irradiance_to_resistance};
 use super::landscape::{get_landscape_resistance_from_conductance, get_landscape_resistance_lcm};
-use super::linear::get_linear_resistance;
+use super::linear::{initialize_linear_resistance, update_linear_resistance};
 use super::road::cal_road_resistance;
 use super::river::cal_river_resistance;
-use super::surface::{calc_surfs, prep_lidar_rasters};
+use super::surface::{calc_surfs, vegetation_distance, vegetation_mask, VegetationClass};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -120,6 +120,26 @@ pub fn run_resistance_pipeline(
     landscape_conductance_override: Option<&[f64]>,
     lightmap: Option<&[f64]>,
 ) -> ResistanceOutput {
+    run_resistance_pipeline_impl(
+        road_binary, river_binary, building_mask, lcm, dtm, dsm, generic_resistance,
+        lamps, params, landscape_conductance_override, lightmap, true,
+    )
+}
+
+pub(crate) fn run_resistance_pipeline_impl(
+    road_binary: &[f64],
+    river_binary: &[f64],
+    building_mask: &[f64],
+    lcm: Option<&[f64]>,
+    dtm: &[f64],
+    dsm: &[f64],
+    generic_resistance: &[f64],
+    lamps: &[f64],
+    params: &ResistanceParams,
+    landscape_conductance_override: Option<&[f64]>,
+    lightmap: Option<&[f64]>,
+    retain_vegetation_masks: bool,
+) -> ResistanceOutput {
     let m = params.nrows;
     let n = params.ncols;
     let total = m * n;
@@ -165,20 +185,26 @@ pub fn run_resistance_pipeline(
         )
     };
 
-    let lidar = prep_lidar_rasters(&surfs.soft_surf, m, n);
-    let mut linear_res = get_linear_resistance(
-        &lidar.distance_rasters,
-        &lidar.missing,
-        m,
-        n,
-        params.linear_buffer,
-        params.linear_rankmax,
-        params.linear_resmax,
-        params.linear_xmax,
-        params.pixw,
-    );
-    drop(lidar.distance_rasters);
-    drop(lidar.missing);
+    let mut linear_res = initialize_linear_resistance(surfs.soft_surf.iter().map(|h| !h.is_finite()));
+    let mut vegetation_masks = [Vec::new(), Vec::new(), Vec::new()];
+    // Preserve the unmanaged hedge / tree / managed hedge ranking order.
+    for (class, ranking, index) in [
+        (VegetationClass::UnmanagedHedge, 1.0, 1),
+        (VegetationClass::Tree, 2.0, 2),
+        (VegetationClass::ManagedHedge, 4.0, 0),
+    ] {
+        let mask = vegetation_mask(&surfs.soft_surf, class);
+        let distance = vegetation_distance(&mask, m, n);
+        update_linear_resistance(
+            &mut linear_res, &distance, ranking, params.linear_buffer,
+            params.linear_rankmax, params.linear_resmax, params.linear_xmax, params.pixw,
+        );
+        drop(distance);
+        if retain_vegetation_masks {
+            vegetation_masks[index] = mask;
+        }
+    }
+    let [manhedge, unmanhedge, tree] = vegetation_masks;
 
     let mut lamp_res = if let Some(lightmap) = lightmap {
         // Pre-computed light map: skip the raycasted irradiance and just
@@ -251,9 +277,9 @@ pub fn run_resistance_pipeline(
         total_res: final_total,
         soft_surf: surfs.soft_surf,
         hard_surf: surfs.hard_surf,
-        manhedge: lidar.manhedge,
-        unmanhedge: lidar.unmanhedge,
-        tree: lidar.tree,
+        manhedge,
+        unmanhedge,
+        tree,
         nrows: m,
         ncols: n,
     }
@@ -462,6 +488,34 @@ mod tests {
             assert!(output.linear_res[7].is_finite());
             assert!(output.lamp_res[7].is_finite());
             assert!(output.landscape_res[0].is_finite());
+        }
+    }
+
+    #[test]
+    fn sequential_vegetation_preserves_far_field_and_full_class_resistance() {
+        let params = make_params();
+        let zeros = vec![0.0; 25];
+        let dtm = vec![10.0; 25];
+        let lcm = vec![4.0; 25];
+        // Empty managed hedges dominate the far field; with full managed hedges,
+        // the absent tree class supplies the largest contribution instead.
+        for (height, expected) in [
+            (0.0, 22002.0), (1.0, 22002.0), (3.0, 22002.0),
+            (2.0, 9283.25), (4.0, 22002.0), (6.0, 22002.0),
+            (f64::NAN, f64::NAN), (f64::INFINITY, f64::NAN),
+        ] {
+            let dsm = vec![10.0 + height; 25];
+            for retain_masks in [true, false] {
+                let output = run_resistance_pipeline_impl(
+                    &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
+                    &params, None, None, retain_masks,
+                );
+                assert!(output.linear_res.iter().all(|&r|
+                    r == expected || (r.is_nan() && expected.is_nan())));
+                for mask in [&output.manhedge, &output.unmanhedge, &output.tree] {
+                    assert_eq!(mask.len(), if retain_masks { 25 } else { 0 });
+                }
+            }
         }
     }
 }
