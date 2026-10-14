@@ -23,7 +23,7 @@ export default function ScenarioBenchmark() {
     })).then(entries => {
       if (!mounted.current) return;
       setPreviews(Object.fromEntries(entries));
-      setStatus('Ready · 2000×2000 · low-memory MG · Neumann ground');
+      setStatus('Ready · 2000×2000 · low-memory MG · Shunt ground');
     }).catch(err => {
       if (err.name === 'AbortError' || !mounted.current) return;
       setStatus(err.message); setError(true);
@@ -84,7 +84,7 @@ export default function ScenarioBenchmark() {
             {preview && <div className="scenario-previews">
               {['res', 'src', 'gnd'].map(type => <MapView key={type} type={type}
                 data={preview[type]} meta={preview.meta} preview maxSide={200} showHeader={false}
-                logScale={type === 'res' && scenario.id === 'log_total_res'} />)}
+                logScale={false} />)}
               {result?.currentPreview ? <MapView type="cur" label="Log current"
                 data={result.currentPreview.data} meta={result.currentPreview} preview maxSide={200} showHeader={false} logScale /> :
                 <div className="map-view">

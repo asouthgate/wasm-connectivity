@@ -15,7 +15,7 @@ export default function MapView({ type, data, meta, logScale, onToggleScale, pre
 
   const labels = { res:'Resistance', points:'Focal Points', cur:'Current', src:'Source', gnd:'Ground', volt:'Voltage' };
   const dim = meta ? `${meta.ncols}×${meta.nrows}` : '';
-  const fmt = (v) => v === 0 ? '0.0' : Math.abs(v) < 0.01 ? v.toExponential(1) : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toPrecision(3);
+  const fmt = (v) => v === 0 ? '0.0' : Math.abs(v) < 0.01 || Math.abs(v) >= 1000 ? v.toExponential(1) : v.toPrecision(3);
 
   return (
     <div className="map-view">

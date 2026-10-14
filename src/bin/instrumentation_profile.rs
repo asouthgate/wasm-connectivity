@@ -2,7 +2,7 @@
 //!
 //! Usage:
 //!   cargo run --profile release-prof --features bin,instrumentation-profile \
-//!       --bin instrumentation-profile -- 500 --solver mg-lowmem --ground neumann
+//!       --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt
 //! Diagnostics go to stderr.
 
 use std::fs;
@@ -104,7 +104,7 @@ fn emit(resolution: usize, solver: &str, ground: &str, total_iters: usize) {
     println!("{}", serde_json::to_string_pretty(&rec).unwrap());
 }
 
-const USAGE: &str = "Usage: instrumentation-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground neumann|dirichlet";
+const USAGE: &str = "Usage: instrumentation-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground shunt|dirichlet";
 
 struct Args {
     resolution: usize,
@@ -133,7 +133,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             .ok_or_else(|| format!("missing value for {flag}"))?;
         let target = match flag {
             "--solver" if matches!(value.as_str(), "jacobi" | "mg" | "mg-lowmem") => &mut solver,
-            "--ground" if matches!(value.as_str(), "neumann" | "dirichlet") => &mut ground,
+            "--ground" if matches!(value.as_str(), "shunt" | "dirichlet") => &mut ground,
             _ => return Err(format!("unsupported value for {flag}: {value}")),
         };
         if target.replace(value.clone()).is_some() {
@@ -197,7 +197,7 @@ fn main() {
     }
 
     let ground_mode = match ground.as_str() {
-        "neumann" => GroundMode::Neumann,
+        "shunt" => GroundMode::Shunt,
         "dirichlet" => GroundMode::Dirichlet,
         _ => unreachable!(),
     };

@@ -13,17 +13,17 @@
 /// as non-conductive: they contribute zero current and edges to them are
 /// skipped.
 ///
-/// When `neumann_ground` is set, a ground cell contributes its shunt current
+/// When `shunt_ground` is set, a ground cell contributes its shunt current
 /// `ground[i] * V_i` (current to the 0V reference) in addition to any branch
 /// currents.
 ///
 /// # Arguments
 /// * `resistance_data` - Per-cell resistance raster (row-major).
-/// * `ground_data` - Per-cell ground raster (shunt conductance in Neumann mode).
+/// * `ground_data` - Per-cell ground raster (shunt conductance in Shunt mode).
 /// * `voltages` - Per-cell voltage map (row-major), length `nrows * ncols`.
 /// * `nrows`, `ncols` - Grid dimensions.
 /// * `nodata` - The nodata sentinel for `resistance_data`.
-/// * `neumann_ground` - Whether `ground_data` declares shunt conductances.
+/// * `shunt_ground` - Whether `ground_data` declares shunt conductances.
 ///
 /// # Returns
 /// Per-cell current map, length `nrows * ncols`.
@@ -34,7 +34,7 @@ pub fn compute_current_map_from_raster(
     nrows: usize,
     ncols: usize,
     nodata: f64,
-    neumann_ground: bool,
+    shunt_ground: bool,
 ) -> Vec<f64> {
     let n = nrows * ncols;
     let mut out = vec![0.0f64; n];
@@ -83,7 +83,7 @@ pub fn compute_current_map_from_raster(
             }
         }
 
-        if neumann_ground && ground_data[ind] > 0.0 {
+        if shunt_ground && ground_data[ind] > 0.0 {
             let shunt = ground_data[ind] * v;
             if shunt > 0.0 { pos += shunt; } else { neg -= shunt; }
         }
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_current_map_neumann_ground() {
+    fn test_compute_current_map_shunt_ground() {
         // 2x1 grid, ground (shunt conductance 5) on the bottom cell at V=1.
         let resistance = vec![1.0, 1.0];
         let ground = vec![0.0, 5.0];

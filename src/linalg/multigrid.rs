@@ -989,7 +989,7 @@ mod tests {
             for ground in 0..3 {
                 let spec = match ground {
                     0 => GroundSpec::None,
-                    1 => GroundSpec::Neumann(
+                    1 => GroundSpec::Shunt(
                         (0..n)
                             .map(|i| if i % nc == nc - 1 { 2.0 } else { 0.0 })
                             .collect(),
@@ -1255,7 +1255,7 @@ mod tests {
                 nc,
                 -9999.0,
                 &resistance,
-                GroundSpec::Neumann(vec![1.0; nr * nc]),
+                GroundSpec::Shunt(vec![1.0; nr * nc]),
             );
             let stencil = MgPreconditioner::build_with_options(
                 FineOperator::Stencil(stencil),
@@ -1400,7 +1400,7 @@ mod tests {
             check(&mg_e, &mg_s, "none");
         }
 
-        // Neumann ground
+        // Shunt ground
         {
             let mut lap = lap.clone();
             crate::circuit::laplacian::remove_reference_ground(&mut lap);
@@ -1411,11 +1411,11 @@ mod tests {
                 ncols,
                 nodata,
                 &resistance,
-                GroundSpec::Neumann(shunt.clone()),
+                GroundSpec::Shunt(shunt.clone()),
             );
             let mg_s =
                 MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
-            check(&mg_e, &mg_s, "neumann");
+            check(&mg_e, &mg_s, "shunt");
         }
 
         // Dirichlet ground
@@ -1448,7 +1448,7 @@ mod tests {
             for mode in 0..3 {
                 let spec = match mode {
                     0 => GroundSpec::None,
-                    1 => GroundSpec::Neumann(
+                    1 => GroundSpec::Shunt(
                         (0..n)
                             .map(|i| if i % nc == nc - 1 { 1.0 } else { 0.0 })
                             .collect(),

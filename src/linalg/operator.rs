@@ -23,8 +23,8 @@ pub enum GroundSpec {
     /// No physical grounds. The usual numerical regularization is retained;
     /// the solver may separately remove the source mean to balance injection.
     None,
-    /// Conductance-to-ground (Neumann): `shunt[i]` is added to `L[i,i]`.
-    Neumann(Vec<f64>),
+    /// Conductance-to-ground (Shunt): `shunt[i]` is added to `L[i,i]`.
+    Shunt(Vec<f64>),
     /// Fixed-voltage (Dirichlet): `ground[i]` pins node `i` at `V = 0`.
     Dirichlet(Vec<bool>),
 }
@@ -114,12 +114,12 @@ impl<'a> StencilOperator<'a> {
         assert_eq!(resistance.len(), nrows * ncols);
         match &ground {
             GroundSpec::None => {},
-            GroundSpec::Neumann(shunt) => assert_eq!(shunt.len(), resistance.len()),
+            GroundSpec::Shunt(shunt) => assert_eq!(shunt.len(), resistance.len()),
             GroundSpec::Dirichlet(mask) => assert_eq!(mask.len(), resistance.len()),
         }
         let grounded = match &ground {
             GroundSpec::None => false,
-            GroundSpec::Neumann(shunt) => shunt.iter().any(|&value| value.is_finite() && value > 0.0),
+            GroundSpec::Shunt(shunt) => shunt.iter().any(|&value| value.is_finite() && value > 0.0),
             GroundSpec::Dirichlet(mask) => mask.iter().any(|&value| value),
         };
         let reg_diag0 = if grounded {
@@ -141,7 +141,7 @@ impl<'a> StencilOperator<'a> {
     pub(crate) fn ground_storage_bytes(&self) -> u64 {
         match &self.ground {
             GroundSpec::None => 0,
-            GroundSpec::Neumann(shunt) => std::mem::size_of_val(shunt.as_slice()) as u64,
+            GroundSpec::Shunt(shunt) => std::mem::size_of_val(shunt.as_slice()) as u64,
             GroundSpec::Dirichlet(mask) => std::mem::size_of_val(mask.as_slice()) as u64,
         }
     }
@@ -169,7 +169,7 @@ impl<'a> StencilOperator<'a> {
             return 1.0;
         }
         let mut d = self.sum_neighbour_conductance(idx);
-        if let GroundSpec::Neumann(shunt) = &self.ground {
+        if let GroundSpec::Shunt(shunt) = &self.ground {
             d += shunt[idx];
         }
         if idx == 0 {
@@ -255,7 +255,7 @@ impl<'a> Operator for StencilOperator<'a> {
             }
 
             let mut d = diag;
-            if let GroundSpec::Neumann(shunt) = &self.ground {
+            if let GroundSpec::Shunt(shunt) = &self.ground {
                 d += shunt[idx];
             }
             if idx == 0 {
@@ -324,7 +324,7 @@ impl<'a> Operator for StencilOperator<'a> {
         }
 
         let mut d = diag;
-        if let GroundSpec::Neumann(shunt) = &self.ground {
+        if let GroundSpec::Shunt(shunt) = &self.ground {
             d += shunt[row];
         }
         if row == 0 {

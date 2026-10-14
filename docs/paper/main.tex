@@ -121,8 +121,22 @@ Equations \eqref{eq:balance1} and \eqref{eq:balance2} can be written in the form
 \label{eq:system}
 \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s},
 \end{equation}
+
 where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by either setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation, or by setting $\mathbf{L}_{jj}$ to $1$, off-diagonals to zero, and current $\mathbf{s}_j$ to zero for ground pixels. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected.
-Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}.
+Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. 
+For Robins-type boundary conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are shunts to ground. In this system, we have:
+
+\[
+L_{{shunt},ii} = L_ii + g_i,
+\]
+
+and
+
+\[
+b_{{shunt},i} = b_i + g_i \cdot v_i,
+\]
+
+where $g_i$ is the shunt conductance for pixel $i$ and $v_i$ the target voltage. \hl{Requires citations}
 
 \subsection{Modes}
 
@@ -371,7 +385,7 @@ the same resistance map input with a zero-volt ground, showing equivalent result
 \centering
 \includegraphics[width=0.48\textwidth]{figures/cs_results_curmap.png}
 \hfill
-\includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_neumann.png}
+\includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_shunt.png}
 \caption{Side-by-side comparison showing log rescaled current maps produced by Circuitscape (left) and our implementation (right), to show consistency. 
 Current maps were rescaled to the range $[1, 100]$, and are shown with log colorbar. Max absolute difference $<10^{-5}$ rescaled units.}
 \label{fig:comparison}
