@@ -1,9 +1,5 @@
-import { Spinner } from './Spinner';
-
-export function StatusBar({ status, loading, showSpinner = true, error = false }) {
-  return (
-    <div className={`status status-bar ${error ? 'status-bar--error' : ''}`}>
-      {loading && showSpinner && <Spinner />}{status}
-    </div>
-  );
+export function StatusBar({ status, loading, error = false }) {
+  return <p className={error ? 'status error' : 'status'} aria-busy={loading}>
+    {loading && <span className="spinner" role="status" aria-label="Working" />} {status}
+  </p>;
 }

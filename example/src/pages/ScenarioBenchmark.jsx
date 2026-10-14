@@ -73,7 +73,7 @@ export default function ScenarioBenchmark() {
   return (
     <div>
       <div className="row">
-        <button className="btn run" onClick={run} disabled={running || Object.keys(previews).length !== 3}>Run</button>
+        <button onClick={run} disabled={running || Object.keys(previews).length !== 3}>Run</button>
       </div>
       <StatusBar status={status} loading={running} error={error} />
       {SCENARIOS.map(scenario => {
@@ -105,7 +105,7 @@ export default function ScenarioBenchmark() {
             <h3>{index + 1}. {scenario.name}</h3>
             <div className="bench-info">{scenario.description}</div>
             {result && <div className="log">
-              {result.error ? <div className="bench-log-row--error">{result.error}</div> : <table>
+              {result.error ? <div className="error">{result.error}</div> : <table>
                 <thead><tr><th>Runtime (s)</th><th>Memory (MiB)</th><th>Iterations</th></tr></thead>
                 <tbody><tr><td>{(result.connTimeMs / 1000).toFixed(3)}</td><td>{result.connMemMb.toFixed(1)}</td><td>{result.totalIters}</td></tr></tbody>
               </table>}
