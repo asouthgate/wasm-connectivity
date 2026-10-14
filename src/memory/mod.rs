@@ -166,11 +166,6 @@ pub struct InstrumentationProfile {
     pub source_s_bytes: u64,
     /// Jacobi diagonal `diag(L)` inverse (Jacobi path only).
     pub jacobi_diag_bytes: u64,
-
-    /// warm-start cache (cached Jacobi path)
-    pub cache_laplacian_bytes: u64,
-    pub cache_cell_to_node_bytes: u64,
-    pub cache_last_voltages_bytes: u64,
 }
 
 #[cfg(feature = "instrumentation-profile")]
@@ -461,29 +456,6 @@ pub fn record_cg_vectors(n: usize) {
 pub fn record_jacobi_diag(n: usize) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|s| s.jacobi_diag_bytes = vec_f64_bytes(n));
-}
-
-// Cache
-
-#[inline]
-#[allow(unused_variables)]
-pub fn record_cache_laplacian(a: &CsMat<f64>) {
-    #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.cache_laplacian_bytes = csmat_bytes(a));
-}
-
-#[inline]
-#[allow(unused_variables)]
-pub fn record_cache_cell_to_node(n_cells: usize) {
-    #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.cache_cell_to_node_bytes = vec_i32_bytes(n_cells));
-}
-
-#[inline]
-#[allow(unused_variables)]
-pub fn record_cache_last_voltages(n: usize) {
-    #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.cache_last_voltages_bytes = vec_f64_bytes(n));
 }
 
 #[cfg(test)]

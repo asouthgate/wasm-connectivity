@@ -10,7 +10,7 @@
 //!       [--mode artifacts|pipeline] [--out <dir>]
 //!
 //! `artifacts` (default) writes ASC+PNG per solver; `pipeline` runs the
-//! browser-equivalent path (run_geospatial_pipeline_cached_mg + serde_json
+//! browser-equivalent path (run_geospatial_pipeline_mg + serde_json
 //! serialization) so profiling also accounts for serialization cost.
 
 use std::fs;
@@ -148,7 +148,7 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
         r#"{"roads":{"resistance":5,"width":3},"rivers":{"resistance":0.5,"width":4},"buildings":{"resistance":500,"width":0}}"#;
 
     // Browser-equivalent path: run the full pipeline and serialize the result
-    // to JSON exactly like lib.rs::run_geospatial_pipeline_cached_mg does, so
+    // to JSON exactly like lib.rs::run_geospatial_pipeline_mg does, so
     // profiling also accounts for the serde_json serialization cost.
     if mode == "pipeline" {
         let gm = match ground {
@@ -156,7 +156,7 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
             _ => GroundMode::Dirichlet,
         };
         let t = Instant::now();
-        let output = wasm_connect::geospatial::run_geospatial_pipeline_cached_mg(
+        let output = wasm_connect::geospatial::run_geospatial_pipeline_mg(
             &base.data, base.nrows, base.ncols, base.nodata,
             &geojson, layer_params_str,
             base.xllcorner, base.ymax, base.cellsize,
@@ -200,10 +200,9 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
     for &(ground_mode, suffix) in &modes {
         if solver == "jacobi" || solver == "all" {
             let t0 = Instant::now();
-            wasm_connect::cache::reset();
-            let jacobi = solve::solve_raster_cached(
+            let jacobi = solve::solve_raster_sources_jacobi(
                 &resistance, base.nrows, base.ncols, base.nodata,
-                &src.data, &gnd.data, 100_000, 1e-6, true, false, ground_mode,
+                &src.data, &gnd.data, 100_000, 1e-6, true, ground_mode,
             );
             write_asc(
                 &format!("{out_dir}/current_map_jacobi_{suffix}.asc"),

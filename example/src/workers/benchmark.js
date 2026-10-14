@@ -2,11 +2,10 @@ import {
   initSync,
   get_memory,
   __reset,
-  solve_raster_sources_jacobi_cached,
+  solve_raster_sources_jacobi,
   solve_raster_sources_mg,
   solve_raster_sources_mg_stencil,
   rasterize_geojson,
-  reset_cache,
   downsample_raster,
 } from '@wasm-connect/lib/wasm_connect.js';
 import wasmUrl from '@wasm-connect/lib/wasm_connect_bg.wasm?url';
@@ -37,7 +36,7 @@ const MAX_ITER = 100_000;
 const TOL = 1e-6;
 
 function solveJacobi(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
-  return solve_raster_sources_jacobi_cached(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, false, useDirichlet);
+  return solve_raster_sources_jacobi(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
 }
 
 function solveGmg(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
@@ -127,14 +126,6 @@ self.onmessage = async (e) => {
       ));
       currentPreview.nodata = currentMap.nodata;
       self.postMessage({ id, result: { connTimeMs, connMemMb, totalIters: parsed.total_iters || 0, currentMap, currentPreview } });
-      return;
-    }
-
-    if (fn === 'reset_cache') {
-      await getCompiledModule();
-      freshInstance();
-      reset_cache();
-      self.postMessage({ id, result: { ok: true } });
       return;
     }
 

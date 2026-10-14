@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runGeospatialPipelineCachedMgAsync, runGeospatialPipelineCachedMgStencilAsync, resetCacheAsync } from '@wasm-connect/lib';
+import { runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from '@wasm-connect/lib';
 import { renderMap } from '../render';
 import MapView from '../components/MapView';
 import { StatusBar } from '../components/StatusBar';
@@ -61,10 +61,6 @@ export default function Example() {
 
   useEffect(() => { loadData('500'); }, []);
 
-  useEffect(() => {
-    resetCacheAsync().catch(() => {});
-  }, [resolution, terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes]);
-
   const run = useCallback(async () => {
     if (!baseData || !srcData || !geojsonStr) return;
     setComputing(true); setLoading(true); setError(false);
@@ -81,7 +77,7 @@ export default function Example() {
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
       const gd = gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols);
 
-      const solve = lowMem ? runGeospatialPipelineCachedMgStencilAsync : runGeospatialPipelineCachedMgAsync;
+      const solve = lowMem ? runGeospatialPipelineMgStencilAsync : runGeospatialPipelineMgAsync;
       const json = await solve(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(params),

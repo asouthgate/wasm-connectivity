@@ -201,12 +201,11 @@ fn main() {
         "dirichlet" => GroundMode::Dirichlet,
         _ => unreachable!(),
     };
-    wasm_connect::cache::reset();
     let max_iter = 100_000;
     let tol = 1e-6;
     let remove_average = true;
     let result = match solver.as_str() {
-        "jacobi" => solve::solve_raster_cached(
+        "jacobi" => solve::solve_raster_sources_jacobi(
             &resistance,
             base.nrows,
             base.ncols,
@@ -216,7 +215,6 @@ fn main() {
             max_iter,
             tol,
             remove_average,
-            false,
             ground_mode,
         ),
         "mg" => solve::solve_raster_sources_mg_with_options(

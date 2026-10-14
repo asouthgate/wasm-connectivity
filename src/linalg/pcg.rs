@@ -49,33 +49,18 @@ impl Preconditioner for JacobiPreconditioner {
 /// * `s` - A slice of f64 representing the right-hand side (source) vector s.
 /// * `max_iter` - The maximum number of iterations to perform.
 /// * `tol` - The tolerance for convergence.
-/// * `v0` - An optional initial guess for the voltage v, otherwise taken to be zero.
 /// * `precond` - A reference to a type implementing the `Preconditioner` trait.
 pub fn cg_solve_precond(
     laplacian: &dyn Operator,
     s: &[f64],
     max_iter: usize,
     tol: f64,
-    v0: Option<&[f64]>,
     precond: &dyn Preconditioner,
 ) -> CgResult {
 
     let n = s.len();
-    // set v0 to zero if not specified
-    let mut v = match v0 {
-        Some(seed) if seed.len() == n => seed.to_vec(),
-        _ => vec![0.0f64; n],
-    };
-
-    // Compute the initial residual r = s - Lv0. If v0 is zero, then r = s.
-    let mut r = vec![0.0; n];
-    if v0.is_some() {
-        let mut lv = vec![0.0; n];
-        laplacian.matvec(&v, &mut lv);
-        for i in 0..n { r[i] = s[i] - lv[i]; }
-    } else {
-        r.copy_from_slice(s);
-    }
+    let mut v = vec![0.0f64; n];
+    let mut r = s.to_vec();
 
     // The norm of s is required for convergence checks
     let s_norm = dot(s, s).sqrt();
@@ -144,10 +129,9 @@ pub fn cg_solve(
     s: &[f64],
     max_iter: usize,
     tol: f64,
-    v0: Option<&[f64]>,
 ) -> CgResult {
     let j = JacobiPreconditioner::new(laplacian);
-    cg_solve_precond(laplacian, s, max_iter, tol, v0, &j)
+    cg_solve_precond(laplacian, s, max_iter, tol, &j)
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {

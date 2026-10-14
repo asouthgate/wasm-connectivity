@@ -6,7 +6,6 @@ use serde::Serialize;
 use sprs::CsMat;
 use std::collections::HashSet;
 
-pub mod cache;
 pub mod current;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -97,7 +96,7 @@ pub struct RasterOutput {
 }
 
 /// Solve output annotated with the total PCG iteration count across all
-/// component / pair solves. Exposed for warm-start benchmarks.
+/// component / pair solves.
 #[derive(Serialize)]
 pub struct AnnotatedOutput<T: Serialize> {
     pub output: T,
@@ -108,22 +107,10 @@ pub struct AnnotatedOutput<T: Serialize> {
 // Raster-source mode
 // ----------------------------------------------------------------------------
 
-/// Cached raster-mode solve. Uses the global cache (`cache` module):
-///
-/// * `rebuild_laplacian = false` — the resistance-derived Laplacian and
-///   `cell_to_node` are reused as-is; only the source/ground rasters are
-///   reinterpreted. This is the dominant interactive web-map case and
-///   skips the entire `build_circuit_model` pipeline.
-/// * `rebuild_laplacian = true` — the circuit model is rebuilt from
-///   `resistance_data`, but the previous solve's voltage field (still
-///   cached) is fed to the new PCG run as an initial guess. Useful when
-///   the user edits the resistance raster itself.
-///
-/// Like the multigrid paths, nodata cells are filled with a high resistance
-/// so every cell is a node and the full rectangular system is solved in one
-/// shot (no connected-component extraction). The new voltage field is written
-/// back to the cache so the next call can warm-start from it.
-pub fn solve_raster_cached(
+/// Jacobi-preconditioned raster solve. Rebuilds the circuit for every call
+/// and starts PCG from zero. Nodata cells are filled with high resistance
+/// so the full rectangular system is solved in one shot.
+pub fn solve_raster_sources_jacobi(
     resistance_data: &[f64],
     nrows: usize,
     ncols: usize,
@@ -133,15 +120,14 @@ pub fn solve_raster_cached(
     max_iter: usize,
     tol: f64,
     remove_average: bool,
-    rebuild_laplacian: bool,
     ground_mode: GroundMode,
 ) -> AnnotatedOutput<RasterOutput> {
     memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
     memory::record_filled_resistance(filled.len());
 
-    let (laplacian, cell_to_node, num_nodes, prior_voltages) =
-        obtain_circuit(&filled, nrows, ncols, nodata, rebuild_laplacian);
+    let (cell_to_node, num_nodes, _, laplacian) =
+        crate::build_circuit_model(&filled, nrows, ncols, nodata);
     memory::record_cell_to_node_map(cell_to_node.len());
     let current_global =
         build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
@@ -194,9 +180,8 @@ pub fn solve_raster_cached(
     memory::record_fine_laplacian(&laplacian);
     memory::record_cg_vectors(num_nodes);
 
-    let prior_seed = prior_voltages.as_deref().filter(|v| v.len() == num_nodes);
     memory::record_jacobi_diag(num_nodes);
-    let res = solver::cg_solve(&laplacian, &s, max_iter, tol, prior_seed);
+    let res = solver::cg_solve(&laplacian, &s, max_iter, tol);
 
     let out = build_raster_output(
         &res.v,
@@ -209,73 +194,10 @@ pub fn solve_raster_cached(
         ground_mode,
     );
 
-    cache::store_last_voltages(&res.v);
-
     AnnotatedOutput {
         output: out,
         total_iters: res.iters,
     }
-}
-
-// ----------------------------------------------------------------------------
-// Cache-aware circuit acquisition
-// ----------------------------------------------------------------------------
-
-/// Reuse the cached circuit (no rebuild) or build a fresh one. The
-/// returned `prior_voltages` is the cache's most recent per-node voltage
-/// field — `None` if the cache was empty or the rebuild path discarded
-/// the prior solution. The owned laplacian / cell_to_node are left in the
-/// cache for the next call by this function.
-fn obtain_circuit(
-    resistance_data: &[f64],
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    rebuild: bool,
-) -> (CsMat<f64>, Vec<i32>, usize, Option<Vec<f64>>) {
-    let prior = cache::last_voltages();
-
-    if !rebuild {
-        if let Some((cached_nrows, cached_ncols, cached_nodata)) = cache::peek_meta() {
-            if (cached_nrows, cached_ncols, cached_nodata) == (nrows, ncols, nodata) {
-                let cached = cache::take().expect("peek_meta indicated cache present");
-                let prior_out = if prior.is_empty() { None } else { Some(prior) };
-                cache::store(
-                    cached.laplacian.clone(),
-                    cached.cell_to_node.clone(),
-                    cached.num_nodes,
-                    cached.nrows,
-                    cached.ncols,
-                    cached.nodata,
-                );
-                return (
-                    cached.laplacian,
-                    cached.cell_to_node,
-                    cached.num_nodes,
-                    prior_out,
-                );
-            }
-        }
-    }
-
-    // Rebuild path, or no-rebuild path with a stale/missing cache.
-    // Discard assembly edges once the CSR matrix has been built.
-    let (cell_to_node, num_nodes, _, laplacian) =
-        crate::build_circuit_model(resistance_data, nrows, ncols, nodata);
-    cache::store(
-        laplacian.clone(),
-        cell_to_node.clone(),
-        num_nodes,
-        nrows,
-        ncols,
-        nodata,
-    );
-    let prior_out = if rebuild && !prior.is_empty() {
-        Some(prior)
-    } else {
-        None
-    };
-    (laplacian, cell_to_node, num_nodes, prior_out)
 }
 
 // ----------------------------------------------------------------------------
@@ -455,7 +377,7 @@ pub fn solve_raster_sources_mg_with_options(
             }
         }
     }
-    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, None, &mg);
+    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
 
     let out = build_raster_output(
         &res.v,
@@ -611,7 +533,7 @@ pub fn solve_raster_sources_mg_stencil_with_options(
     memory::record_cg_vectors(num_nodes);
 
     let mg = MgPreconditioner::build_with_options(FineOperator::Stencil(op), nrows, ncols, options);
-    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, None, &mg);
+    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
 
     let out = build_raster_output_identity(
         &res.v,
@@ -691,18 +613,6 @@ fn build_raster_output(
 mod tests {
     use super::*;
 
-    fn make_raster_inputs(size: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-        let n = size * size;
-        let res = vec![1.0f64; n];
-        let mut src = vec![0.0f64; n];
-        let mut gnd = vec![0.0f64; n];
-        for row in 0..size {
-            src[row * size] = 1.0;
-            gnd[row * size + (size - 1)] = 1.0;
-        }
-        (res, src, gnd)
-    }
-
     #[test]
     fn grounded_solvers_match_uniform_grid_solution() {
         let (nr, nc) = (8, 10);
@@ -715,11 +625,10 @@ mod tests {
                 ground[row * nc + nc - 1] = conductance;
             }
             for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
-                cache::reset();
                 let results = [
-                    ("jacobi", solve_raster_cached(
+                    ("jacobi", solve_raster_sources_jacobi(
                         &resistance, nr, nc, -9999.0, &source, &ground,
-                        10000, 1e-11, true, false, mode,
+                        10000, 1e-11, true, mode,
                     )),
                     ("mg", solve_raster_sources_mg(
                         &resistance, nr, nc, -9999.0, &source, &ground,
@@ -864,237 +773,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_warm_no_rebuild_matches_cold_currentmap() {
-        cache::reset();
-        let size = 10;
-        let (res, src, gnd) = make_raster_inputs(size);
-
-        // Populate the cache with the original solve.
-        let _primed = solve_raster_cached(
-            &res,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            false,
-            GroundMode::Shunt,
-        );
-
-        // Modify sources only — resistance is unchanged so the no-rebuild
-        // path should reuse the cached circuit and produce a result
-        // numerically equivalent to the cold solve on the same inputs.
-        let mut src2 = src.clone();
-        src2[5 * size + 5] = 5.0;
-
-        let warm = solve_raster_cached(
-            &res,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src2,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            false,
-            GroundMode::Shunt,
-        )
-        .output;
-
-        let cold2 = {
-            cache::reset();
-            solve_raster_cached(
-                &res,
-                size,
-                size,
-                crate::NODATA_SENTINEL,
-                &src2,
-                &gnd,
-                crate::DEFAULT_MAX_ITER,
-                crate::DEFAULT_TOL,
-                true,
-                false,
-                GroundMode::Shunt,
-            )
-            .output
-        };
-
-        // The Laplacian is near-singular (constant vector null space), so
-        // absolute voltages may differ by a constant shift between cold
-        // and warm solves; currents (which depend on voltage DIFFERENCES)
-        // are invariant to that shift and must match.
-        for i in 0..cold2.current_map.len() {
-            assert!(
-                (warm.current_map[i] - cold2.current_map[i]).abs() < 1e-4,
-                "warm (no-rebuild) current diverged at {}: warm={} cold={}",
-                i,
-                warm.current_map[i],
-                cold2.current_map[i]
-            );
-        }
-        cache::reset();
-    }
-
-    #[test]
-    fn test_warm_rebuild_matches_cold_currentmap() {
-        cache::reset();
-        let size = 10;
-        let (mut res, src, gnd) = make_raster_inputs(size);
-
-        // Initial solve to populate the cache with a baseline voltage field.
-        let _ = solve_raster_cached(
-            &res,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            false,
-            GroundMode::Shunt,
-        );
-
-        // Small edit to the resistance raster; should rebuild and warm-start.
-        res[5 * size + 5] = 2.0;
-
-        let warm = solve_raster_cached(
-            &res,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            true,
-            GroundMode::Shunt,
-        )
-        .output;
-
-        let cold = {
-            cache::reset();
-            solve_raster_cached(
-                &res,
-                size,
-                size,
-                crate::NODATA_SENTINEL,
-                &src,
-                &gnd,
-                crate::DEFAULT_MAX_ITER,
-                crate::DEFAULT_TOL,
-                true,
-                false,
-                GroundMode::Shunt,
-            )
-            .output
-        };
-
-        for i in 0..cold.current_map.len() {
-            assert!(
-                (warm.current_map[i] - cold.current_map[i]).abs() < 1e-4,
-                "warm (rebuild) current diverged at {}: warm={} cold={}",
-                i,
-                warm.current_map[i],
-                cold.current_map[i]
-            );
-        }
-        cache::reset();
-    }
-
-    #[test]
-    fn test_warm_rebuild_reduces_iterations() {
-        cache::reset();
-        let size = 20;
-        let n = size * size;
-        let res_orig = vec![1.0f64; n];
-        let mut src = vec![0.0f64; n];
-        let mut gnd = vec![0.0f64; n];
-        src[0] = 1.0;
-        gnd[n - 1] = 1.0;
-
-        // Build baseline voltage field on the original resistance.
-        let _ = solve_raster_cached(
-            &res_orig,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            false,
-            GroundMode::Shunt,
-        );
-
-        // Edit the resistance raster by one cell.
-        let mut res_edited = res_orig.clone();
-        res_edited[size * size / 2] = 1.5;
-
-        // COLD: drop the cache, then rebuild on the edited resistance
-        // without a prior voltage seed.
-        cache::reset();
-        let cold = solve_raster_cached(
-            &res_edited,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            true,
-            GroundMode::Shunt,
-        );
-
-        // WARM: rebuild the baseline on the original resistance to re-fill
-        // the cache with a near-solution voltage field, then rebuild on
-        // the edited resistance with that field as a CG seed.
-        cache::reset();
-        let _baseline = solve_raster_cached(
-            &res_orig,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            false,
-            GroundMode::Shunt,
-        );
-        let warm = solve_raster_cached(
-            &res_edited,
-            size,
-            size,
-            crate::NODATA_SENTINEL,
-            &src,
-            &gnd,
-            crate::DEFAULT_MAX_ITER,
-            crate::DEFAULT_TOL,
-            true,
-            true,
-            GroundMode::Shunt,
-        );
-
-        assert!(
-            warm.total_iters <= cold.total_iters,
-            "warm-start should not require more PCG iterations; cold={} warm={}",
-            cold.total_iters,
-            warm.total_iters
-        );
-        cache::reset();
     }
 }
