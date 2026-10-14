@@ -685,7 +685,7 @@ impl<'a> MgPreconditioner<'a> {
             } else {
                 // Start from zero so the result does not depend on an earlier
                 // application when Cholesky is unavailable.
-                let result = crate::linalg::pcg::cg_solve(&op, &current.d, 50, 1e-3, None);
+                let result = crate::linalg::pcg::cg_solve(&op, &current.d, 50, 1e-3);
                 current.e.copy_from_slice(&result.v);
             }
             return;

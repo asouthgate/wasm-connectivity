@@ -8,7 +8,6 @@ pub mod roost;
 pub mod solve;
 
 pub use circuit::build_circuit_model;
-pub use solve::cache;
 
 use wasm_bindgen::prelude::*;
 use serde::Serialize;
@@ -64,7 +63,7 @@ pub fn init_panic_hook() {
 }
 
 #[wasm_bindgen]
-pub fn solve_raster_sources_jacobi_cached(
+pub fn solve_raster_sources_jacobi(
     resistance_data: Vec<f64>,
     nrows: usize,
     ncols: usize,
@@ -73,11 +72,10 @@ pub fn solve_raster_sources_jacobi_cached(
     ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
-    rebuild_laplacian: bool,
     use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
-    let annotated = solve::solve_raster_cached(
+    let annotated = solve::solve_raster_sources_jacobi(
         &resistance_data,
         nrows,
         ncols,
@@ -87,7 +85,6 @@ pub fn solve_raster_sources_jacobi_cached(
         max_iter,
         tol,
         true,
-        rebuild_laplacian,
         ground_mode,
     );
     json_response(&annotated)
@@ -150,12 +147,7 @@ pub fn solve_raster_sources_mg_stencil(
 }
 
 #[wasm_bindgen]
-pub fn reset_cache() {
-    cache::reset();
-}
-
-#[wasm_bindgen]
-pub fn run_geospatial_pipeline_cached_mg(
+pub fn run_geospatial_pipeline_mg(
     base_raster: Vec<f64>,
     nrows: usize,
     ncols: usize,
@@ -172,7 +164,7 @@ pub fn run_geospatial_pipeline_cached_mg(
     use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
-    let output = geospatial::run_geospatial_pipeline_cached_mg(
+    let output = geospatial::run_geospatial_pipeline_mg(
         &base_raster,
         nrows,
         ncols,
@@ -192,7 +184,7 @@ pub fn run_geospatial_pipeline_cached_mg(
 }
 
 #[wasm_bindgen]
-pub fn run_geospatial_pipeline_cached_mg_stencil(
+pub fn run_geospatial_pipeline_mg_stencil(
     base_raster: Vec<f64>,
     nrows: usize,
     ncols: usize,
@@ -209,7 +201,7 @@ pub fn run_geospatial_pipeline_cached_mg_stencil(
     use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
-    let output = geospatial::run_geospatial_pipeline_cached_mg_stencil(
+    let output = geospatial::run_geospatial_pipeline_mg_stencil(
         &base_raster,
         nrows,
         ncols,
@@ -521,7 +513,6 @@ mod tests {
 
     #[test]
     fn test_raster_edge_to_edge() {
-        cache::reset();
         let size = 10;
         let n = size * size;
         let res_data = vec![1.0f64; n];
@@ -531,9 +522,9 @@ mod tests {
             source_data[row * size] = 1.0;
             ground_data[row * size + (size - 1)] = 1.0;
         }
-        let output = solve::solve_raster_cached(
+        let output = solve::solve_raster_sources_jacobi(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Shunt,
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Shunt,
         ).output;
         assert_eq!(output.voltages.len(), n);
         assert_eq!(output.current_map.len(), n);
@@ -545,7 +536,6 @@ mod tests {
 
     #[test]
     fn test_raster_center_source() {
-        cache::reset();
         let size = 10;
         let n = size * size;
         let res_data = vec![1.0f64; n];
@@ -559,9 +549,9 @@ mod tests {
                 }
             }
         }
-        let output = solve::solve_raster_cached(
+        let output = solve::solve_raster_sources_jacobi(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Shunt,
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Shunt,
         ).output;
         let center_voltage = output.voltages[5 * size + 5];
         assert!(

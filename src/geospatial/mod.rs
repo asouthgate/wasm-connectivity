@@ -382,7 +382,7 @@ pub fn prepare_geospatial_layers(
     (resistance_data, layer_masks, warnings)
 }
 
-pub fn run_geospatial_pipeline_cached_mg(
+pub fn run_geospatial_pipeline_mg(
     base_raster: &[f64],
     nrows: usize,
     ncols: usize,
@@ -404,10 +404,10 @@ pub fn run_geospatial_pipeline_cached_mg(
     )
 }
 
-/// Like [`run_geospatial_pipeline_cached_mg`], but solves with the
+/// Like [`run_geospatial_pipeline_mg`], but solves with the
 /// low-memory hierarchy: levels 0 and 1 are matrix-free and all transfers
 /// are geometric stencils.
-pub fn run_geospatial_pipeline_cached_mg_stencil(
+pub fn run_geospatial_pipeline_mg_stencil(
     base_raster: &[f64],
     nrows: usize,
     ncols: usize,
