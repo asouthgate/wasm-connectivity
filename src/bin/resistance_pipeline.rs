@@ -554,7 +554,7 @@ fn run() -> io::Result<()> {
         &road_binary,
         &river_binary,
         &building_mask,
-        &lcm,
+        Some(&lcm),
         &dtm,
         &dsm,
         &generic_res,
@@ -563,6 +563,8 @@ fn run() -> io::Result<()> {
         None,
         None,
     );
+
+    drop((road_binary, river_binary, building_mask, lcm, dtm, dsm, generic_res, lamps));
 
     let count_non_zero = |label: &str, data: &[f64]| {
         let nz = data.iter().filter(|&&v| v > 0.0 && v.is_finite()).count();

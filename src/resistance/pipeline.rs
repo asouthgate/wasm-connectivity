@@ -94,7 +94,7 @@ pub fn combine_resistance(
 // * road_binary: a 2D array of f64 values where non-zero values indicate the presence of a road
 // * river_binary: a 2D array of f64 values where non-zero values indicate the presence of a river
 // * building_mask: a 2D array of f64 values where non-zero values indicate the presence of a building
-// * lcm: a 2D array of f64 values representing the land cover map
+// * lcm: the land cover map; optional when landscape conductance is supplied
 // * dtm: a 2D array of f64 values representing the digital terrain model
 // * dsm: a 2D array of f64 values representing the digital surface model
 // * generic_resistance: a 2D array of f64 values representing the generic resistance
@@ -111,7 +111,7 @@ pub fn run_resistance_pipeline(
     road_binary: &[f64],
     river_binary: &[f64],
     building_mask: &[f64],
-    lcm: &[f64],
+    lcm: Option<&[f64]>,
     dtm: &[f64],
     dsm: &[f64],
     generic_resistance: &[f64],
@@ -145,6 +145,7 @@ pub fn run_resistance_pipeline(
     );
 
     let surfs = calc_surfs(dtm, dsm, building_mask, m, n);
+    drop(surfs.surf);
 
     let mut landscape_res = if let Some(conductance) = landscape_conductance_override {
         get_landscape_resistance_from_conductance(
@@ -156,7 +157,7 @@ pub fn run_resistance_pipeline(
         )
     } else {
         get_landscape_resistance_lcm(
-            lcm,
+            lcm.expect("LCM is required without a landscape conductance override"),
             building_mask,
             params.landscape_rankmax,
             params.landscape_resmax,
@@ -176,6 +177,8 @@ pub fn run_resistance_pipeline(
         params.linear_xmax,
         params.pixw,
     );
+    drop(lidar.distance_rasters);
+    drop(lidar.missing);
 
     let mut lamp_res = if let Some(lightmap) = lightmap {
         // Pre-computed light map: skip the raycasted irradiance and just
@@ -209,15 +212,12 @@ pub fn run_resistance_pipeline(
         .map(|&v| if v.is_finite() { v } else { f64::NAN })
         .collect();
 
-    let dsm_na: Vec<bool> = dsm.iter().map(|&v| !v.is_finite()).collect();
-    let dtm_na: Vec<bool> = dtm.iter().map(|&v| !v.is_finite()).collect();
-    let lcm_na: Vec<bool> = lcm.iter().map(|&v| !v.is_finite()).collect();
-
     for i in 0..total {
-        if dsm_na[i] || dtm_na[i] || lcm_na[i] {
+        let terrain_missing = !dsm[i].is_finite() || !dtm[i].is_finite();
+        if terrain_missing || lcm.is_some_and(|data| !data[i].is_finite()) {
             landscape_res[i] = f64::NAN;
         }
-        if dsm_na[i] || dtm_na[i] {
+        if terrain_missing {
             linear_res[i] = f64::NAN;
             lamp_res[i] = f64::NAN;
         }
@@ -236,7 +236,7 @@ pub fn run_resistance_pipeline(
 
     let mut final_total = total_res;
     for i in 0..total {
-        if dsm_na[i] || dtm_na[i] {
+        if !dsm[i].is_finite() || !dtm[i].is_finite() {
             final_total[i] = f64::NAN;
         }
     }
@@ -297,7 +297,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &[],
+            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
             &params, None, None,
         );
 
@@ -316,7 +316,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &lamps,
+            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &lamps,
             &params, None, None,
         );
 
@@ -336,7 +336,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &[],
+            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
             &params, None, Some(&lightmap),
         );
 
@@ -379,7 +379,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &zeros, &[],
+            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
             &params, None, None,
         );
 
@@ -403,11 +403,65 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, &lcm, &dtm, &dsm, &generic, &[],
+            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &generic, &[],
             &params, None, None,
         );
 
         assert!(output.generic_res[7].is_nan(), "NA generic -> NA generic_res");
         assert!(output.generic_res[0].is_finite());
+    }
+
+    #[test]
+    fn landscape_override_without_lcm_preserves_browser_masking() {
+        let params = make_params();
+        let zeros = vec![0.0; 25];
+        let mut dtm = vec![10.0; 25];
+        let mut dsm: Vec<f64> = (0..25).map(|i| 10.0 + [0.0, 2.0, 4.0, 7.0][i % 4]).collect();
+        let mut buildings = zeros.clone();
+        let mut ranks = vec![4.0; 25];
+        ranks[0] = f64::NAN;
+        ranks[1] = f64::NAN;
+        buildings[0] = 3.0;
+        dtm[2] = f64::NAN;
+        dsm[3] = f64::INFINITY;
+
+        let without_lcm = run_resistance_pipeline(
+            &zeros, &zeros, &buildings, None, &dtm, &dsm, &zeros, &[],
+            &params, Some(&ranks), None,
+        );
+        let with_placeholder = run_resistance_pipeline(
+            &zeros, &zeros, &buildings, Some(&zeros), &dtm, &dsm, &zeros, &[],
+            &params, Some(&ranks), None,
+        );
+        assert_eq!(serde_json::to_value(&without_lcm).unwrap(),
+            serde_json::to_value(&with_placeholder).unwrap());
+        assert_eq!(without_lcm.landscape_res[0], params.landscape_resmax);
+        assert!(without_lcm.landscape_res[1].is_nan());
+        assert!(without_lcm.total_res[2].is_nan());
+        assert!(without_lcm.total_res[3].is_nan());
+    }
+
+    #[test]
+    fn native_lcm_missing_cells_still_mask_landscape() {
+        let params = make_params();
+        let zeros = vec![0.0; 25];
+        let dtm = vec![10.0; 25];
+        let dsm = vec![12.0; 25];
+        let mut lcm = vec![4.0; 25];
+        let mut buildings = zeros.clone();
+        let ranks = vec![4.0; 25];
+        lcm[7] = f64::NAN;
+        buildings[7] = 3.0;
+        for override_ranks in [None, Some(ranks.as_slice())] {
+            let output = run_resistance_pipeline(
+                &zeros, &zeros, &buildings, Some(&lcm), &dtm, &dsm, &zeros, &[],
+                &params, override_ranks, None,
+            );
+            assert!(output.landscape_res[7].is_nan());
+            assert!(output.total_res[7].is_nan());
+            assert!(output.linear_res[7].is_finite());
+            assert!(output.lamp_res[7].is_finite());
+            assert!(output.landscape_res[0].is_finite());
+        }
     }
 }

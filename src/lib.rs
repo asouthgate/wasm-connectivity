@@ -286,14 +286,13 @@ pub fn run_resistance_pipeline_browser(
                 .unwrap_or_else(|_| r#"{"error":"Invalid params JSON"}"#.to_string());
         }
     };
-    // Zero-filled LCM used only for the NaN-masking pass in run_resistance_pipeline;
-    // landscape conductance is supplied via the override so LCM conductance is not needed.
-    let lcm = vec![0.0f64; params.nrows * params.ncols];
     let output = resistance::pipeline::run_resistance_pipeline(
-        &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
+        &road_binary, &river_binary, &building_mask, None, &dtm, &dsm,
         &generic_resistance, &lamps, &params, Some(&landscape_conductance), None,
     );
-    resistance_output_to_json(&output)
+    drop((road_binary, river_binary, building_mask, dtm, dsm,
+        generic_resistance, lamps, landscape_conductance));
+    resistance_output_to_json(output)
 }
 
 /// Like [`run_resistance_pipeline_browser`], but skips the raycasted irradiance
@@ -320,16 +319,20 @@ pub fn run_resistance_pipeline_browser_with_lightmap(
                 .unwrap_or_else(|_| r#"{"error":"Invalid params JSON"}"#.to_string());
         }
     };
-    let lcm = vec![0.0f64; params.nrows * params.ncols];
     let output = resistance::pipeline::run_resistance_pipeline(
-        &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
+        &road_binary, &river_binary, &building_mask, None, &dtm, &dsm,
         &generic_resistance, &[], &params, Some(&landscape_conductance),
         Some(&lightmap),
     );
-    resistance_output_to_json(&output)
+    drop((road_binary, river_binary, building_mask, dtm, dsm,
+        generic_resistance, lightmap, landscape_conductance));
+    resistance_output_to_json(output)
 }
 
-fn resistance_output_to_json(output: &resistance::pipeline::ResistanceOutput) -> String {
+fn resistance_output_to_json(output: resistance::pipeline::ResistanceOutput) -> String {
+    // Vegetation masks are native-only outputs and are not part of browser JSON.
+    let resistance::pipeline::ResistanceOutput { manhedge, unmanhedge, tree, .. } = output;
+    drop((manhedge, unmanhedge, tree));
     let mut map = serde_json::Map::new();
     map.insert("total_res".to_string(),    serde_json::Value::String(f64_to_base64(&output.total_res)));
     map.insert("lamp_res".to_string(),     serde_json::Value::String(f64_to_base64(&output.lamp_res)));
