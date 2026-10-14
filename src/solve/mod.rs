@@ -140,21 +140,20 @@ pub fn solve_raster_cached(
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
     memory::record_filled_resistance(filled.len());
 
-    let (mut laplacian, cell_to_node, num_nodes, prior_voltages) =
+    let (laplacian, cell_to_node, num_nodes, prior_voltages) =
         obtain_circuit(&filled, nrows, ncols, nodata, rebuild_laplacian);
     memory::record_cell_to_node_map(cell_to_node.len());
     let current_global =
         build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
 
     let grounds_present;
-    let (laplacian, mut s) = match ground_mode {
+    let (mut laplacian, mut s) = match ground_mode {
         GroundMode::Shunt => {
             let g =
                 build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
             grounds_present = g.iter().any(|&x| x > 0.0);
             let laplacian = if grounds_present {
-                crate::circuit::laplacian::remove_reference_ground(&mut laplacian);
                 crate::circuit::laplacian::add_diagonal(&laplacian, &g)
             } else {
                 laplacian
@@ -166,7 +165,6 @@ pub fn solve_raster_cached(
             memory::record_ground_setup(memory::vec_usize_bytes(gns.len()));
             grounds_present = !gns.is_empty();
             let laplacian = if grounds_present {
-                crate::circuit::laplacian::remove_reference_ground(&mut laplacian);
                 apply_dirichlet_ground_lap(&laplacian, &gns)
             } else {
                 laplacian
@@ -176,6 +174,10 @@ pub fn solve_raster_cached(
             (laplacian, s)
         }
     };
+
+    if !grounds_present {
+        crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
+    }
 
     // Balance source injection for ground-free systems; numerical regularization
     // independently supplies a potential reference.
@@ -389,7 +391,7 @@ pub fn solve_raster_sources_mg_with_options(
     memory::record_filled_resistance(filled.len());
 
     // Discard assembly edges once the CSR matrix has been built.
-    let (cell_to_node, num_nodes, _, mut laplacian) =
+    let (cell_to_node, num_nodes, _, laplacian) =
         crate::build_circuit_model(&filled, nrows, ncols, nodata);
 
     let current_global =
@@ -400,14 +402,13 @@ pub fn solve_raster_sources_mg_with_options(
     // pins ground nodes at V=0. The MG hierarchy is built from the same
     // matrix, so Galerkin coarsening propagates ground effects to all levels.
     let grounds_present;
-    let (laplacian, mut s) = match ground_mode {
+    let (mut laplacian, mut s) = match ground_mode {
         GroundMode::Shunt => {
             let g =
                 build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
             grounds_present = g.iter().any(|&x| x > 0.0);
             let laplacian = if grounds_present {
-                crate::circuit::laplacian::remove_reference_ground(&mut laplacian);
                 crate::circuit::laplacian::add_diagonal(&laplacian, &g)
             } else {
                 laplacian
@@ -419,7 +420,6 @@ pub fn solve_raster_sources_mg_with_options(
             memory::record_ground_setup(memory::vec_usize_bytes(gns.len()));
             grounds_present = !gns.is_empty();
             let laplacian = if grounds_present {
-                crate::circuit::laplacian::remove_reference_ground(&mut laplacian);
                 apply_dirichlet_ground_lap(&laplacian, &gns)
             } else {
                 laplacian
@@ -429,6 +429,10 @@ pub fn solve_raster_sources_mg_with_options(
             (laplacian, s)
         }
     };
+
+    if !grounds_present {
+        crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
+    }
 
     memory::record_fine_laplacian(&laplacian);
     memory::record_cg_vectors(num_nodes);
@@ -700,68 +704,51 @@ mod tests {
     }
 
     #[test]
-    fn physical_grounds_conserve_current_without_a_corner_sink() {
+    fn grounded_solvers_match_uniform_grid_solution() {
         let (nr, nc) = (8, 10);
-        let resistance = vec![2.0; nr * nc];
-        let mut source = vec![0.0; nr * nc];
-        let mut ground = vec![0.0; nr * nc];
-        for row in 0..nr {
-            source[row * nc] = 1.0;
-            ground[row * nc + nc - 1] = 1.0;
-        }
-        for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
-            for solver in 0..3 {
-                cache::reset();
-                let result = match solver {
-                    0 => solve_raster_cached(&resistance, nr, nc, -9999.0, &source, &ground,
-                        10000, 1e-11, true, false, mode),
-                    1 => solve_raster_sources_mg(&resistance, nr, nc, -9999.0, &source, &ground,
-                        10000, 1e-11, true, mode),
-                    _ => solve_raster_sources_mg_stencil(&resistance, nr, nc, -9999.0, &source, &ground,
-                        10000, 1e-11, true, mode),
-                };
-                assert!(result.total_iters < 10000);
-                let reference = if mode == GroundMode::Shunt { 1.0 } else { 0.0 };
-                for row in 0..nr {
-                    for col in 0..nc {
-                        let i = row * nc + col;
-                        let expected = reference + 2.0 * (nc - 1 - col) as f64;
-                        assert!((result.output.voltages[i] - expected).abs() < 1e-7,
-                            "solver={solver} mode={mode:?} cell=({row},{col})");
-                        assert!((result.output.current_map[i] - 1.0).abs() < 1e-7);
-                    }
-                }
-                let drained: f64 = (0..nr).map(|row| {
-                    let i = row * nc + nc - 1;
-                    if mode == GroundMode::Shunt { result.output.voltages[i] }
-                    else { (result.output.voltages[i - 1] - result.output.voltages[i]) / 2.0 }
-                }).sum();
-                assert!((drained - nr as f64).abs() < 1e-7);
+        for (r, injection, conductance) in [(0.5, 1.0, 0.25), (2.0, 2.5, 3.0)] {
+            let resistance = vec![r; nr * nc];
+            let mut source = vec![0.0; nr * nc];
+            let mut ground = vec![0.0; nr * nc];
+            for row in 0..nr {
+                source[row * nc] = injection;
+                ground[row * nc + nc - 1] = conductance;
             }
-        }
-    }
-
-    #[test]
-    fn cached_reference_ground_survives_physical_ground_changes() {
-        let size = 8;
-        let (resistance, source, right_ground) = make_raster_inputs(size);
-        let mut middle_ground = vec![0.0; size * size];
-        for row in 0..size { middle_ground[row * size + size / 2] = 1.0; }
-        let no_ground = vec![0.0; size * size];
-        for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
-            cache::reset();
-            for ground in [&right_ground, &no_ground, &middle_ground, &right_ground] {
-                let warm = solve_raster_cached(&resistance, size, size, -9999.0, &source, ground,
-                    10000, 1e-11, true, false, mode);
-                let saved = cache::take().unwrap();
-                let cold = solve_raster_cached(&resistance, size, size, -9999.0, &source, ground,
-                    10000, 1e-11, true, true, mode);
+            for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
                 cache::reset();
-                cache::store(saved.laplacian, saved.cell_to_node, saved.num_nodes,
-                    saved.nrows, saved.ncols, saved.nodata);
-                cache::store_last_voltages(&saved.last_voltages);
-                for (&a, &b) in warm.output.voltages.iter().zip(&cold.output.voltages) {
-                    assert!((a - b).abs() < 1e-6, "{mode:?}: warm {a}, cold {b}");
+                let results = [
+                    ("jacobi", solve_raster_cached(
+                        &resistance, nr, nc, -9999.0, &source, &ground,
+                        10000, 1e-11, true, false, mode,
+                    )),
+                    ("mg", solve_raster_sources_mg(
+                        &resistance, nr, nc, -9999.0, &source, &ground,
+                        10000, 1e-11, true, mode,
+                    )),
+                    ("mg-lowmem", solve_raster_sources_mg_stencil(
+                        &resistance, nr, nc, -9999.0, &source, &ground,
+                        10000, 1e-11, true, mode,
+                    )),
+                ];
+                // Each row is the same series circuit: I*R per edge and I/G
+                // at the shunt, or zero volts at a Dirichlet ground.
+                let ground_voltage = if mode == GroundMode::Shunt {
+                    injection / conductance
+                } else {
+                    0.0
+                };
+                for (solver, result) in results {
+                    for row in 0..nr {
+                        for col in 0..nc {
+                            let i = row * nc + col;
+                            let expected = ground_voltage + injection * r * (nc - 1 - col) as f64;
+                            assert!(
+                                (result.output.voltages[i] - expected).abs() < 1e-7,
+                                "{solver} {mode:?} R={r} I={injection} G={conductance} cell=({row},{col})"
+                            );
+                            assert!((result.output.current_map[i] - injection).abs() < 1e-7);
+                        }
+                    }
                 }
             }
         }

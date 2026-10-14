@@ -803,8 +803,9 @@ mod tests {
         max_levels: usize,
     ) -> MgPreconditioner<'static> {
         let filled = crate::raster::fill_nodata(resistance, -1.0);
-        let (_cell_to_node, _num_nodes, _edges, laplacian) =
+        let (_cell_to_node, _num_nodes, _edges, mut laplacian) =
             crate::build_circuit_model(&filled, nrows, ncols, -1.0);
+        crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
         MgPreconditioner::build_from_laplacian(laplacian, nrows, ncols, max_levels)
     }
 
@@ -1203,8 +1204,7 @@ mod tests {
             (16, 16, 2, Some(1), 64),
         ] {
             let resistance = vec![1.0; nr * nc];
-            let (_, _, _, mut laplacian) = crate::build_circuit_model(&resistance, nr, nc, -9999.0);
-            crate::circuit::laplacian::remove_reference_ground(&mut laplacian);
+            let (_, _, _, laplacian) = crate::build_circuit_model(&resistance, nr, nc, -9999.0);
             let laplacian =
                 crate::circuit::laplacian::add_diagonal(&laplacian, &vec![1.0; nr * nc]);
             let options = MgOptions {
@@ -1393,7 +1393,9 @@ mod tests {
 
         // No ground
         {
-            let mg_e = MgPreconditioner::build_from_laplacian(lap.clone(), nrows, ncols, 5);
+            let mut ungrounded = lap.clone();
+            crate::circuit::laplacian::regularize_laplacian(&mut ungrounded);
+            let mg_e = MgPreconditioner::build_from_laplacian(ungrounded, nrows, ncols, 5);
             let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::None);
             let mg_s =
                 MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
@@ -1402,8 +1404,6 @@ mod tests {
 
         // Shunt ground
         {
-            let mut lap = lap.clone();
-            crate::circuit::laplacian::remove_reference_ground(&mut lap);
             let a = crate::circuit::laplacian::add_diagonal(&lap, &shunt);
             let mg_e = MgPreconditioner::build_from_laplacian(a, nrows, ncols, 5);
             let st = StencilOperator::new(
@@ -1420,8 +1420,6 @@ mod tests {
 
         // Dirichlet ground
         {
-            let mut lap = lap.clone();
-            crate::circuit::laplacian::remove_reference_ground(&mut lap);
             let a = crate::solve::apply_dirichlet_ground_lap(&lap, &gns);
             let mg_e = MgPreconditioner::build_from_laplacian(a, nrows, ncols, 5);
             let st = StencilOperator::new(

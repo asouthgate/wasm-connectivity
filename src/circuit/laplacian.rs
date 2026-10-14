@@ -38,21 +38,6 @@ pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
     }
 }
 
-/// Restore the first diagonal of a resistance-only Laplacian before applying
-/// physical grounds. Its diagonal must equal the sum of incident conductances;
-/// any extra reference-ground term would otherwise become a current sink.
-pub(crate) fn remove_reference_ground(lap: &mut CsMat<f64>) {
-    if lap.rows() == 0 {
-        return;
-    }
-    let diagonal = lap.outer_view(0).unwrap().iter()
-        .filter(|(col, _)| *col != 0)
-        .map(|(_, value)| -*value)
-        .sum();
-    if let Some(value) = lap.get_mut(0, 0) {
-        *value = diagonal;
-    }
-}
 // Compute the effective conductances between nodes
 //
 // This is the matrix L = D - A
@@ -93,10 +78,7 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
         lap_cols,
         lap_vals,
     );
-    let mut lap = tri.to_csr();
-
-    regularize_laplacian(&mut lap);
-    lap
+    tri.to_csr()
 }
 
 /// Add a per-node diagonal to a matrix: returns `lap` with `A[i,i] += diag[i]`.
@@ -151,6 +133,9 @@ mod tests {
         let lap = build_laplacian(&edges, 2);
         assert_eq!(lap.rows(), 2);
         assert_eq!(lap.cols(), 2);
+        for row in lap.outer_iterator() {
+            assert!(row.data().iter().sum::<f64>().abs() < 1e-10);
+        }
 
         let mut neighbors = Vec::new();
         if let Some(rv) = lap.outer_view(0) {
