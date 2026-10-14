@@ -121,8 +121,24 @@ Equations \eqref{eq:balance1} and \eqref{eq:balance2} can be written in the form
 \label{eq:system}
 \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s},
 \end{equation}
-where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by either setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation, or by setting $\mathbf{L}_{jj}$ to $1$, off-diagonals to zero, and current $\mathbf{s}_j$ to zero for ground pixels. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected.
-Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}.
+
+where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation. In the simplest case, $\mathbf{L}$ is sparse, since only neighboring nodes are connected. \hl{citation}
+
+Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. 
+
+For Robin-type boundary conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are shunts to ground (see the similar approach used in \cite{vasilyeva2026multiscale}). In this system, we have:
+
+\[
+L_{{shunt},ii} = L_{ii} + a_i,
+\]
+
+and
+
+\[
+b_{{shunt},i} = b_i + a_i \cdot g_i,
+\]
+
+Notice from the units of each side that $a_i$ is a conductance and $a_i \cdot g_i$ a current, so $g_i$ is a voltage. $g_i = 0$ gives a reference ground, but since $g_i$ can be non-zero, the Robin boundary can also specify a source. In this case, sink pixels are coupled by a resistor to an external ground, instead of acting as a ground directly.
 
 \subsection{Modes}
 
@@ -277,23 +293,28 @@ i.e. $\mathbf{d}'_l = \mathbf{d}_l - \mathbf{L}_l\mathbf{e}_l $.}
 
 We implement a low-memory mode for the solver in order to trade time for memory efficiency in
 the browser context where memory constraints can be more important.
+The central optimisation we make is to take a hybdrid approach to matrix storage. 
+The largest data structure during run-time is the fine Laplacian. 
+This is straightforward to replace with an implicit representation that computes
+entries lazily from the input conductance values.
+After the fine level-0 Laplacian is eliminated, the next largest object is the level-1
+Laplacian. As described, this is the product
 
-The first optimisation we make is to take a hybdrid approach to stencils and explicit
-sparse matrix storage. This strategy depends on the operator that is used. 
-For the 5-point bilinear transfer operator fine matrix, we use a stencil representation in order
-to avoid storage. During the V-cycle, it may be expected that each
-coarse matrix geometrically reduces in size. 
-However, this is complicated by an increased proportion of non-zero elements 
-(`fill-in', which also occurs in AMG, see \cite{livne2012lean}),
-especially for the first coarsening. For example, consider
-coarsening a $4\times 4$ diagonal matrix to $2\times 2$ using a 5-point stencil. 
-Each of the $4$ coarse points becomes non-zero, resulting in $4$
-non-zero elements in both cases.
+\[
+L_1 = P^T L_0 P,
+\]
 
-For memory optimisation, we found that the plain MG hierarchy consumed more memory than expected
-due to fill-in, as shown in Appendix Figure \ref{fig:nnz}. This motivated a hybrid approach, where
-only the coarse matrices from level 2 onward were stored. For level 0 and level 1, stencils are used
-for lazy evaluation of operators. 
+with each entry
+
+\[
+L_{1,IJ} = \sum_{i=1}^N\sum_{j=1}^N P^T_{Ii} L{ij} P_{jJ}
+\]
+
+The number of non-zero terms in this sum depends on the operator used. For a 2D raster grid,
+each row and column of $L$ has at most $5$ non-zero entries, and each row of $P$ has 
+at most $9$ non-zero entries.
+For the 9-point bilinear transfer operator fine matrix, we use a stencil representation in order
+to avoid storage for level-0 and level-1 matrices.
 
 \subsection{Example datasets and resistance map calculation}
 
@@ -368,7 +389,7 @@ the same resistance map input with a zero-volt ground, showing equivalent result
 \centering
 \includegraphics[width=0.48\textwidth]{figures/cs_results_curmap.png}
 \hfill
-\includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_neumann.png}
+\includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_shunt.png}
 \caption{Side-by-side comparison showing log rescaled current maps produced by Circuitscape (left) and our implementation (right), to show consistency. 
 Current maps were rescaled to the range $[1, 100]$, and are shown with log colorbar. Max absolute difference $<10^{-5}$ rescaled units.}
 \label{fig:comparison}
@@ -397,6 +418,15 @@ analysis round trip from browser to server and back.
 \caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape 5.11.2 preconditioner building plus solving took 2.48 seconds, versus 1.64 seconds for WASM (GMG). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. Circuitscape was tested with both 1 thread and 4 threads. }
 \label{fig:cs_runtime}
 \end{figure}
+
+
+\begin{figure}[htb!]
+\centering
+\includegraphics[width=1.0\textwidth]{figures/grid-panel-scenarios.png}
+\caption{Three scenarios with 2000$\times$2000 rasters.}
+\label{fig:cs_runtime}
+\end{figure}
+
 
 
 \section{Discussion}
@@ -439,16 +469,6 @@ Thomas E. Woolley: paper editing; conceptualization of improvements to benchmark
 \bibliographystyle{unsrt}
 \bibliography{refs} 
 
-\section{Appendix}
-
-\begin{figure}[htb!]
-\centering
-\makebox[\textwidth][c]{%
-    \includegraphics[width=1.2\textwidth]{figures/profile_nnz.png}%
-}
-\caption{Number of non-zero Laplacian elements at each level of the multigrid hierarchy}
-\label{fig:nnz}
-\end{figure}
 
 
 \end{document}

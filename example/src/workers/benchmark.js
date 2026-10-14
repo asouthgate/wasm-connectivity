@@ -7,8 +7,11 @@ import {
   solve_raster_sources_mg_stencil,
   rasterize_geojson,
   reset_cache,
+  downsample_raster,
 } from '@wasm-connect/lib/wasm_connect.js';
 import wasmUrl from '@wasm-connect/lib/wasm_connect_bg.wasm?url';
+import { parseAsc } from '@wasm-connect/lib';
+import { SCENARIOS, scenarioMasks, scenarioResistance } from '../scenarios';
 
 let compiledModule = null;
 
@@ -71,10 +74,62 @@ function runBenchmark(solveFn, [baseRaster, nrows, ncols, nodata, geojsonStr, la
   };
 }
 
+async function loadScenarioRaster(name) {
+  const response = await fetch(`/geodata/scenarios/${name}.asc`);
+  if (!response.ok) throw new Error(`Could not load ${name}: HTTP ${response.status}`);
+  const raster = parseAsc(await response.text());
+  if (raster.meta.nrows !== 2000 || raster.meta.ncols !== 2000 || raster.data.length !== 4_000_000) {
+    throw new Error(`${name} must contain a complete 2000×2000 raster`);
+  }
+  return raster;
+}
+
 self.onmessage = async (e) => {
   const { id, fn, args } = e.data;
 
   try {
+    if (fn === 'benchmark_scenario') {
+      const [scenarioId] = args;
+      const scenario = SCENARIOS.find(s => s.id === scenarioId);
+      if (!scenario) throw new Error('Unknown scenario');
+      await getCompiledModule();
+      freshInstance();
+      const { data, meta } = await loadScenarioRaster(scenarioId);
+      const inputs = {};
+      for (const name of scenario.inputs || []) {
+        const raster = await loadScenarioRaster(name);
+        for (const key of ['xllcorner', 'yllcorner', 'cellsize']) {
+          if (raster.meta[key] !== meta[key]) throw new Error(`${name} does not align with ${scenarioId}`);
+        }
+        inputs[name] = raster;
+      }
+      scenarioResistance(scenarioId, data, meta.nodata);
+      const { source, ground } = scenarioMasks(scenarioId, data, meta.nrows, meta.ncols, meta.nodata, inputs);
+      const start = performance.now();
+      const out = solveGmgStencil(data, meta.nrows, meta.ncols, meta.nodata, source, ground, false);
+      const connTimeMs = performance.now() - start;
+      const connMemMb = getWasmAllocatedMB();
+      const parsed = JSON.parse(out);
+      if (parsed.error) throw new Error(parsed.error);
+      for (let i = 0; i < data.length; i++) {
+        if (!Number.isFinite(data[i]) || data[i] === meta.nodata || data[i] <= 0) {
+          parsed.output.current_map[i] = meta.nodata;
+        }
+      }
+      const currentMap = {
+        data: parsed.output.current_map,
+        nrows: parsed.output.nrows,
+        ncols: parsed.output.ncols,
+        nodata: meta.nodata,
+      };
+      const currentPreview = JSON.parse(downsample_raster(
+        new Float64Array(currentMap.data), currentMap.nrows, currentMap.ncols, currentMap.nodata, 200, 200,
+      ));
+      currentPreview.nodata = currentMap.nodata;
+      self.postMessage({ id, result: { connTimeMs, connMemMb, totalIters: parsed.total_iters || 0, currentMap, currentPreview } });
+      return;
+    }
+
     if (fn === 'reset_cache') {
       await getCompiledModule();
       freshInstance();

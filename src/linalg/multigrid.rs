@@ -210,12 +210,12 @@ impl Operator for LevelOperator<'_> {
 }
 
 /// Local accumulation of P^T L P for a five-point fine operator. A transfer
-/// column spans four fine cells per axis; one fine edge extends that support
-/// by one cell. The resulting coarse columns lie within two cells of the row.
+/// column spans three fine cells per axis; one fine edge extends that support
+/// by one cell. The resulting coarse columns lie within one cell of the row.
 /// Keep presence separate from values: cancellation must not drop structural
 /// entries that the explicit symbolic Galerkin pass would retain.
 struct GalerkinRow {
-    values: [f64; 25],
+    values: [f64; 9],
     present: u32,
 }
 
@@ -229,7 +229,7 @@ struct GalerkinOperator<'b, T: Operator + ?Sized> {
 impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
     fn row(&self, row: usize) -> GalerkinRow {
         let mut result = GalerkinRow {
-            values: [0.0; 25],
+            values: [0.0; 9],
             present: 0,
         };
         let nc = self.transfer.coarse_ncols;
@@ -241,17 +241,17 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
                     let dr = jr as isize - cr;
                     let dc = jc as isize - cc;
                     assert!(
-                        (-2..=2).contains(&dr) && (-2..=2).contains(&dc),
+                        (-1..=1).contains(&dr) && (-1..=1).contains(&dc),
                         "matrix-free Galerkin requires a five-point fine operator"
                     );
-                    let slot = ((dr + 2) * 5 + dc + 2) as usize;
+                    let slot = ((dr + 1) * 3 + dc + 1) as usize;
                     result.present |= 1 << slot;
                     result.values[slot] += p_ai * l_ab * p_bj;
                 });
             });
         });
         if row == 0 {
-            result.values[12] += self.reg_diag0;
+            result.values[4] += self.reg_diag0;
         }
         result
     }
@@ -260,10 +260,10 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
         let nc = self.transfer.coarse_ncols;
         let cr = (row / nc) as isize;
         let cc = (row % nc) as isize;
-        for slot in 0..25 {
+        for slot in 0..9 {
             if entries.present & (1 << slot) != 0 {
-                let r = cr + slot as isize / 5 - 2;
-                let c = cc + slot as isize % 5 - 2;
+                let r = cr + slot as isize / 3 - 1;
+                let c = cc + slot as isize % 3 - 1;
                 f(r as usize * nc + c as usize, entries.values[slot]);
             }
         }
@@ -308,7 +308,7 @@ impl<T: Operator + ?Sized> Operator for GalerkinOperator<'_, T> {
     fn diag_inv(&self) -> Vec<f64> {
         (0..self.n())
             .map(|row| {
-                let diag = self.row(row).values[12];
+                let diag = self.row(row).values[4];
                 if diag.abs() > 1e-15 {
                     1.0 / diag.abs()
                 } else {
@@ -450,14 +450,14 @@ impl<'a> MgPreconditioner<'a> {
             }
             let fine_nr = nr;
             let fine_nc = nc;
-            let next_nr = fine_nr / 2;
-            let next_nc = fine_nc / 2;
+            let next_nr = fine_nr.div_ceil(2);
+            let next_nc = fine_nc.div_ceil(2);
             let min_side = if options.cholesky_size.is_some() {
                 1
             } else {
                 4
             };
-            if next_nr < min_side || next_nc < min_side {
+            if next_nr < min_side || next_nc < min_side || (next_nr == nr && next_nc == nc) {
                 break;
             }
 
@@ -803,8 +803,9 @@ mod tests {
         max_levels: usize,
     ) -> MgPreconditioner<'static> {
         let filled = crate::raster::fill_nodata(resistance, -1.0);
-        let (_cell_to_node, _num_nodes, _edges, laplacian) =
+        let (_cell_to_node, _num_nodes, _edges, mut laplacian) =
             crate::build_circuit_model(&filled, nrows, ncols, -1.0);
+        crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
         MgPreconditioner::build_from_laplacian(laplacian, nrows, ncols, max_levels)
     }
 
@@ -989,7 +990,7 @@ mod tests {
             for ground in 0..3 {
                 let spec = match ground {
                     0 => GroundSpec::None,
-                    1 => GroundSpec::Neumann(
+                    1 => GroundSpec::Shunt(
                         (0..n)
                             .map(|i| if i % nc == nc - 1 { 2.0 } else { 0.0 })
                             .collect(),
@@ -1000,8 +1001,8 @@ mod tests {
                 let transfer = Transfer {
                     fine_nrows: nr,
                     fine_ncols: nc,
-                    coarse_nrows: nr / 2,
-                    coarse_ncols: nc / 2,
+                    coarse_nrows: nr.div_ceil(2),
+                    coarse_ncols: nc.div_ceil(2),
                 };
                 let p = materialize_transfer(transfer);
                 let fine_matrix = materialize(&fine);
@@ -1027,10 +1028,10 @@ mod tests {
                 );
                 if transfer.coarse_nrows >= 2 && transfer.coarse_ncols >= 2 {
                     let p1 = Transfer {
-                        fine_nrows: nr / 2,
-                        fine_ncols: nc / 2,
-                        coarse_nrows: nr / 4,
-                        coarse_ncols: nc / 4,
+                        fine_nrows: nr.div_ceil(2),
+                        fine_ncols: nc.div_ceil(2),
+                        coarse_nrows: nr.div_ceil(4),
+                        coarse_ncols: nc.div_ceil(4),
                     };
                     let mut actual2 = galerkin_coarsen_operator(&implicit, p1);
                     let mut expected2 =
@@ -1190,8 +1191,11 @@ mod tests {
         use crate::linalg::operator::{GroundSpec, StencilOperator};
         for (nr, nc, depth, target, expected) in [
             (1, 1, 8, None, 1),
+            (1, 1, 8, Some(1), 1),
+            (1, 9, 8, Some(1), 1),
+            (9, 1, 8, Some(1), 1),
             (3, 5, 8, None, 15),
-            (7, 7, 8, None, 49),
+            (7, 7, 8, None, 16),
             (16, 16, 1, None, 256),
             (3, 64, 8, None, 192),
             (16, 16, 8, Some(64), 64),
@@ -1251,7 +1255,7 @@ mod tests {
                 nc,
                 -9999.0,
                 &resistance,
-                GroundSpec::Neumann(vec![1.0; nr * nc]),
+                GroundSpec::Shunt(vec![1.0; nr * nc]),
             );
             let stencil = MgPreconditioner::build_with_options(
                 FineOperator::Stencil(stencil),
@@ -1389,14 +1393,16 @@ mod tests {
 
         // No ground
         {
-            let mg_e = MgPreconditioner::build_from_laplacian(lap.clone(), nrows, ncols, 5);
+            let mut ungrounded = lap.clone();
+            crate::circuit::laplacian::regularize_laplacian(&mut ungrounded);
+            let mg_e = MgPreconditioner::build_from_laplacian(ungrounded, nrows, ncols, 5);
             let st = StencilOperator::new(nrows, ncols, nodata, &resistance, GroundSpec::None);
             let mg_s =
                 MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
             check(&mg_e, &mg_s, "none");
         }
 
-        // Neumann ground
+        // Shunt ground
         {
             let a = crate::circuit::laplacian::add_diagonal(&lap, &shunt);
             let mg_e = MgPreconditioner::build_from_laplacian(a, nrows, ncols, 5);
@@ -1405,11 +1411,11 @@ mod tests {
                 ncols,
                 nodata,
                 &resistance,
-                GroundSpec::Neumann(shunt.clone()),
+                GroundSpec::Shunt(shunt.clone()),
             );
             let mg_s =
                 MgPreconditioner::build_from_operator(FineOperator::Stencil(st), nrows, ncols, 5);
-            check(&mg_e, &mg_s, "neumann");
+            check(&mg_e, &mg_s, "shunt");
         }
 
         // Dirichlet ground
@@ -1440,7 +1446,7 @@ mod tests {
             for mode in 0..3 {
                 let spec = match mode {
                     0 => GroundSpec::None,
-                    1 => GroundSpec::Neumann(
+                    1 => GroundSpec::Shunt(
                         (0..n)
                             .map(|i| if i % nc == nc - 1 { 1.0 } else { 0.0 })
                             .collect(),

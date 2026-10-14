@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
 import { renderMap, VIRIDIS_GRADIENT, PLASMA_GRADIENT } from '../render';
 
-export default function MapView({ type, data, meta, logScale, onToggleScale }) {
+export default function MapView({ type, data, meta, logScale, onToggleScale, preview = false, maxSide = 400, label, showHeader = true }) {
   const canvasRef = useRef(null);
   const [range, setRange] = useState({ min: 0, max: 1 });
   const isCurVolt = type === 'cur' || type === 'volt';
@@ -9,18 +9,18 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
   useEffect(() => {
     if (!data || !meta) return;
     const canvas = canvasRef.current;
-    const r = renderMap(canvas, data, meta.nrows, meta.ncols, meta.nodata || 0, logScale, 400, isCurVolt);
+    const r = renderMap(canvas, data, meta.nrows, meta.ncols, meta.nodata ?? 0, logScale, maxSide, isCurVolt);
     if (r) setRange(r);
-  }, [data, meta, type, logScale, isCurVolt]);
+  }, [data, meta, type, logScale, isCurVolt, maxSide]);
 
   const labels = { res:'Resistance', points:'Focal Points', cur:'Current', src:'Source', gnd:'Ground', volt:'Voltage' };
   const dim = meta ? `${meta.ncols}×${meta.nrows}` : '';
-  const fmt = (v) => Math.abs(v) < 0.01 ? v.toExponential(1) : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toPrecision(3);
+  const fmt = (v) => v === 0 ? '0.0' : Math.abs(v) < 0.01 || Math.abs(v) >= 1000 ? v.toExponential(1) : v.toPrecision(3);
 
   return (
     <div className="map-view">
-      <div className="map-header">
-        <span>{labels[type] || type} {dim && dim}</span>
+      {showHeader && <div className="map-header">
+        <span>{label || labels[type] || type}{preview ? ' preview' : ''} {dim && dim}</span>
         {onToggleScale && (
           <div className="map-scale-toggles">
             {['log', 'lin'].map(s => {
@@ -34,7 +34,7 @@ export default function MapView({ type, data, meta, logScale, onToggleScale }) {
             })}
           </div>
         )}
-      </div>
+      </div>}
       <canvas ref={canvasRef} className="map-canvas" />
       <div className="map-legend">
         <span className="map-legend-label map-legend-label--right">{fmt(range.min)}</span>

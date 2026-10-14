@@ -31,8 +31,14 @@ Then use the plotter for visualisation.
 
 ```sh
 cargo run --profile release-prof --features bin,instrumentation-profile \
-  --bin instrumentation-profile -- 500 --solver mg --ground neumann > profile.json
-python3 tests/scripts/plot_instrumentation_profile.py profile.jsonl
+  --bin instrumentation-profile -- 500 --solver mg --ground shunt > profile.json
+python3 tests/scripts/plot_instrumentation_profile.py profile.json
+```
+
+```sh
+cargo run --profile release-prof --features bin,instrumentation-profile \
+  --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt > profile-lowmem.json
+python3 tests/scripts/plot_instrumentation_profile.py profile-lowmem.json
 ```
 
 To plot benchmarking results:

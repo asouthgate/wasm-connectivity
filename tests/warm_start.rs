@@ -39,7 +39,7 @@ fn compute_all_current_maps() {
         base.xllcorner, base.yllcorner, base.cellsize, out_nodata,
     );
 
-    let modes = [(GroundMode::Neumann, "neumann"), (GroundMode::Dirichlet, "dirichlet")];
+    let modes = [(GroundMode::Shunt, "shunt"), (GroundMode::Dirichlet, "dirichlet")];
 
     for &(ground_mode, suffix) in &modes {
         // ---- Jacobi-preconditioned CG (original, component-based) ----

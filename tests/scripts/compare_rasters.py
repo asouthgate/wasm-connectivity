@@ -5,7 +5,7 @@ Usage:
     python tests/scripts/compare_rasters.py <raster_a> <raster_b>
 
 Example:
-    python tests/scripts/compare_rasters.py results_curmap.tif tests/output/current_map_mg_alcouffe_neumann.asc
+    python tests/scripts/compare_rasters.py results_curmap.tif tests/output/current_map_mg_alcouffe_shunt.asc
 """
 import sys
 import numpy as np

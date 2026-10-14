@@ -1,12 +1,12 @@
 //! Native memory-profiling harness for the connectivity solve.
 //!
 //! Runs the same pipeline as `tests/warm_start.rs::compute_all_current_maps`
-//! (rasterize GeoJSON -> solve Jacobi / MG x Neumann / Dirichlet
+//! (rasterize GeoJSON -> solve Jacobi / MG x Shunt / Dirichlet
 //! -> write ASC + PNG artifacts) under a heap profiler (e.g. valgrind/massif).
 //!
 //! Usage:
 //!   cargo run --profile release-prof --bin prof-solve --features bin -- <500|1000> \
-//!       [--solver jacobi|mg|all] [--ground neumann|dirichlet|all] \
+//!       [--solver jacobi|mg|all] [--ground shunt|dirichlet|all] \
 //!       [--mode artifacts|pipeline] [--out <dir>]
 //!
 //! `artifacts` (default) writes ASC+PNG per solver; `pipeline` runs the
@@ -152,7 +152,7 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
     // profiling also accounts for the serde_json serialization cost.
     if mode == "pipeline" {
         let gm = match ground {
-            "neumann" => GroundMode::Neumann,
+            "shunt" => GroundMode::Shunt,
             _ => GroundMode::Dirichlet,
         };
         let t = Instant::now();
@@ -192,9 +192,9 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
     );
 
     let modes: Vec<(GroundMode, &str)> = match ground {
-        "neumann" => vec![(GroundMode::Neumann, "neumann")],
+        "shunt" => vec![(GroundMode::Shunt, "shunt")],
         "dirichlet" => vec![(GroundMode::Dirichlet, "dirichlet")],
-        _ => vec![(GroundMode::Neumann, "neumann"), (GroundMode::Dirichlet, "dirichlet")],
+        _ => vec![(GroundMode::Shunt, "shunt"), (GroundMode::Dirichlet, "dirichlet")],
     };
 
     for &(ground_mode, suffix) in &modes {
@@ -240,7 +240,7 @@ fn run(resolution: usize, solver: &str, ground: &str, mode: &str, out_dir: &str)
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: prof_solve <500|1000> [--solver jacobi|mg|all] [--ground neumann|dirichlet|all] [--mode artifacts|pipeline] [--out <dir>]");
+        eprintln!("Usage: prof_solve <500|1000> [--solver jacobi|mg|all] [--ground shunt|dirichlet|all] [--mode artifacts|pipeline] [--out <dir>]");
         std::process::exit(1);
     }
 

@@ -151,7 +151,7 @@ export default function Example() {
               <div style={{display:'flex', gap:8}}>
                 <div className={'preset' + (!dirichlet ? ' sel' : '') + (loading ? ' loading' : '')}
                   onClick={() => !loading && setDirichlet(false)}>
-                  Neumann ground
+                  Shunt ground
                 </div>
                 <div className={'preset' + (dirichlet ? ' sel' : '') + (loading ? ' loading' : '')}
                   onClick={() => !loading && setDirichlet(true)}>

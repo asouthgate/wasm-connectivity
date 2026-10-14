@@ -99,7 +99,7 @@ mod tests {
         let result = cal_river_resistance(&binary, nrows, ncols, 10.0, 2000.0, 4.0, 1.0);
         assert!(result[0] >= 0.0);
         assert!(result[1].is_finite());
-        assert!(result[2].is_nan(), "missing river data → NaN");
+        assert!(result[2].is_nan(), "missing river data -> NaN");
         assert!(result[3].is_finite());
     }
 }

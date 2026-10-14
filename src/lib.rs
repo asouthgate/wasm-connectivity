@@ -76,7 +76,7 @@ pub fn solve_raster_sources_jacobi_cached(
     rebuild_laplacian: bool,
     use_dirichlet_ground: bool,
 ) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
     let annotated = solve::solve_raster_cached(
         &resistance_data,
         nrows,
@@ -105,7 +105,7 @@ pub fn solve_raster_sources_mg(
     tol: f64,
     use_dirichlet_ground: bool,
 ) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
     let annotated = solve::solve_raster_sources_mg(
         &resistance_data,
         nrows,
@@ -133,7 +133,7 @@ pub fn solve_raster_sources_mg_stencil(
     tol: f64,
     use_dirichlet_ground: bool,
 ) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
     let annotated = solve::solve_raster_sources_mg_stencil(
         &resistance_data,
         nrows,
@@ -171,7 +171,7 @@ pub fn run_geospatial_pipeline_cached_mg(
     tol: f64,
     use_dirichlet_ground: bool,
 ) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
     let output = geospatial::run_geospatial_pipeline_cached_mg(
         &base_raster,
         nrows,
@@ -208,7 +208,7 @@ pub fn run_geospatial_pipeline_cached_mg_stencil(
     tol: f64,
     use_dirichlet_ground: bool,
 ) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Neumann };
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
     let output = geospatial::run_geospatial_pipeline_cached_mg_stencil(
         &base_raster,
         nrows,
@@ -533,7 +533,7 @@ mod tests {
         }
         let output = solve::solve_raster_cached(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Neumann,
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Shunt,
         ).output;
         assert_eq!(output.voltages.len(), n);
         assert_eq!(output.current_map.len(), n);
@@ -561,7 +561,7 @@ mod tests {
         }
         let output = solve::solve_raster_cached(
             &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Neumann,
+            DEFAULT_MAX_ITER, DEFAULT_TOL, true, false, solve::GroundMode::Shunt,
         ).output;
         let center_voltage = output.voltages[5 * size + 5];
         assert!(

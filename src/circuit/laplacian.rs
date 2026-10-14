@@ -37,6 +37,7 @@ pub fn regularize_laplacian(lap: &mut CsMat<f64>) {
         }
     }
 }
+
 // Compute the effective conductances between nodes
 //
 // This is the matrix L = D - A
@@ -77,10 +78,7 @@ pub fn build_laplacian(edges: &EdgeTriplets, num_nodes: usize) -> CsMat<f64> {
         lap_cols,
         lap_vals,
     );
-    let mut lap = tri.to_csr();
-
-    regularize_laplacian(&mut lap);
-    lap
+    tri.to_csr()
 }
 
 /// Add a per-node diagonal to a matrix: returns `lap` with `A[i,i] += diag[i]`.
@@ -135,6 +133,9 @@ mod tests {
         let lap = build_laplacian(&edges, 2);
         assert_eq!(lap.rows(), 2);
         assert_eq!(lap.cols(), 2);
+        for row in lap.outer_iterator() {
+            assert!(row.data().iter().sum::<f64>().abs() < 1e-10);
+        }
 
         let mut neighbors = Vec::new();
         if let Some(rv) = lap.outer_view(0) {

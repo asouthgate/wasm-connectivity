@@ -11,8 +11,8 @@ pub mod current;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum GroundMode {
-    /// Conductance-to-ground (Neumann): ground cells add conductance to Laplacian diagonal.
-    Neumann,
+    /// Conductance-to-ground (Shunt): ground cells add conductance to Laplacian diagonal.
+    Shunt,
     /// Fixed-voltage (Dirichlet): ground cells are pinned at V=0.
     Dirichlet,
 }
@@ -147,8 +147,8 @@ pub fn solve_raster_cached(
         build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
 
     let grounds_present;
-    let (laplacian, mut s) = match ground_mode {
-        GroundMode::Neumann => {
+    let (mut laplacian, mut s) = match ground_mode {
+        GroundMode::Shunt => {
             let g =
                 build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
@@ -174,6 +174,10 @@ pub fn solve_raster_cached(
             (laplacian, s)
         }
     };
+
+    if !grounds_present {
+        crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
+    }
 
     // Balance source injection for ground-free systems; numerical regularization
     // independently supplies a potential reference.
@@ -381,7 +385,7 @@ pub fn solve_raster_sources_mg_with_options(
     ground_mode: GroundMode,
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
-    // Fill nodata → every cell is a node → rectangular grid
+    // Fill nodata -> every cell is a node -> rectangular grid
     memory::reset();
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
     memory::record_filled_resistance(filled.len());
@@ -394,12 +398,12 @@ pub fn solve_raster_sources_mg_with_options(
         build_global_currents(&cell_to_node, num_nodes, nrows, ncols, nodata, source_data);
 
     // Declare the system matrix up front, then run the whole algorithm on
-    // it. Neumann adds finite ground conductances to the diagonal; Dirichlet
+    // it. Shunt adds finite ground conductances to the diagonal; Dirichlet
     // pins ground nodes at V=0. The MG hierarchy is built from the same
     // matrix, so Galerkin coarsening propagates ground effects to all levels.
     let grounds_present;
-    let (laplacian, mut s) = match ground_mode {
-        GroundMode::Neumann => {
+    let (mut laplacian, mut s) = match ground_mode {
+        GroundMode::Shunt => {
             let g =
                 build_ground_diagonal(&cell_to_node, num_nodes, nrows, ncols, nodata, ground_data);
             memory::record_ground_setup(memory::vec_f64_bytes(g.len()));
@@ -425,6 +429,10 @@ pub fn solve_raster_sources_mg_with_options(
             (laplacian, s)
         }
     };
+
+    if !grounds_present {
+        crate::circuit::laplacian::regularize_laplacian(&mut laplacian);
+    }
 
     memory::record_fine_laplacian(&laplacian);
     memory::record_cg_vectors(num_nodes);
@@ -492,8 +500,8 @@ fn build_source_identity(source_data: &[f64], nodata: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Per-node Neumann shunt conductances (node index == flat cell index).
-fn build_neumann_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
+/// Per-node shunt conductances (node index == flat cell index).
+fn build_shunt_identity(ground_data: &[f64], nodata: f64) -> Vec<f64> {
     ground_data
         .iter()
         .map(|&gv| {
@@ -568,10 +576,10 @@ pub fn solve_raster_sources_mg_stencil_with_options(
 
     let grounds_present;
     let (ground_spec, mut s) = match ground_mode {
-        GroundMode::Neumann => {
-            let shunt = build_neumann_shunt_identity(ground_data, nodata);
+        GroundMode::Shunt => {
+            let shunt = build_shunt_identity(ground_data, nodata);
             grounds_present = shunt.iter().any(|&x| x > 0.0);
-            (GroundSpec::Neumann(shunt), source_s)
+            (GroundSpec::Shunt(shunt), source_s)
         }
         GroundMode::Dirichlet => {
             let mask = build_dirichlet_mask_identity(ground_data, nodata);
@@ -640,7 +648,7 @@ fn build_raster_output_identity(
         nrows,
         ncols,
         nodata,
-        ground_mode == GroundMode::Neumann,
+        ground_mode == GroundMode::Shunt,
     );
     RasterOutput {
         voltages: voltage_map,
@@ -668,7 +676,7 @@ fn build_raster_output(
         nrows,
         ncols,
         nodata,
-        ground_mode == GroundMode::Neumann,
+        ground_mode == GroundMode::Shunt,
     );
 
     RasterOutput {
@@ -696,6 +704,57 @@ mod tests {
     }
 
     #[test]
+    fn grounded_solvers_match_uniform_grid_solution() {
+        let (nr, nc) = (8, 10);
+        for (r, injection, conductance) in [(0.5, 1.0, 0.25), (2.0, 2.5, 3.0)] {
+            let resistance = vec![r; nr * nc];
+            let mut source = vec![0.0; nr * nc];
+            let mut ground = vec![0.0; nr * nc];
+            for row in 0..nr {
+                source[row * nc] = injection;
+                ground[row * nc + nc - 1] = conductance;
+            }
+            for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
+                cache::reset();
+                let results = [
+                    ("jacobi", solve_raster_cached(
+                        &resistance, nr, nc, -9999.0, &source, &ground,
+                        10000, 1e-11, true, false, mode,
+                    )),
+                    ("mg", solve_raster_sources_mg(
+                        &resistance, nr, nc, -9999.0, &source, &ground,
+                        10000, 1e-11, true, mode,
+                    )),
+                    ("mg-lowmem", solve_raster_sources_mg_stencil(
+                        &resistance, nr, nc, -9999.0, &source, &ground,
+                        10000, 1e-11, true, mode,
+                    )),
+                ];
+                // Each row is the same series circuit: I*R per edge and I/G
+                // at the shunt, or zero volts at a Dirichlet ground.
+                let ground_voltage = if mode == GroundMode::Shunt {
+                    injection / conductance
+                } else {
+                    0.0
+                };
+                for (solver, result) in results {
+                    for row in 0..nr {
+                        for col in 0..nc {
+                            let i = row * nc + col;
+                            let expected = ground_voltage + injection * r * (nc - 1 - col) as f64;
+                            assert!(
+                                (result.output.voltages[i] - expected).abs() < 1e-7,
+                                "{solver} {mode:?} R={r} I={injection} G={conductance} cell=({row},{col})"
+                            );
+                            assert!((result.output.current_map[i] - injection).abs() < 1e-7);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn stencil_solve_matches_explicit_outputs() {
         for (nrows, ncols) in [(3, 5), (15, 17), (16, 16)] {
             let n = nrows * ncols;
@@ -711,7 +770,7 @@ mod tests {
                 ground[row * ncols + ncols - 1] = 2.0;
             }
             ground[0] = 1.0; // Also exercise a pinned regularization node.
-            for mode in [GroundMode::Neumann, GroundMode::Dirichlet] {
+            for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
                 for grounded in [true, false] {
                     let grounds = if grounded {
                         ground.clone()
@@ -744,7 +803,7 @@ mod tests {
                     );
                     assert!(explicit.total_iters < 5000 && stencil.total_iters < 5000);
                     let spec = match mode {
-                        GroundMode::Neumann => GroundSpec::Neumann(grounds.clone()),
+                        GroundMode::Shunt => GroundSpec::Shunt(grounds.clone()),
                         GroundMode::Dirichlet => GroundSpec::Dirichlet(
                             grounds.iter().map(|&value| value > 0.0).collect(),
                         ),
@@ -825,7 +884,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             false,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         );
 
         // Modify sources only — resistance is unchanged so the no-rebuild
@@ -845,7 +904,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             false,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         )
         .output;
 
@@ -862,7 +921,7 @@ mod tests {
                 crate::DEFAULT_TOL,
                 true,
                 false,
-                GroundMode::Neumann,
+                GroundMode::Shunt,
             )
             .output
         };
@@ -901,7 +960,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             false,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         );
 
         // Small edit to the resistance raster; should rebuild and warm-start.
@@ -918,7 +977,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             true,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         )
         .output;
 
@@ -935,7 +994,7 @@ mod tests {
                 crate::DEFAULT_TOL,
                 true,
                 false,
-                GroundMode::Neumann,
+                GroundMode::Shunt,
             )
             .output
         };
@@ -975,7 +1034,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             false,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         );
 
         // Edit the resistance raster by one cell.
@@ -996,7 +1055,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             true,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         );
 
         // WARM: rebuild the baseline on the original resistance to re-fill
@@ -1014,7 +1073,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             false,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         );
         let warm = solve_raster_cached(
             &res_edited,
@@ -1027,7 +1086,7 @@ mod tests {
             crate::DEFAULT_TOL,
             true,
             true,
-            GroundMode::Neumann,
+            GroundMode::Shunt,
         );
 
         assert!(

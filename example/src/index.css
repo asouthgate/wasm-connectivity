@@ -365,6 +365,35 @@ h3 {
 
 /* example page */
 
+.scenario {
+  margin-top: 20px;
+}
+
+.scenario-previews {
+  display: grid;
+  grid-template-columns: repeat(4, 200px);
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.scenario-previews .map-view {
+  width: 200px;
+}
+
+.scenario-current-pending {
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .75em;
+}
+
+.scenario-current {
+  width: 2000px;
+  max-width: 100%;
+  margin-top: 8px;
+}
+
 .example-num-wrap {
   margin-bottom: 6px;
 }
