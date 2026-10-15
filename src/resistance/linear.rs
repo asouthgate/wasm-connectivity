@@ -27,42 +27,48 @@ pub fn get_linear_resistance(
     pixw: f64,
 ) -> Vec<f64> {
     let total = nrows * ncols;
-    let mut resistance = vec![1.0f64; total];
-    for i in 0..total {
-        if missing[i] {
-            resistance[i] = f64::NAN;
-        }
-    }
-
-    // `dist` values are expressed in pixels; convert the buffer (metres) to
-    // pixels so comparisons are dimensionally consistent.
-    let buffer_cells = buffer / pixw;
-
+    let mut resistance = initialize_linear_resistance((0..total).map(|i| missing[i]));
     for (dist, ranking) in distance_rasters {
-        let rbuff = ((0.5 + 0.5 * (ranking / rankmax)).powf(xmax) * resmax) + 1.0;
+        update_linear_resistance(&mut resistance, dist, *ranking, buffer, rankmax, resmax, xmax, pixw);
+    }
+    resistance
+}
 
-        for i in 0..total {
-            if missing[i] {
-                continue;
-            }
-            let d = dist[i];
-            if !d.is_finite() {
-                continue;
-            }
-            let partial = if d > buffer_cells {
-                // R reference: `ifelse(d > buffer, rbuff, ...) + 1`, the extra
-                // +1 is applied to the whole raster, so the far field is rbuff + 1.
-                rbuff + 1.0
-            } else {
-                ((0.5 * (d / buffer_cells) + 0.5 * (ranking / rankmax)).powf(xmax) * resmax) + 1.0
-            };
-            if partial > resistance[i] {
-                resistance[i] = partial;
-            }
+pub(crate) fn initialize_linear_resistance(missing: impl Iterator<Item = bool>) -> Vec<f64> {
+    missing.map(|missing| if missing { f64::NAN } else { 1.0 }).collect()
+}
+
+pub(crate) fn update_linear_resistance(
+    resistance: &mut [f64],
+    dist: &[f64],
+    ranking: f64,
+    buffer: f64,
+    rankmax: f64,
+    resmax: f64,
+    xmax: f64,
+    pixw: f64,
+) {
+    // Distances are in pixels, while the buffer is in metres.
+    let buffer_cells = buffer / pixw;
+    let rbuff = ((0.5 + 0.5 * (ranking / rankmax)).powf(xmax) * resmax) + 1.0;
+    for i in 0..resistance.len() {
+        if resistance[i].is_nan() {
+            continue;
+        }
+        let d = dist[i];
+        if !d.is_finite() {
+            continue;
+        }
+        let partial = if d > buffer_cells {
+            // Preserve the R reference's extra +1 in the far field.
+            rbuff + 1.0
+        } else {
+            ((0.5 * (d / buffer_cells) + 0.5 * (ranking / rankmax)).powf(xmax) * resmax) + 1.0
+        };
+        if partial > resistance[i] {
+            resistance[i] = partial;
         }
     }
-
-    resistance
 }
 
 #[cfg(test)]

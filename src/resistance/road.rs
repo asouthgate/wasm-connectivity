@@ -31,25 +31,23 @@ pub fn cal_road_resistance(
             .collect();
     }
 
-    let road_distance = euclidean_distance_transform(road_binary, nrows, ncols);
+    let mut road_distance = euclidean_distance_transform(road_binary, nrows, ncols);
 
     // `road_distance` is expressed in pixels; convert the buffer (metres)
     // to pixels so the comparison is dimensionally consistent.
     let buffer_cells = buffer / pixw;
 
+    for (i, value) in road_distance.iter_mut().enumerate() {
+        let d = *value;
+        *value = if !road_binary[i].is_finite() {
+            f64::NAN
+        } else if !d.is_finite() || d > buffer_cells {
+            0.0
+        } else {
+            ((1.0 - d / buffer_cells) * 0.5 + 0.5).powf(xmax) * resmax
+        };
+    }
     road_distance
-        .iter()
-        .enumerate()
-        .map(|(i, &d)| {
-            if !road_binary[i].is_finite() {
-                f64::NAN
-            } else if !d.is_finite() || d > buffer_cells {
-                0.0
-            } else {
-                ((1.0 - d / buffer_cells) * 0.5 + 0.5).powf(xmax) * resmax
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

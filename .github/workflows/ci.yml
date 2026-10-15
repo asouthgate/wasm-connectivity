@@ -33,5 +33,8 @@ jobs:
       - name: Build WASM
         run: make build
 
+      - name: Resistance worker tests
+        run: node tests/resistance_worker.mjs
+
       - name: Build example
         run: cd example && npm install && npm run build

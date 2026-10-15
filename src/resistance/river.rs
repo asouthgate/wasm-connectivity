@@ -32,25 +32,23 @@ pub fn cal_river_resistance(
             .collect();
     }
 
-    let river_distance = euclidean_distance_transform(river_binary, nrows, ncols);
+    let mut river_distance = euclidean_distance_transform(river_binary, nrows, ncols);
 
     // `river_distance` is expressed in pixels; convert the buffer (metres)
     // to pixels so the comparison is dimensionally consistent.
     let buffer_cells = buffer / pixw;
 
+    for (i, value) in river_distance.iter_mut().enumerate() {
+        let d = *value;
+        *value = if !river_binary[i].is_finite() {
+            f64::NAN
+        } else if !d.is_finite() || d > buffer_cells {
+            resmax
+        } else {
+            (d / buffer_cells).powf(xmax) * resmax
+        };
+    }
     river_distance
-        .iter()
-        .enumerate()
-        .map(|(i, &d)| {
-            if !river_binary[i].is_finite() {
-                f64::NAN
-            } else if !d.is_finite() || d > buffer_cells {
-                resmax
-            } else {
-                (d / buffer_cells).powf(xmax) * resmax
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

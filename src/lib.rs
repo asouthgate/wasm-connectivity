@@ -278,22 +278,16 @@ pub fn run_resistance_pipeline_browser(
     lamps: Vec<f64>,
     landscape_conductance: Vec<f64>,
     params_json: String,
-) -> String {
-    let params: resistance::pipeline::ResistanceParams = match serde_json::from_str(&params_json) {
-        Ok(p) => p,
-        Err(e) => {
-            return serde_json::to_string(&json!({ "error": format!("Invalid params JSON: {}", e) }))
-                .unwrap_or_else(|_| r#"{"error":"Invalid params JSON"}"#.to_string());
-        }
-    };
-    // Zero-filled LCM used only for the NaN-masking pass in run_resistance_pipeline;
-    // landscape conductance is supplied via the override so LCM conductance is not needed.
-    let lcm = vec![0.0f64; params.nrows * params.ncols];
-    let output = resistance::pipeline::run_resistance_pipeline(
-        &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
-        &generic_resistance, &lamps, &params, Some(&landscape_conductance), None,
+) -> Result<BrowserResistanceOutput, String> {
+    let params: resistance::pipeline::ResistanceParams = serde_json::from_str(&params_json)
+        .map_err(|e| format!("Invalid params JSON: {}", e))?;
+    let output = resistance::pipeline::run_resistance_pipeline_impl(
+        &road_binary, &river_binary, &building_mask, None, &dtm, &dsm,
+        &generic_resistance, &lamps, &params, Some(&landscape_conductance), None, false,
     );
-    resistance_output_to_json(&output)
+    drop((road_binary, river_binary, building_mask, dtm, dsm,
+        generic_resistance, lamps, landscape_conductance));
+    Ok(resistance_output_to_binary(output))
 }
 
 /// Like [`run_resistance_pipeline_browser`], but skips the raycasted irradiance
@@ -312,37 +306,48 @@ pub fn run_resistance_pipeline_browser_with_lightmap(
     lightmap: Vec<f64>,
     landscape_conductance: Vec<f64>,
     params_json: String,
-) -> String {
-    let params: resistance::pipeline::ResistanceParams = match serde_json::from_str(&params_json) {
-        Ok(p) => p,
-        Err(e) => {
-            return serde_json::to_string(&json!({ "error": format!("Invalid params JSON: {}", e) }))
-                .unwrap_or_else(|_| r#"{"error":"Invalid params JSON"}"#.to_string());
-        }
-    };
-    let lcm = vec![0.0f64; params.nrows * params.ncols];
-    let output = resistance::pipeline::run_resistance_pipeline(
-        &road_binary, &river_binary, &building_mask, &lcm, &dtm, &dsm,
+) -> Result<BrowserResistanceOutput, String> {
+    let params: resistance::pipeline::ResistanceParams = serde_json::from_str(&params_json)
+        .map_err(|e| format!("Invalid params JSON: {}", e))?;
+    let output = resistance::pipeline::run_resistance_pipeline_impl(
+        &road_binary, &river_binary, &building_mask, None, &dtm, &dsm,
         &generic_resistance, &[], &params, Some(&landscape_conductance),
-        Some(&lightmap),
+        Some(&lightmap), false,
     );
-    resistance_output_to_json(&output)
+    drop((road_binary, river_binary, building_mask, dtm, dsm,
+        generic_resistance, lightmap, landscape_conductance));
+    Ok(resistance_output_to_binary(output))
 }
 
-fn resistance_output_to_json(output: &resistance::pipeline::ResistanceOutput) -> String {
-    let mut map = serde_json::Map::new();
-    map.insert("total_res".to_string(),    serde_json::Value::String(f64_to_base64(&output.total_res)));
-    map.insert("lamp_res".to_string(),     serde_json::Value::String(f64_to_base64(&output.lamp_res)));
-    map.insert("road_res".to_string(),     serde_json::Value::String(f64_to_base64(&output.road_res)));
-    map.insert("river_res".to_string(),    serde_json::Value::String(f64_to_base64(&output.river_res)));
-    map.insert("landscape_res".to_string(),serde_json::Value::String(f64_to_base64(&output.landscape_res)));
-    map.insert("linear_res".to_string(),   serde_json::Value::String(f64_to_base64(&output.linear_res)));
-    map.insert("generic_res".to_string(),  serde_json::Value::String(f64_to_base64(&output.generic_res)));
-    map.insert("soft_surf".to_string(),    serde_json::Value::String(f64_to_base64(&output.soft_surf)));
-    map.insert("hard_surf".to_string(),    serde_json::Value::String(f64_to_base64(&output.hard_surf)));
-    map.insert("nrows".to_string(),        serde_json::json!(output.nrows));
-    map.insert("ncols".to_string(),        serde_json::json!(output.ncols));
-    serde_json::to_string(&map).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
+#[wasm_bindgen]
+pub struct BrowserResistanceOutput {
+    rasters: [Vec<f64>; 9],
+    nrows: usize,
+    ncols: usize,
+}
+
+#[wasm_bindgen]
+impl BrowserResistanceOutput {
+    #[wasm_bindgen(getter)]
+    pub fn nrows(&self) -> usize { self.nrows }
+
+    #[wasm_bindgen(getter)]
+    pub fn ncols(&self) -> usize { self.ncols }
+
+    /// Consume one raster in browser field order, returning the existing f32 precision.
+    pub fn take_raster(&mut self, index: usize) -> Result<Vec<f32>, String> {
+        let raster = self.rasters.get_mut(index).ok_or("Unknown resistance raster")?;
+        Ok(std::mem::take(raster).into_iter().map(|value| value as f32).collect())
+    }
+}
+
+fn resistance_output_to_binary(output: resistance::pipeline::ResistanceOutput) -> BrowserResistanceOutput {
+    BrowserResistanceOutput {
+        rasters: [output.total_res, output.lamp_res, output.road_res, output.river_res,
+            output.landscape_res, output.linear_res, output.generic_res, output.soft_surf, output.hard_surf],
+        nrows: output.nrows,
+        ncols: output.ncols,
+    }
 }
 
 #[derive(Serialize)]
