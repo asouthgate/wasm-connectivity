@@ -6,7 +6,6 @@ import {
   solve_raster_sources_mg,
   solve_raster_sources_mg_stencil,
   rasterize_geojson,
-  downsample_raster,
 } from '@wasm-connect/lib/wasm_connect.js';
 import wasmUrl from '@wasm-connect/lib/wasm_connect_bg.wasm?url';
 import { parseAsc } from '@wasm-connect/lib';
@@ -121,11 +120,7 @@ self.onmessage = async (e) => {
         ncols: parsed.output.ncols,
         nodata: meta.nodata,
       };
-      const currentPreview = JSON.parse(downsample_raster(
-        new Float64Array(currentMap.data), currentMap.nrows, currentMap.ncols, currentMap.nodata, 200, 200,
-      ));
-      currentPreview.nodata = currentMap.nodata;
-      self.postMessage({ id, result: { connTimeMs, connMemMb, totalIters: parsed.total_iters || 0, currentMap, currentPreview } });
+      self.postMessage({ id, result: { connTimeMs, connMemMb, totalIters: parsed.total_iters || 0, currentMap } });
       return;
     }
 

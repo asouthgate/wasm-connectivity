@@ -33,6 +33,11 @@ path = "src/bin/prof_solve.rs"
 required-features = ["bin"]
 
 [[bin]]
+name = "scenario-solve"
+path = "src/bin/scenario_solve.rs"
+required-features = ["bin"]
+
+[[bin]]
 name = "instrumentation-profile"
 path = "src/bin/instrumentation_profile.rs"
 required-features = ["bin", "instrumentation-profile"]

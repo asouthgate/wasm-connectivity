@@ -1,8 +1,11 @@
 import rasterio
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import numpy as np
 import sys
+from pathlib import Path
 
 with rasterio.open(sys.argv[1]) as src:
     current_data = src.read(1)
@@ -27,6 +30,6 @@ if "--colorbar" in sys.argv:
     cbar.ax.tick_params(labelsize=16)
 plt.axis('off') 
 
-ofname = sys.argv[1].split(".")[0] + ".png"
+ofname = str(Path(sys.argv[1]).with_suffix('.png'))
 plt.savefig(ofname, dpi=300, bbox_inches='tight')
 print("Colored map saved as " + ofname)

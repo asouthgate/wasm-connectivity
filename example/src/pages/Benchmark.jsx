@@ -70,7 +70,7 @@ export default function Benchmark() {
       setData(loaded);
       const { baseData, baseMeta } = loaded;
       const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
-      setStatus(`loaded Chudleigh 1000×1000: ${nc.toLocaleString()} conductive cells`);
+      setStatus(`loaded Chudleigh 1000×1000`);
     }).catch(err => setStatus(`error: ${err.message}`));
   }, []);
 

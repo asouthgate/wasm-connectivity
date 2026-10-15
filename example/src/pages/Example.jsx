@@ -35,7 +35,7 @@ export default function Example() {
       const loaded = await loadExampleData(res);
       setData(loaded);
       const nc = loaded.baseData.reduce((c, v) => v !== loaded.baseMeta.nodata && v > 0 ? c + 1 : c, 0);
-      setStatus(`loaded Chudleigh ${res}x${res} — ${nc.toLocaleString()} conductive cells`);
+      setStatus(`loaded Chudleigh ${res}x${res}`);
     } catch (err) {
       setError(true); setStatus(`error: ${err.message}`);
     } finally {

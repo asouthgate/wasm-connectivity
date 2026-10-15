@@ -23,7 +23,7 @@ export default function ScenarioBenchmark() {
     })).then(entries => {
       if (!mounted.current) return;
       setPreviews(Object.fromEntries(entries));
-      setStatus('Ready · 2000x2000 · low-memory MG · Shunt ground');
+      setStatus('2000x2000 - low-memory MG - Shunt ground');
     }).catch(err => {
       if (err.name === 'AbortError' || !mounted.current) return;
       setStatus(err.message); setError(true);
@@ -82,11 +82,15 @@ export default function ScenarioBenchmark() {
         return (
           <section key={scenario.id} className="scenario">
             {preview && <div className="scenario-previews">
-              {['res', 'src', 'gnd'].map(type => <MapView key={type} type={type}
-                data={preview[type]} meta={preview.meta} preview maxSide={200} showHeader={false}
-                logScale={false} />)}
-              {result?.currentPreview ? <MapView type="cur" label="Log current"
-                data={result.currentPreview.data} meta={result.currentPreview} preview maxSide={200} showHeader={false} logScale /> :
+              {['res', 'src', 'gnd'].map(type => <div key={type} className="scenario-preview">
+                <MapView type={type}
+                  image={preview[type]} meta={preview.meta} preview maxSide={200} showHeader={false}
+                  logScale={scenario.id === 'point_lights' && type === 'res'} />
+                {scenario.id === 'point_lights' && type === 'res' &&
+                  <span className="scenario-preview-asterisk" title="Log resistance">*</span>}
+              </div>)}
+              {result?.currentMap ? <MapView type="cur" label="Log current"
+                data={result.currentMap.data} meta={result.currentMap} preview maxSide={200} showHeader={false} logScale /> :
                 <div className="map-view">
                   <div className="scenario-current-pending" />
                 </div>}
@@ -113,7 +117,7 @@ export default function ScenarioBenchmark() {
           </section>;
         })}
       </div>
-      {!running && SCENARIOS.map(scenario => {
+      {SCENARIOS.map(scenario => {
         const current = results[scenario.id]?.currentMap;
         return current && <section key={scenario.id} className="scenario">
           <div className="scenario-current">
