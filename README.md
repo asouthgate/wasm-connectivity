@@ -16,13 +16,17 @@ make build
 
 To build the optional profiling dependencies, see (or run) `scripts/profile-mem.sh`.
 
-## Serve the example 
+## Serve the example frontend
 
 ```
 make serve
 ```
 
-## Manual Instrumentation
+This frontend contains utilities for benchmarking the code in the browser.
+
+## Profiling
+
+There is additional code for profiling data structures at runtime.
 
 The optional `instrumentation-profile` feature records analytical payload sizes
 for specific solver buffers for optimisation purposes. 
