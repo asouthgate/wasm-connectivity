@@ -2,6 +2,7 @@
 """Plot elapsed runtime and peak RSS from the two scenario comparison traces."""
 
 import argparse
+from collections import defaultdict
 import re
 from pathlib import Path
 
@@ -11,9 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-SCENARIOS = ("dsm", "linear_res", "point_lights")
-LABELS = ("Digital surface model", "Linear resistance", "Point lights")
-MARKER = re.compile(r"^scenario=(\S+) run=(\d+)\s*$", re.MULTILINE)
+LABELS = {"dsm": "Digital surface model", "linear_res": "Linear resistance", "point_lights": "Point lights"}
+MARKER = re.compile(r"^scenario=(\S+) run=\d+[ \t]*$", re.MULTILINE)
 
 
 def elapsed_seconds(value):
@@ -29,64 +29,40 @@ def elapsed_seconds(value):
 
 
 def parse_trace(path):
-    text = Path(path).read_text()
-    markers = list(MARKER.finditer(text))
-    records = {}
-    for index, marker in enumerate(markers):
-        key = (marker[1], int(marker[2]))
-        if key[0] not in SCENARIOS or key[1] not in range(1, 6):
-            raise ValueError(f"{path}: unexpected run {key}")
-        if key in records:
-            raise ValueError(f"{path}: duplicate run {key}")
-        end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
-        block = text[marker.end():end]
-
-        def field(pattern):
-            values = re.findall(pattern, block, re.MULTILINE)
-            if len(values) != 1:
-                raise ValueError(f"{path}: missing or repeated time field in {key}")
-            return values[0]
-
-        status = field(r"^\s*Exit status:\s*(\d+)\s*$")
-        if status != "0" or "Command terminated by signal" in block:
-            raise ValueError(f"{path}: failed run {key}")
-        elapsed = elapsed_seconds(field(
-            r"^\s*Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*(\S+)\s*$"
-        ))
-        rss = float(field(r"^\s*Maximum resident set size \(kbytes\):\s*(\d+)\s*$"))
-        if rss <= 0:
-            raise ValueError(f"{path}: invalid peak RSS in {key}")
-        records[key] = (elapsed, rss / 1024)
-
-    expected = {(scenario, run) for scenario in SCENARIOS for run in range(1, 6)}
-    missing = expected - records.keys()
-    if missing:
-        raise ValueError(f"{path}: missing runs {sorted(missing)}")
-    return {
-        scenario: np.array([records[scenario, run] for run in range(1, 6)])
-        for scenario in SCENARIOS
-    }
+    parts = MARKER.split(Path(path).read_text())
+    records = defaultdict(list)
+    for scenario, block in zip(parts[1::2], parts[2::2]):
+        status = re.search(r"Exit status:\s*(\d+)", block)
+        elapsed = re.search(r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*(\S+)", block)
+        rss = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", block)
+        if scenario in LABELS and status and status[1] == "0" and elapsed and rss:
+            records[scenario].append((elapsed_seconds(elapsed[1]), float(rss[1]) / 1024))
+    return {scenario: np.array(samples) for scenario, samples in records.items()}
 
 
 def plot_comparison(cs, rust, output):
     fig, axes = plt.subplots(2, 1, figsize=(10, 9), sharex=True)
-    x = np.arange(len(SCENARIOS))
+    scenarios = [scenario for scenario in LABELS if scenario in cs or scenario in rust]
+    x = np.arange(len(scenarios))
     width = 0.35
     for metric, (ax, ylabel) in enumerate(zip(axes, ("Runtime (s)", "Peak memory (MiB)"))):
         for offset, data, label, color in (
             (-width / 2, cs, "Circuitscape 6.1.0", "#e66101"),
-            (width / 2, rust, "Rust low-memory MG", "#5e3c99"),
+            (width / 2, rust, "Low-memory MG", "#5e3c99"),
         ):
-            samples = np.array([data[scenario][:, metric] for scenario in SCENARIOS])
-            ax.bar(x + offset, samples.mean(axis=1), width,
-                   yerr=samples.std(axis=1, ddof=1), capsize=5, label=label,
+            present = [i for i, scenario in enumerate(scenarios) if scenario in data]
+            if not present:
+                continue
+            samples = [data[scenarios[i]][:, metric] for i in present]
+            ax.bar(x[present] + offset, [s.mean() for s in samples], width,
+                   yerr=[s.std(ddof=1) if len(s) > 1 else 0 for s in samples], capsize=5, label=label,
                    facecolor="white", edgecolor=color, linewidth=2, zorder=3)
         ax.set_ylabel(ylabel)
         ax.set_ylim(bottom=0)
         ax.grid(axis="y", alpha=0.3)
         ax.set_axisbelow(True)
     axes[0].legend()
-    axes[1].set_xticks(x, LABELS)
+    axes[1].set_xticks(x, [LABELS[scenario] for scenario in scenarios])
     fig.tight_layout()
     fig.savefig(output, dpi=300)
     plt.close(fig)
@@ -103,6 +79,8 @@ def main():
         rust = parse_trace(args.rust_trace)
     except (OSError, ValueError) as error:
         parser.error(str(error))
+    if not cs and not rust:
+        parser.error("no completed successful runs found")
     plot_comparison(cs, rust, args.output)
     print(f"Saved {args.output}")
 
