@@ -23,14 +23,20 @@ make serve
 ```
 
 This frontend contains utilities for benchmarking the code in the browser.
+To plot benchmarking results downloaded from the browser, run:
+
+```sh
+python3 scripts/plot_benchmark.py benchmark.csv
+```
 
 ## Profiling
 
-There is additional code for profiling data structures at runtime.
-
+Additional command-line utilities can be used to profile the main algorithm.
 The optional `instrumentation-profile` feature records analytical payload sizes
 for specific solver buffers for optimisation purposes. 
 Then use the plotter for visualisation.
+
+For example, to run without the `lowmem` flag, run:
 
 
 ```sh
@@ -39,14 +45,16 @@ cargo run --profile release-prof --features bin,instrumentation-profile \
 python3 scripts/plot_instrumentation_profile.py profile.json
 ```
 
+Then run with `--solver mg-lowmem` for the `lowmem` version:
+
 ```sh
 cargo run --profile release-prof --features bin,instrumentation-profile \
   --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt > profile-lowmem.json
 python3 scripts/plot_instrumentation_profile.py profile-lowmem.json
 ```
 
-To plot benchmarking results:
+To visualise these results run:
 
-```sh
-python3 scripts/plot_benchmark.py benchmark.csv
+```
+python3 scripts/plot_instrumentation_profile.py profile-lowmem.json
 ```
