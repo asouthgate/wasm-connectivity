@@ -43,22 +43,23 @@ def plot_hierarchy(rows, out_prefix):
         levels = best['profile']['hierarchy']
         indices = [level['level'] for level in levels]
         components = [
-            ('Laplacian', '#444444', [level['laplacian_bytes'] for level in levels]),
-            ('Workspace', '#2c7fb8',
+            ('Laplacian', '#e66101', [level['laplacian_bytes'] for level in levels]),
+            ('Workspace', '#5e3c99',
              [total_level_bytes(level) - level['laplacian_bytes'] for level in levels]),
         ]
         fig, ax = plt.subplots(figsize=(7, 6))
         bottom = [0.0] * len(levels)
         for label, color, values in components:
             heights = [value / 1e6 for value in values]
-            ax.bar(indices, heights, bottom=bottom, label=label, color=color)
+            ax.bar(indices, heights, bottom=bottom, label=label,
+                   facecolor='white', edgecolor=color, linewidth=2, zorder=3)
             bottom = [a + b for a, b in zip(bottom, heights)]
         if any(bottom):
             ax.set_ylim(0, max(bottom) * 1.25)
         ax.set_xlabel('Level')
         ax.set_ylabel('Memory')
         ax.set_xticks(indices)
-        ax.grid(True, alpha=0.3)
+        ax.grid(axis='y', alpha=0.3)
         ax.set_axisbelow(True)
         ax.legend(loc='upper left')
         fig.tight_layout()
