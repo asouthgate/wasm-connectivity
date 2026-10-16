@@ -8,6 +8,9 @@
 \usepackage{hyperref} 
 \usepackage{relsize}
 \usepackage{color, soul}
+\usepackage{booktabs} 
+\usepackage{tabularx} 
+\usepackage{adjustbox}
 \usepackage[nocompress]{cite}
 \DeclareMathOperator{\diag}{diag} 
 
@@ -35,6 +38,7 @@ For downstream geospatial web applications relying on connectivity analysis,
 backend infrastructure is required, which can be costly and require advanced data governance. 
 Recent developments in WebAssembly (Wasm) now allow fast \Cpp{} or 
 Rust code to be run directly in a sandboxed browser environment for edge computing. 
+However, in these contexts, resources such as memory may be limited.
 We present a WebAssembly/Rust toolset with a geospatial data pipeline and efficient,
 memory-optimised implementation of connectivity analysis. 
 This approach may be useful for geospatial modelling software where raster sizes and 
@@ -341,9 +345,33 @@ Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, L
 Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be run locally and accessed via the code repository
  \url{https://github.com/asouthgate/wasm-connectivity}. 
 
-Two benchmarks were run. 
-In the first case, a resistance map was generated at $1000\times1000$ resolution, then downsampled to lower resolutions, and the analysis code was run with 5 repeats each.
-It was expected that, in the browser context, the first run (`cold start') would be slowest due to V8/Wasm JIT compilation engine warm-up (`warm start').
+For comparison of our low-memory approach with Circuitscape, we used three scenarios from three realistic resistance maps, spanning 
+maps rich in both low- and high-frequency variation. These scenarios are described in Table \ref{tab:scenarios} with 
+minimum, maximum, ratio (contrast), and Geary's C \cite{shekhar2007encyclopedia}, defined as:
+
+\[
+C = \frac{n-1}{2n\textrm{Var}{(\vec{R}})} \sum_{j \in N(i)}(R_i-R_j)^2
+\]
+
+\begin{table}[htbp]
+  \centering  
+  \caption{Scenarios used in benchmarking}
+  \vspace{0.5em}
+  \label{tab:scenarios}
+  \small
+  \setlength{\tabcolsep}{4.5pt}
+  \begin{adjustbox}{max width=\linewidth,center}
+  \begin{tabular}{l l l l l l l}
+    \toprule
+    \textbf{Scenario} & $R_{\min}$ & $R_{\max}$ & $R_{\max}/R_{\min}$ & $C$ & \textbf{Source \%} & \textbf{Ground \%} \\
+    \midrule
+    DSM          & 11.59       & 142.05      & 12.24    & $6.1 \times 10^{-4}$ & 0.48 & 10.85 \\
+    Landscape    & $4.54 \times 10^{-5}$ & $3.6 \times 10^{-4}$ & 7.99 & 0.035 & 6.37 & 6.97 \\
+    Point-lights & 4751.10      & $1.0 \times 10^{8}$ & $2.1 \times 10^{4}$ & 0.084 & 7.74 & 1.08 \\
+    \bottomrule
+  \end{tabular}
+  \end{adjustbox}
+\end{table}
 
 For comparison with Circuitscape version 5.17.1, a configuration file was created with advanced mode, `cg+amg' solver and and run with both 4 threads and single-threaded mode.
 We also performed an assessment with Circuitscape version 5.11.2, which reports preconditioner building solver timing in addition to overall time. Version 5.17.1 does not
@@ -368,8 +396,10 @@ such as for high-resolution LIDAR data.
 
 \begin{figure}[htb!]
 \centering
-\includegraphics[width=0.8\textwidth]{figures/resistance_current_react.png}
-\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with Wasm connectivity library, computed in 8.75 seconds.}
+\includegraphics[width=0.48\textwidth]{figures/resistance-1000x1000-example.png}
+\hfill
+\includegraphics[width=0.48\textwidth]{figures/current-1000x1000-example.png}
+\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with Wasm connectivity library, computed in 13.01 seconds.}
 \label{fig:wasm-connectivity}
 \end{figure}
 
@@ -390,7 +420,7 @@ the same resistance map input with a zero-volt ground, showing equivalent result
 \includegraphics[width=0.48\textwidth]{figures/cs_results_curmap.png}
 \hfill
 \includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_shunt.png}
-\caption{Side-by-side comparison showing log rescaled current maps produced by Circuitscape (left) and our implementation (right), to show consistency. 
+\caption{Side-by-side comparison showing log rescaled current maps produced by Circuitscape (left) and our low-memory Rust solver (right), to show consistency. 
 Current maps were rescaled to the range $[1, 100]$, and are shown with log colorbar. Max absolute difference $<10^{-5}$ rescaled units.}
 \label{fig:comparison}
 \end{figure}
@@ -415,7 +445,7 @@ analysis round trip from browser to server and back.
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=1.0\textwidth]{figures/cs_vs_wasm.png}
-\caption{Runtime comparison between Circuitscape and our WASM implementation for a $500\times500$ test raster. On average, Circuitscape 5.11.2 preconditioner building plus solving took 2.48 seconds, versus 1.64 seconds for WASM (GMG). Overall program runtime for Circuitscape exceeded both. Error bars give standard deviation. Circuitscape was tested with both 1 thread and 4 threads. }
+\caption{Runtime and memory comparison between Circuitscape v6.1.0 and our low-memory implementation. For all three scenarios, there was an approximately 7-fold reduction in memory, from 3.5 GB to 500 MB. For the first two scenarios, runtimes were similar. For the point-light scenario, the low-memory implementation was 5$\times$ slower.}
 \label{fig:cs_runtime}
 \end{figure}
 
