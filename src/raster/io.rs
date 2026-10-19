@@ -74,7 +74,7 @@ pub fn write_asc<P: AsRef<Path>>(
             if col > 0 {
                 line.push(' ');
             }
-            line.push_str(&format!("{:.6}", data[row * ncols + col]));
+            line.push_str(&format!("{:.16e}", data[row * ncols + col]));
         }
         writeln!(f, "{}", line).unwrap();
     }
@@ -114,4 +114,28 @@ pub fn asc_to_png<P: AsRef<Path>, Q: AsRef<Path>>(asc_path: P, png_path: Q) {
     }
     img.save(&png_path).unwrap();
     eprintln!("wrote {}", png_path.as_ref().display());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asc_export_preserves_small_currents_and_f64_precision() {
+        let path = std::env::temp_dir().join(format!(
+            "wasm-connect-asc-{}-{}.asc",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        let values = [0.0, 5.3454610306142845e-43, 1e-300,
+                      366.321540637836, -9999.0, f64::MIN_POSITIVE];
+        write_asc(&path, &values, 2, 3, 10.0, 20.0, 1.0, -9999.0);
+        let grid = parse_asc(&path);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(grid.data, values);
+        assert_eq!((grid.nrows, grid.ncols), (2, 3));
+        assert_eq!((grid.xllcorner, grid.yllcorner, grid.cellsize, grid.nodata),
+                   (10.0, 20.0, 1.0, -9999.0));
+    }
 }

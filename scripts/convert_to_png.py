@@ -23,7 +23,13 @@ print(f"Rescaled Max Value: {np.nanmax(scaled_data)}")
 
 plt.figure(figsize=(10, 8))
 
-plt.imshow(scaled_data, cmap='inferno', norm=colors.LogNorm(vmin=1, vmax=100))
+if "--log" in sys.argv:
+    plot_data = np.ma.masked_invalid(np.ma.masked_less_equal(current_data, 0))
+    norm = colors.LogNorm()
+else:
+    plot_data = scaled_data
+    norm = colors.Normalize(vmin=1, vmax=100)
+plt.imshow(plot_data, cmap='inferno', norm=norm)
 
 if "--colorbar" in sys.argv:
     cbar = plt.colorbar()

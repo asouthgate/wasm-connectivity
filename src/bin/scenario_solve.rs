@@ -1,18 +1,63 @@
-use std::{env, fs, path::Path};
+use std::{collections::HashMap, env, fs, path::Path};
 
 use wasm_connect::raster::io::{parse_asc, write_asc};
-use wasm_connect::solve::{solve_raster_sources_mg_stencil, GroundMode};
+use wasm_connect::solve::{solve_raster_sources_mg_stencil_with_options, GroundMode};
+use wasm_connect::linalg::multigrid::MgOptions;
+
+const USAGE: &str = "Usage: scenario-solve --resistance FILE --source FILE --ground FILE
+    [--tol FLOAT] [--max-iter INTEGER] [--nu INTEGER] [--output FILE] [--verbose]
+
+Solve ASC rasters using low-memory CGMG with shunt grounding.
+--nu sets the number of sweeps in each pre- and post-smoothing phase.
+Defaults: --tol 1e-4 --max-iter 100000 --nu 2 --output rust_current.asc";
+
+fn argument_error(message: &str) -> ! {
+    eprintln!("{message}\n\n{USAGE}");
+    std::process::exit(2);
+}
 
 fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
-    if args.len() != 1 || !matches!(args[0].as_str(), "dsm" | "linear_res" | "point_lights") {
-        eprintln!("Usage: scenario-solve dsm|linear_res|point_lights");
-        std::process::exit(2);
+    let mut args = env::args().skip(1);
+    let mut options = HashMap::new();
+    let mut verbose = false;
+    while let Some(flag) = args.next() {
+        if flag == "--help" || flag == "-h" {
+            println!("{USAGE}");
+            return;
+        }
+        if flag == "--verbose" {
+            if verbose { argument_error("duplicate argument: --verbose"); }
+            verbose = true;
+            continue;
+        }
+        if !matches!(flag.as_str(), "--resistance" | "--source" | "--ground"
+                     | "--tol" | "--max-iter" | "--nu" | "--output") {
+            argument_error(&format!("unknown argument: {flag}"));
+        }
+        let value = args.next().filter(|value| !value.starts_with("--"))
+            .unwrap_or_else(|| argument_error(&format!("missing value for {flag}")));
+        if options.insert(flag.clone(), value).is_some() {
+            argument_error(&format!("duplicate argument: {flag}"));
+        }
     }
-    let directory = Path::new("scripts/scenarios").join(&args[0]);
-    let resistance = parse_asc(directory.join("resistance.asc"));
-    let source = parse_asc(directory.join("source.asc"));
-    let ground = parse_asc(directory.join("ground.asc"));
+    for flag in ["--resistance", "--source", "--ground"] {
+        if !options.contains_key(flag) {
+            argument_error(&format!("{flag} is required"));
+        }
+    }
+    let tol = options.get("--tol").map(String::as_str).unwrap_or("1e-4")
+        .parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or_else(|| argument_error("--tol must be finite and positive"));
+    let max_iter = options.get("--max-iter").map(String::as_str).unwrap_or("100000")
+        .parse::<usize>().ok().filter(|value| *value > 0)
+        .unwrap_or_else(|| argument_error("--max-iter must be a positive integer"));
+    let output = Path::new(options.get("--output").map(String::as_str).unwrap_or("rust_current.asc"));
+    let nu = options.get("--nu").map(String::as_str).unwrap_or("2")
+        .parse::<usize>().ok().filter(|value| *value > 0)
+        .unwrap_or_else(|| argument_error("--nu must be a positive integer"));
+    let resistance = parse_asc(&options["--resistance"]);
+    let source = parse_asc(&options["--source"]);
+    let ground = parse_asc(&options["--ground"]);
     for grid in [&resistance, &source, &ground] {
         assert!(grid.nrows > 0 && grid.ncols > 0, "empty raster");
         assert_eq!(
@@ -55,20 +100,21 @@ fn main() {
         "no grounds"
     );
 
-    let mut result = solve_raster_sources_mg_stencil(
+    let mut result = solve_raster_sources_mg_stencil_with_options(
         &resistance.data,
         resistance.nrows,
         resistance.ncols,
         resistance.nodata,
         &source.data,
         &ground.data,
-        100_000,
-        1e-6,
+        max_iter,
+        tol,
         false,
         GroundMode::Shunt,
+        MgOptions { verbose, nu, ..MgOptions::default() },
     );
     assert!(
-        result.total_iters < 100_000,
+        result.total_iters < max_iter,
         "CG reached the iteration limit"
     );
     assert!(
@@ -82,10 +128,11 @@ fn main() {
             assert!(value.is_finite(), "non-finite current");
         }
     }
-    let output = directory.join("output");
-    fs::create_dir_all(&output).expect("cannot create output directory");
+    if let Some(parent) = output.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).expect("cannot create output directory");
+    }
     write_asc(
-        output.join("rust_current.asc"),
+        output,
         &result.output.current_map,
         resistance.nrows,
         resistance.ncols,
@@ -94,5 +141,5 @@ fn main() {
         resistance.cellsize,
         resistance.nodata,
     );
-    eprintln!("{}: {} iterations", args[0], result.total_iters);
+    eprintln!("{}: {} iterations", output.display(), result.total_iters);
 }

@@ -2,6 +2,7 @@ use crate::linalg::multigrid::{MgOptions, MgPreconditioner};
 use crate::linalg::operator::{FineOperator, GroundSpec, StencilOperator};
 use crate::linalg::pcg as solver;
 use crate::memory;
+use crate::linalg::timing;
 use serde::Serialize;
 use sprs::CsMat;
 use std::collections::HashSet;
@@ -288,11 +289,15 @@ pub fn solve_raster_sources_mg_with_options(
     ground_mode: GroundMode,
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
+    let timing_scope = timing::Scope::new(options.verbose);
+    let phase_timer = timing::timer(None, "System preparation");
     let (laplacian, s, cell_to_node) = prepare_explicit_system(
         resistance_data, nrows, ncols, nodata, source_data, ground_data,
         remove_average, ground_mode,
     );
 
+    drop(phase_timer);
+    let phase_timer = timing::timer(None, "Hierarchy construction");
     let mg = MgPreconditioner::build_with_options(
         FineOperator::Explicit(laplacian),
         nrows,
@@ -300,8 +305,12 @@ pub fn solve_raster_sources_mg_with_options(
         options,
     );
 
+    drop(phase_timer);
+    let phase_timer = timing::timer(None, "CG solve (inclusive)");
     let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
 
+    drop(phase_timer);
+    let phase_timer = timing::timer(None, "Current map/output construction");
     let out = build_raster_output(
         &res.v,
         resistance_data,
@@ -312,6 +321,9 @@ pub fn solve_raster_sources_mg_with_options(
         nodata,
         ground_mode,
     );
+
+    drop(phase_timer);
+    timing_scope.print();
 
     AnnotatedOutput {
         output: out,
@@ -382,6 +394,8 @@ pub fn solve_raster_sources_mg_stencil_with_options(
     ground_mode: GroundMode,
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
+    let timing_scope = timing::Scope::new(options.verbose);
+    let phase_timer = timing::timer(None, "System preparation");
     memory::reset();
     let num_nodes = nrows * ncols;
 
@@ -413,9 +427,15 @@ pub fn solve_raster_sources_mg_stencil_with_options(
 
     memory::record_cg_vectors(num_nodes);
 
+    drop(phase_timer);
+    let phase_timer = timing::timer(None, "Hierarchy construction");
     let mg = MgPreconditioner::build_with_options(FineOperator::Stencil(op), nrows, ncols, options);
+    drop(phase_timer);
+    let phase_timer = timing::timer(None, "CG solve (inclusive)");
     let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
 
+    drop(phase_timer);
+    let phase_timer = timing::timer(None, "Current map/output construction");
     let out = build_raster_output_identity(
         res.v,
         resistance_data,
@@ -425,6 +445,9 @@ pub fn solve_raster_sources_mg_stencil_with_options(
         nodata,
         ground_mode,
     );
+
+    drop(phase_timer);
+    timing_scope.print();
 
     AnnotatedOutput {
         output: out,

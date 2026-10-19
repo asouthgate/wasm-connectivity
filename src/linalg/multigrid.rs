@@ -3,6 +3,7 @@ use crate::linalg::operator::{FineOperator, Operator};
 use crate::linalg::pcg::Preconditioner;
 use crate::linalg::transfer::Transfer;
 use crate::memory;
+use crate::linalg::timing;
 #[cfg(feature = "instrumentation-profile")]
 use crate::memory::GalerkinScratch;
 use sprs::CsMat;
@@ -15,6 +16,10 @@ const SMALL_FINE_DIRECT_LIMIT: usize = 49;
 /// Native multigrid setup controls; browser calls use the defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct MgOptions {
+    /// Number of sweeps in each pre- and post-smoothing phase; must be positive.
+    pub nu: usize,
+    /// Print aggregate solve timings, broken down by hierarchy level.
+    pub verbose: bool,
     /// Maximum hierarchy depth, including the fine level.
     pub max_levels: usize,
     /// Desired upper bound on unknowns at the direct Cholesky level.
@@ -28,6 +33,8 @@ pub struct MgOptions {
 impl Default for MgOptions {
     fn default() -> Self {
         Self {
+            nu: 2,
+            verbose: false,
             max_levels: 8,
             cholesky_size: None,
         }
@@ -429,6 +436,7 @@ impl<'a> MgPreconditioner<'a> {
     ) -> Self {
         assert!(nrows > 0 && ncols > 0, "MG requires nonempty dimensions");
         assert!(options.max_levels > 0, "MG requires at least one level");
+        assert!(options.nu > 0, "MG requires at least one smoothing sweep");
         assert!(
             options.cholesky_size != Some(0),
             "Cholesky size must be positive"
@@ -441,6 +449,10 @@ impl<'a> MgPreconditioner<'a> {
             nrows * ncols
         );
 
+        timing::level(0, nrows, ncols, match &fine {
+            FineOperator::Explicit(_) => "explicit",
+            FineOperator::Stencil(_) => "stencil",
+        });
         let mut coarse: Vec<MgLevel> = Vec::new();
         let (mut nr, mut nc) = (nrows, ncols);
 
@@ -503,6 +515,11 @@ impl<'a> MgPreconditioner<'a> {
                 prolongation,
             });
 
+            timing::level(coarse.len(), next_nr, next_nc,
+                match &coarse.last().unwrap().laplacian {
+                    CoarseOperator::Explicit(_) => "explicit",
+                    CoarseOperator::Galerkin { .. } => "galerkin-stencil",
+                });
             nr = next_nr;
             nc = next_nc;
         }
@@ -649,7 +666,7 @@ impl<'a> MgPreconditioner<'a> {
             fine,
             coarse,
             fine_cholesky_l,
-            nu: 2,
+            nu: options.nu,
             omega: 0.67,
             workspaces: RefCell::new(workspaces),
         }
@@ -680,17 +697,20 @@ impl<'a> MgPreconditioner<'a> {
                 self.coarse[level - 1].cholesky_l.as_ref()
             };
             if let Some(factor) = factor {
+                let _timer = timing::timer(Some(level), "Coarse direct solve");
                 let error = cholesky::cholesky_solve(factor, &current.d, current.e.len());
                 current.e.copy_from_slice(&error);
             } else {
                 // Start from zero so the result does not depend on an earlier
                 // application when Cholesky is unavailable.
+                let _timer = timing::timer(Some(level), "Coarse fallback CG");
                 let result = crate::linalg::pcg::cg_solve(&op, &current.d, 50, 1e-3);
                 current.e.copy_from_slice(&result.v);
             }
             return;
         }
 
+        let phase_timer = timing::timer(Some(level), "Pre-smoothing");
         for _ in 0..self.nu {
             current.smoother.smooth(
                 &op,
@@ -700,15 +720,23 @@ impl<'a> MgPreconditioner<'a> {
                 self.omega,
             );
         }
+        drop(phase_timer);
+        let phase_timer = timing::timer(Some(level), "Residual calculation");
         op.matvec(&current.e, &mut current.d_prime);
         for (residual, &source) in current.d_prime.iter_mut().zip(&current.d) {
             *residual = source - *residual;
         }
 
+        drop(phase_timer);
         let transfer = self.coarse[level].prolongation;
+        let phase_timer = timing::timer(Some(level), "Restriction");
         transfer.restrict(&current.d_prime, &mut deeper[0].d);
+        drop(phase_timer);
         self.v_cycle(deeper, level + 1);
+        let phase_timer = timing::timer(Some(level), "Prolongation/correction");
         transfer.prolongate(&deeper[0].e, &mut current.e);
+        drop(phase_timer);
+        let _phase_timer = timing::timer(Some(level), "Post-smoothing");
 
         for _ in 0..self.nu {
             current.smoother.smooth(
@@ -1208,6 +1236,8 @@ mod tests {
             let laplacian =
                 crate::circuit::laplacian::add_diagonal(&laplacian, &vec![1.0; nr * nc]);
             let options = MgOptions {
+                nu: 2,
+                verbose: false,
                 max_levels: depth,
                 cholesky_size: target,
             };

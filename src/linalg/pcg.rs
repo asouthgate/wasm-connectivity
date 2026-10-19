@@ -2,6 +2,7 @@
 use sprs::CsMat;
 
 use crate::linalg::operator::Operator;
+use crate::linalg::timing;
 
 pub struct CgResult {
     pub v: Vec<f64>,
@@ -58,6 +59,8 @@ pub fn cg_solve_precond(
     precond: &dyn Preconditioner,
 ) -> CgResult {
 
+    let timing_scope = timing::CgScope::new();
+    let phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
     let n = s.len();
     let mut v = vec![0.0f64; n];
     let mut r = s.to_vec();
@@ -68,16 +71,24 @@ pub fn cg_solve_precond(
 
     // e0 = M^-1 r
     let mut e0 = vec![0.0; n];
+    drop(phase_timer);
+    let phase_timer = timing::timer_if(timing_scope.outer, None, "Preconditioner (inclusive)");
     precond.apply(&r, &mut e0);
+    drop(phase_timer);
+    let phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
     // p0 = e0
     let mut p = e0.clone();
     let mut rs_old = dot(&r, &p);
     let mut lp = vec![0.0; n];
 
+    drop(phase_timer);
     let mut iters = 0;
     for iter in 0..max_iter {
         iters = iter + 1;
+        let phase_timer = timing::timer_if(timing_scope.outer, None, "CG matrix-vector product");
         laplacian.matvec(&p, &mut lp);
+        drop(phase_timer);
+        let phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
         let p_lp = dot(&p, &lp);
         // avoid dividing by zero
         if p_lp.abs() < 1e-30 { 
@@ -100,7 +111,11 @@ pub fn cg_solve_precond(
 
         if r_norm / s_norm < tol { break; }
 
+        drop(phase_timer);
+        let phase_timer = timing::timer_if(timing_scope.outer, None, "Preconditioner (inclusive)");
         precond.apply(&r, &mut e0);
+        drop(phase_timer);
+        let _phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
 
         let rs_new = dot(&r, &e0);
         if rs_old.abs() < 1e-30 { 
@@ -120,6 +135,7 @@ pub fn cg_solve_precond(
         rs_old = rs_new;
     }
 
+    timing_scope.iterations(iters);
     CgResult { v, iters }
 }
 

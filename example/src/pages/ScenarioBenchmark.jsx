@@ -89,8 +89,12 @@ export default function ScenarioBenchmark() {
                 {scenario.id === 'point_lights' && type === 'res' &&
                   <span className="scenario-preview-asterisk" title="Log resistance">*</span>}
               </div>)}
-              {result?.currentMap ? <MapView type="cur" label="Log current"
-                data={result.currentMap.data} meta={result.currentMap} preview maxSide={200} showHeader={false} logScale /> :
+              {result?.currentMap ? <div className="scenario-preview">
+                <MapView type="cur" label="Current"
+                  data={result.currentMap.data} meta={result.currentMap} preview maxSide={200} showHeader={false}
+                  logScale />
+                <span className="scenario-preview-asterisk" title="Log current">*</span>
+              </div> :
                 <div className="map-view">
                   <div className="scenario-current-pending" />
                 </div>}
@@ -100,8 +104,8 @@ export default function ScenarioBenchmark() {
       })}
       <div className="scenario">
         <div className="bench-info">
-          Previews: 200x200 · columns: resistance, source, ground, log current.
-          Full-resolution log current maps: 2000x2000, in the same scenario order.
+          Previews: 200x200 · columns: resistance, source, ground, current.
+          Full-resolution current maps: 2000x2000, in the same scenario order. * Log scale.
         </div>
         {SCENARIOS.map((scenario, index) => {
           const result = results[scenario.id];
@@ -120,8 +124,10 @@ export default function ScenarioBenchmark() {
       {SCENARIOS.map(scenario => {
         const current = results[scenario.id]?.currentMap;
         return current && <section key={scenario.id} className="scenario">
-          <div className="scenario-current">
-            <MapView type="cur" label="Log current" data={current.data} meta={current} showHeader={false} logScale />
+          <div className="scenario-current scenario-preview">
+            <MapView type="cur" label="Current" data={current.data} meta={current} showHeader={false}
+              logScale />
+            <span className="scenario-preview-asterisk" title="Log current">*</span>
           </div>
         </section>;
       })}

@@ -3,3 +3,4 @@ pub mod multigrid;
 pub mod operator;
 pub mod pcg;
 mod transfer;
+pub(crate) mod timing;

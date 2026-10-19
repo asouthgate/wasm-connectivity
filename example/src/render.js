@@ -42,7 +42,7 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
 
   let minRaw = Infinity, maxRaw = -Infinity;
   for (const v of data) {
-    if (v === nodata || !Number.isFinite(v)) continue;
+    if (v === nodata || !Number.isFinite(v) || (logScale && v <= 0)) continue;
     if (v < minRaw) minRaw = v;
     if (v > maxRaw) maxRaw = v;
   }
@@ -51,16 +51,17 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
   if (maxRaw <= minRaw) maxRaw = minRaw + 1;
 
   const span = maxRaw - minRaw;
+  const logMin = minRaw > 0 ? Math.log(minRaw) : 0;
+  const logSpan = maxRaw > 0 ? Math.log(maxRaw) - logMin : 1;
   const stops = plasma ? PLASMA_STOPS : VIRIDIS_STOPS;
   for (let r = 0; r < nrows; r++) {
     for (let c = 0; c < ncols; c++) {
       const v = data[r * ncols + c];
       let rr = 0, gg = 0, bb = 0;
-      if (v !== nodata && Number.isFinite(v)) {
+      if (v !== nodata && Number.isFinite(v) && (!logScale || v > 0)) {
         let s;
         if (logScale && v > 0) {
-          const scaled = 1 + ((v - minRaw) / span) * 99;
-          s = Math.log10(scaled) / 2;
+          s = (Math.log(v) - logMin) / logSpan;
         } else {
           s = (v - minRaw) / span;
         }

@@ -11,7 +11,7 @@ rust_trace=rust-lowmem-bench.out
 : > "$cs_trace"
 : > "$rust_trace"
 
-for scenario in dsm linear_res point_lights; do
+for scenario in point_lights dsm linear_res; do
   mkdir -p "scripts/scenarios/$scenario/output"
   for run in {1..5}; do
     echo "$scenario: run $run/5, Circuitscape"
@@ -22,7 +22,12 @@ for scenario in dsm linear_res point_lights; do
 
     echo "$scenario: run $run/5, Rust low-memory MG"
     printf '\nscenario=%s run=%s\n' "$scenario" "$run" >> "$rust_trace"
-    /usr/bin/time -v target/release/scenario-solve "$scenario" >> "$rust_trace" 2>&1
+    /usr/bin/time -v target/release/scenario-solve \
+      --resistance "scripts/scenarios/$scenario/resistance.asc" \
+      --source "scripts/scenarios/$scenario/source.asc" \
+      --ground "scripts/scenarios/$scenario/ground.asc" \
+      --tol 1e-4 --max-iter 100000 \
+      --output "scripts/scenarios/$scenario/output/rust_current.asc" >> "$rust_trace" 2>&1
   done
 
   output="scripts/scenarios/$scenario/output"
