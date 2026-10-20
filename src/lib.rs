@@ -15,7 +15,7 @@ use serde_json::json;
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
 pub const DEFAULT_MAX_ITER: usize = 100_000;
-pub const DEFAULT_TOL: f64 = 1e-6;
+pub const DEFAULT_TOL: f64 = 1e-4;
 
 fn json_response<T: Serialize>(output: &T) -> String {
     serde_json::to_string(output).unwrap_or_else(|e| {

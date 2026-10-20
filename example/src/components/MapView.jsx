@@ -1,16 +1,16 @@
 import { useRef, useEffect, useState } from 'react';
-import { renderMap, VIRIDIS_GRADIENT, PLASMA_GRADIENT } from '../render';
+import { renderMap, VIRIDIS_GRADIENT, PLASMA_GRADIENT, JET_GRADIENT } from '../render';
 
-export default function MapView({ type, data, meta, image, logScale, onToggleScale, preview = false, maxSide = 400, label, showHeader = true }) {
+export default function MapView({ type, data, meta, image, logScale, quantileScale = false, onToggleScale, preview = false, maxSide = 400, label, showHeader = true }) {
   const canvasRef = useRef(null);
   const [range, setRange] = useState({ min: 0, max: 1 });
-  const isCurVolt = type === 'cur' || type === 'volt';
+  const palette = (type === 'cur' || quantileScale) ? 'jet' : type === 'volt' ? 'plasma' : 'viridis';
 
   useEffect(() => {
     if (!data || !meta) return;
     const canvas = canvasRef.current;
     const rendered = preview ? document.createElement('canvas') : canvas;
-    const r = renderMap(rendered, data, meta.nrows, meta.ncols, meta.nodata ?? 0, logScale, maxSide, isCurVolt);
+    const r = renderMap(rendered, data, meta.nrows, meta.ncols, meta.nodata ?? 0, logScale, maxSide, palette, quantileScale);
     if (preview) {
       const scale = Math.min(1, maxSide / Math.max(rendered.width, rendered.height));
       canvas.width = Math.max(1, Math.round(rendered.width * scale));
@@ -21,7 +21,7 @@ export default function MapView({ type, data, meta, image, logScale, onToggleSca
       ctx.drawImage(rendered, 0, 0, canvas.width, canvas.height);
     }
     if (r) setRange(r);
-  }, [data, meta, type, logScale, isCurVolt, maxSide, preview]);
+  }, [data, meta, type, logScale, quantileScale, palette, maxSide, preview]);
 
   const labels = { res:'Resistance', points:'Focal Points', cur:'Current', src:'Source', gnd:'Ground', volt:'Voltage' };
   const dim = meta ? `${meta.ncols}×${meta.nrows}` : '';
@@ -44,7 +44,7 @@ export default function MapView({ type, data, meta, image, logScale, onToggleSca
         <canvas ref={canvasRef} className="map-canvas" />}
       <div className="map-legend">
         <span className="map-legend-label">{fmt(displayRange.min)}</span>
-        <div className="map-legend-gradient" style={{ '--legend-bg': isCurVolt ? PLASMA_GRADIENT : VIRIDIS_GRADIENT }} />
+        <div className="map-legend-gradient" style={{ '--legend-bg': palette === 'jet' ? JET_GRADIENT : palette === 'plasma' ? PLASMA_GRADIENT : VIRIDIS_GRADIENT }} />
         <span className="map-legend-label">{fmt(displayRange.max)}</span>
       </div>
     </div>

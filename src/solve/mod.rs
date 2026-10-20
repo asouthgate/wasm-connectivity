@@ -289,6 +289,7 @@ pub fn solve_raster_sources_mg_with_options(
     ground_mode: GroundMode,
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
+    let _profile_scope = crate::linalg::profile::Scope::new(options.profile);
     let timing_scope = timing::Scope::new(options.verbose);
     let phase_timer = timing::timer(None, "System preparation");
     let (laplacian, s, cell_to_node) = prepare_explicit_system(
@@ -307,9 +308,10 @@ pub fn solve_raster_sources_mg_with_options(
 
     drop(phase_timer);
     let phase_timer = timing::timer(None, "CG solve (inclusive)");
-    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
+    let mut res = mg.solve_cg(&s, max_iter, tol, options.profile);
 
     drop(phase_timer);
+    mg.final_post_smooth(&s, &mut res.v, options.l0postnu, options.profile, res.iters);
     let phase_timer = timing::timer(None, "Current map/output construction");
     let out = build_raster_output(
         &res.v,
@@ -394,6 +396,7 @@ pub fn solve_raster_sources_mg_stencil_with_options(
     ground_mode: GroundMode,
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
+    let _profile_scope = crate::linalg::profile::Scope::new(options.profile);
     let timing_scope = timing::Scope::new(options.verbose);
     let phase_timer = timing::timer(None, "System preparation");
     memory::reset();
@@ -432,9 +435,10 @@ pub fn solve_raster_sources_mg_stencil_with_options(
     let mg = MgPreconditioner::build_with_options(FineOperator::Stencil(op), nrows, ncols, options);
     drop(phase_timer);
     let phase_timer = timing::timer(None, "CG solve (inclusive)");
-    let res = solver::cg_solve_precond(mg.fine_operator(), &s, max_iter, tol, &mg);
+    let mut res = mg.solve_cg(&s, max_iter, tol, options.profile);
 
     drop(phase_timer);
+    mg.final_post_smooth(&s, &mut res.v, options.l0postnu, options.profile, res.iters);
     let phase_timer = timing::timer(None, "Current map/output construction");
     let out = build_raster_output_identity(
         res.v,

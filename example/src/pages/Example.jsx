@@ -66,7 +66,7 @@ export default function Example() {
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(layers), baseMeta.xllcorner, ymax, baseMeta.cellsize,
         srcData, gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols),
-        100_000, 1e-6, dirichlet,
+        100_000, 1e-4, dirichlet,
       ));
       if (r.error) throw new Error(r.error);
       setResult(r);

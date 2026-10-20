@@ -26,6 +26,8 @@ for scenario in point_lights dsm linear_res; do
       --resistance "scripts/scenarios/$scenario/resistance.asc" \
       --source "scripts/scenarios/$scenario/source.asc" \
       --ground "scripts/scenarios/$scenario/ground.asc" \
+      --coarsenu 25 --l0nu 2 --l1nu 5 \
+      --coarseomega 0.4 --l0omega 0.95 --l0postnu 40 \
       --tol 1e-4 --max-iter 100000 \
       --output "scripts/scenarios/$scenario/output/rust_current.asc" >> "$rust_trace" 2>&1
   done

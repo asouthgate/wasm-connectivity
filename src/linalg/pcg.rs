@@ -2,7 +2,7 @@
 use sprs::CsMat;
 
 use crate::linalg::operator::Operator;
-use crate::linalg::timing;
+use crate::linalg::{timing, profile};
 
 pub struct CgResult {
     pub v: Vec<f64>,
@@ -58,21 +58,42 @@ pub fn cg_solve_precond(
     tol: f64,
     precond: &dyn Preconditioner,
 ) -> CgResult {
+    cg_solve_precond_impl::<false>(laplacian, s, max_iter, tol, precond)
+}
+
+pub(crate) fn cg_solve_precond_profiled(
+    laplacian: &dyn Operator, s: &[f64], max_iter: usize, tol: f64,
+    precond: &dyn Preconditioner,
+) -> CgResult {
+    cg_solve_precond_impl::<true>(laplacian, s, max_iter, tol, precond)
+}
+
+fn cg_solve_precond_impl<const PROFILE: bool>(
+    laplacian: &dyn Operator,
+    s: &[f64],
+    max_iter: usize,
+    tol: f64,
+    precond: &dyn Preconditioner,
+) -> CgResult {
 
     let timing_scope = timing::CgScope::new();
-    let phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
+    let mut phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
     let n = s.len();
     let mut v = vec![0.0f64; n];
     let mut r = s.to_vec();
 
     // The norm of s is required for convergence checks
     let s_norm = dot(s, s).sqrt();
+    if PROFILE {
+        phase_timer.exclude(|| profile::global_sample(0, "CG initial", laplacian, s, &v));
+    }
     if s_norm < 1e-15 { return CgResult { v, iters: 0 }; }
 
     // e0 = M^-1 r
     let mut e0 = vec![0.0; n];
     drop(phase_timer);
     let phase_timer = timing::timer_if(timing_scope.outer, None, "Preconditioner (inclusive)");
+    if PROFILE { profile::iteration(1); }
     precond.apply(&r, &mut e0);
     drop(phase_timer);
     let phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
@@ -88,7 +109,7 @@ pub fn cg_solve_precond(
         let phase_timer = timing::timer_if(timing_scope.outer, None, "CG matrix-vector product");
         laplacian.matvec(&p, &mut lp);
         drop(phase_timer);
-        let phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
+        let mut phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");
         let p_lp = dot(&p, &lp);
         // avoid dividing by zero
         if p_lp.abs() < 1e-30 { 
@@ -108,11 +129,15 @@ pub fn cg_solve_precond(
         }
 
         let r_norm = dot(&r, &r).sqrt();
+        if PROFILE {
+            phase_timer.exclude(|| profile::global_sample(iter + 1, "CG update", laplacian, s, &v));
+        }
 
         if r_norm / s_norm < tol { break; }
 
         drop(phase_timer);
         let phase_timer = timing::timer_if(timing_scope.outer, None, "Preconditioner (inclusive)");
+        if PROFILE { profile::iteration(iter + 2); }
         precond.apply(&r, &mut e0);
         drop(phase_timer);
         let _phase_timer = timing::timer_if(timing_scope.outer, None, "CG vector work/reductions");

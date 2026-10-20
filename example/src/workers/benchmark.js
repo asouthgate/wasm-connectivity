@@ -32,7 +32,7 @@ function freshInstance() {
 }
 
 const MAX_ITER = 100_000;
-const TOL = 1e-6;
+const TOL = 1e-4;
 
 function solveJacobi(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
   return solve_raster_sources_jacobi(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);

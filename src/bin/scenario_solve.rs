@@ -5,14 +5,19 @@ use wasm_connect::solve::{solve_raster_sources_mg_stencil_with_options, solve_ra
 use wasm_connect::linalg::multigrid::MgOptions;
 
 const USAGE: &str = "Usage: scenario-solve --resistance FILE --source FILE --ground FILE
-    [--tol FLOAT] [--max-iter INTEGER] [--nu INTEGER] [--autonu] [--explicit] [--output FILE] [--verbose]
+    [--tol FLOAT] [--max-iter INTEGER] [--l0nu INTEGER] [--l1nu INTEGER] [--coarsenu INTEGER] [--l0omega FLOAT] [--coarseomega FLOAT] [--l0postnu INTEGER] [--explicit] [--output FILE] [--verbose] [--profile]
 
 Solve ASC rasters using low-memory CGMG with shunt grounding.
 --explicit uses explicit matrices with symmetric Gauss–Seidel instead of low-memory Jacobi.
---nu sets the number of sweeps in each pre- and post-smoothing phase.
---autonu retains --nu on levels 0/1; levels 2–6 use at least 8,7,6,5,4 sweeps.
---verbose includes timings and aggregate V-cycle equation residuals by level.
-Defaults: --tol 1e-4 --max-iter 100000 --nu 2 --output rust_current.asc";
+--l0postnu adds L0 sweeps once after CG (default 40).
+--l0omega directly overrides L0 damping; --coarseomega overrides L1 onward.
+Default damping: --l0omega 0.95 --coarseomega 0.4.
+--l0nu sets L0 pre/post sweeps (default 2).
+--l1nu sets L1 pre/post sweeps (default 5).
+--coarsenu sets pre/post sweeps on L2 and deeper nonterminal levels (default 25).
+--verbose prints aggregate solve timings by level.
+--profile traces equation residuals at each CG iteration and V-cycle step.
+Defaults: --tol 1e-4 --max-iter 100000 --l0nu 2 --l1nu 5 --coarsenu 25 --l0omega 0.95 --coarseomega 0.4 --l0postnu 40 --output rust_current.asc";
 
 fn argument_error(message: &str) -> ! {
     eprintln!("{message}\n\n{USAGE}");
@@ -23,8 +28,8 @@ fn main() {
     let mut args = env::args().skip(1);
     let mut options = HashMap::new();
     let mut verbose = false;
-    let mut autonu = false;
     let mut explicit = false;
+    let mut profile = false;
     while let Some(flag) = args.next() {
         if flag == "--help" || flag == "-h" {
             println!("{USAGE}");
@@ -35,9 +40,9 @@ fn main() {
             verbose = true;
             continue;
         }
-        if flag == "--autonu" {
-            if autonu { argument_error("duplicate argument: --autonu"); }
-            autonu = true;
+        if flag == "--profile" {
+            if profile { argument_error("duplicate argument: --profile"); }
+            profile = true;
             continue;
         }
         if flag == "--explicit" {
@@ -46,7 +51,7 @@ fn main() {
             continue;
         }
         if !matches!(flag.as_str(), "--resistance" | "--source" | "--ground"
-                     | "--tol" | "--max-iter" | "--nu" | "--output") {
+                     | "--tol" | "--max-iter" | "--l0nu" | "--l1nu" | "--coarsenu" | "--l0omega" | "--coarseomega" | "--l0postnu" | "--output") {
             argument_error(&format!("unknown argument: {flag}"));
         }
         let value = args.next().filter(|value| !value.starts_with("--"))
@@ -67,9 +72,27 @@ fn main() {
         .parse::<usize>().ok().filter(|value| *value > 0)
         .unwrap_or_else(|| argument_error("--max-iter must be a positive integer"));
     let output = Path::new(options.get("--output").map(String::as_str).unwrap_or("rust_current.asc"));
-    let nu = options.get("--nu").map(String::as_str).unwrap_or("2")
-        .parse::<usize>().ok().filter(|value| *value > 0)
-        .unwrap_or_else(|| argument_error("--nu must be a positive integer"));
+    let defaults = MgOptions::default();
+    let l0nu = options.get("--l0nu").map(|value| value.parse::<usize>().ok()
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| argument_error("--l0nu must be a positive integer")))
+        .unwrap_or(defaults.l0nu);
+    let l1nu = options.get("--l1nu").map(|value| value.parse::<usize>().ok()
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| argument_error("--l1nu must be a positive integer"))).or(defaults.l1nu);
+    let coarsenu = options.get("--coarsenu").map(|value| value.parse::<usize>().ok()
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| argument_error("--coarsenu must be a positive integer")))
+        .unwrap_or(defaults.coarsenu);
+    let parse_omega = |flag: &str| options.get(flag).map(|value| {
+        value.parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or_else(|| argument_error(&format!("{flag} must be finite and positive")))
+    });
+    let l0omega = parse_omega("--l0omega").or(defaults.l0omega);
+    let coarseomega = parse_omega("--coarseomega").or(defaults.coarseomega);
+    let l0postnu = options.get("--l0postnu").map(|value| value.parse::<usize>()
+        .unwrap_or_else(|_| argument_error("--l0postnu must be a nonnegative integer")))
+        .unwrap_or(defaults.l0postnu);
     let resistance = parse_asc(&options["--resistance"]);
     let source = parse_asc(&options["--source"]);
     let ground = parse_asc(&options["--ground"]);
@@ -131,7 +154,7 @@ fn main() {
         tol,
         false,
         GroundMode::Shunt,
-        MgOptions { verbose, nu, autonu, ..MgOptions::default() },
+        MgOptions { verbose, profile, l0nu, l1nu, coarsenu, l0omega, coarseomega, l0postnu, ..MgOptions::default() },
     );
     assert!(
         result.total_iters < max_iter,

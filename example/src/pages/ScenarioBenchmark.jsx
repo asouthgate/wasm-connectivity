@@ -85,15 +85,15 @@ export default function ScenarioBenchmark() {
               {['res', 'src', 'gnd'].map(type => <div key={type} className="scenario-preview">
                 <MapView type={type}
                   image={preview[type]} meta={preview.meta} preview maxSide={200} showHeader={false}
-                  logScale={scenario.id === 'point_lights' && type === 'res'} />
+                  quantileScale={scenario.id === 'point_lights' && type === 'res'} />
                 {scenario.id === 'point_lights' && type === 'res' &&
-                  <span className="scenario-preview-asterisk" title="Log resistance">*</span>}
+                  <span className="scenario-preview-asterisk" title="Quantile-stretched resistance (500 classes)">*</span>}
               </div>)}
               {result?.currentMap ? <div className="scenario-preview">
                 <MapView type="cur" label="Current"
                   data={result.currentMap.data} meta={result.currentMap} preview maxSide={200} showHeader={false}
-                  logScale />
-                <span className="scenario-preview-asterisk" title="Log current">*</span>
+                  quantileScale />
+                <span className="scenario-preview-asterisk" title="Quantile-stretched current (500 classes)">*</span>
               </div> :
                 <div className="map-view">
                   <div className="scenario-current-pending" />
@@ -105,7 +105,7 @@ export default function ScenarioBenchmark() {
       <div className="scenario">
         <div className="bench-info">
           Previews: 200x200 · columns: resistance, source, ground, current.
-          Full-resolution current maps: 2000x2000, in the same scenario order. * Log scale.
+          Full-resolution current maps: 2000x2000, in the same scenario order. * Quantile stretch (500 classes).
         </div>
         {SCENARIOS.map((scenario, index) => {
           const result = results[scenario.id];
@@ -126,8 +126,8 @@ export default function ScenarioBenchmark() {
         return current && <section key={scenario.id} className="scenario">
           <div className="scenario-current scenario-preview">
             <MapView type="cur" label="Current" data={current.data} meta={current} showHeader={false}
-              logScale />
-            <span className="scenario-preview-asterisk" title="Log current">*</span>
+              quantileScale />
+            <span className="scenario-preview-asterisk" title="Quantile-stretched current (500 classes)">*</span>
           </div>
         </section>;
       })}
