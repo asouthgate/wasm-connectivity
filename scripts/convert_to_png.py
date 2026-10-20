@@ -7,32 +7,39 @@ import numpy as np
 import sys
 from pathlib import Path
 
-with rasterio.open(sys.argv[1]) as src:
-    current_data = src.read(1)
-    current_data = np.where(current_data == src.nodata, np.nan, current_data)
+with rasterio.Env(AAIGRID_DATATYPE="Float64"):
+    with rasterio.open(sys.argv[1]) as src:
+        current_data = src.read(1)
+        current_data = np.where(current_data == src.nodata, np.nan, current_data)
 
 raw_min = np.nanmin(current_data)
 raw_max = np.nanmax(current_data)
 print(f"Original Min Value: {raw_min}")
 print(f"Original Max Value: {raw_max}")
 
-scaled_data = 1 + ((current_data - raw_min) / (raw_max - raw_min)) * (100 - 1)
-
-print(f"Rescaled Min Value: {np.nanmin(scaled_data)}")
-print(f"Rescaled Max Value: {np.nanmax(scaled_data)}")
-
 plt.figure(figsize=(10, 8))
 
+plot_data = np.ma.masked_invalid(current_data)
 if "--log" in sys.argv:
-    plot_data = np.ma.masked_invalid(np.ma.masked_less_equal(current_data, 0))
-    norm = colors.LogNorm()
+    plot_data = np.ma.masked_less_equal(plot_data, 0)
+if not plot_data.count():
+    sys.exit("No valid positive values for log plotting" if "--log" in sys.argv
+             else "No valid values to plot")
+plot_min, plot_max = float(plot_data.min()), float(plot_data.max())
+if "--log" in sys.argv:
+    norm = colors.LogNorm(vmin=plot_min, vmax=plot_max)
+    ticks = np.geomspace(plot_min, plot_max, 5)
 else:
-    plot_data = scaled_data
-    norm = colors.Normalize(vmin=1, vmax=100)
-plt.imshow(plot_data, cmap='inferno', norm=norm)
+    norm = colors.Normalize(vmin=plot_min, vmax=plot_max)
+    ticks = np.linspace(plot_min, plot_max, 5)
+if plot_min == plot_max:
+    ticks = np.array([plot_min])
+ticks[0], ticks[-1] = plot_min, plot_max
+image = plt.imshow(plot_data, cmap='inferno', norm=norm)
 
 if "--colorbar" in sys.argv:
-    cbar = plt.colorbar()
+    cbar = plt.colorbar(image, ticks=np.unique(ticks), format='%.6g')
+    cbar.minorticks_off()
     cbar.ax.tick_params(labelsize=16)
 plt.axis('off') 
 

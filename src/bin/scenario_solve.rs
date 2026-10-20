@@ -1,14 +1,17 @@
 use std::{collections::HashMap, env, fs, path::Path};
 
 use wasm_connect::raster::io::{parse_asc, write_asc};
-use wasm_connect::solve::{solve_raster_sources_mg_stencil_with_options, GroundMode};
+use wasm_connect::solve::{solve_raster_sources_mg_stencil_with_options, solve_raster_sources_mg_with_options, GroundMode};
 use wasm_connect::linalg::multigrid::MgOptions;
 
 const USAGE: &str = "Usage: scenario-solve --resistance FILE --source FILE --ground FILE
-    [--tol FLOAT] [--max-iter INTEGER] [--nu INTEGER] [--output FILE] [--verbose]
+    [--tol FLOAT] [--max-iter INTEGER] [--nu INTEGER] [--autonu] [--explicit] [--output FILE] [--verbose]
 
 Solve ASC rasters using low-memory CGMG with shunt grounding.
+--explicit uses explicit matrices with symmetric Gauss–Seidel instead of low-memory Jacobi.
 --nu sets the number of sweeps in each pre- and post-smoothing phase.
+--autonu retains --nu on levels 0/1; levels 2–6 use at least 8,7,6,5,4 sweeps.
+--verbose includes timings and aggregate V-cycle equation residuals by level.
 Defaults: --tol 1e-4 --max-iter 100000 --nu 2 --output rust_current.asc";
 
 fn argument_error(message: &str) -> ! {
@@ -20,6 +23,8 @@ fn main() {
     let mut args = env::args().skip(1);
     let mut options = HashMap::new();
     let mut verbose = false;
+    let mut autonu = false;
+    let mut explicit = false;
     while let Some(flag) = args.next() {
         if flag == "--help" || flag == "-h" {
             println!("{USAGE}");
@@ -28,6 +33,16 @@ fn main() {
         if flag == "--verbose" {
             if verbose { argument_error("duplicate argument: --verbose"); }
             verbose = true;
+            continue;
+        }
+        if flag == "--autonu" {
+            if autonu { argument_error("duplicate argument: --autonu"); }
+            autonu = true;
+            continue;
+        }
+        if flag == "--explicit" {
+            if explicit { argument_error("duplicate argument: --explicit"); }
+            explicit = true;
             continue;
         }
         if !matches!(flag.as_str(), "--resistance" | "--source" | "--ground"
@@ -100,7 +115,12 @@ fn main() {
         "no grounds"
     );
 
-    let mut result = solve_raster_sources_mg_stencil_with_options(
+    let solve = if explicit {
+        solve_raster_sources_mg_with_options
+    } else {
+        solve_raster_sources_mg_stencil_with_options
+    };
+    let mut result = solve(
         &resistance.data,
         resistance.nrows,
         resistance.ncols,
@@ -111,7 +131,7 @@ fn main() {
         tol,
         false,
         GroundMode::Shunt,
-        MgOptions { verbose, nu, ..MgOptions::default() },
+        MgOptions { verbose, nu, autonu, ..MgOptions::default() },
     );
     assert!(
         result.total_iters < max_iter,

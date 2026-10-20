@@ -4,6 +4,9 @@ use crate::linalg::pcg::Preconditioner;
 use crate::linalg::transfer::Transfer;
 use crate::memory;
 use crate::linalg::timing;
+use crate::linalg::smooth::Smoother;
+#[cfg(test)]
+use crate::linalg::smooth::{weighted_jacobi_smooth, symmetric_gauss_seidel_smooth};
 #[cfg(feature = "instrumentation-profile")]
 use crate::memory::GalerkinScratch;
 use sprs::CsMat;
@@ -18,7 +21,11 @@ const SMALL_FINE_DIRECT_LIMIT: usize = 49;
 pub struct MgOptions {
     /// Number of sweeps in each pre- and post-smoothing phase; must be positive.
     pub nu: usize,
-    /// Print aggregate solve timings, broken down by hierarchy level.
+    /// Keep `nu` on levels 0 and 1; use at least 8, 7, 6, 5, 4 sweeps on levels 2–6,
+    /// and at least one sweep on any deeper nonterminal level.
+    /// Counts are fixed for the solve and equal before and after coarse correction.
+    pub autonu: bool,
+    /// Print aggregate solve timings and equation residual diagnostics by level.
     pub verbose: bool,
     /// Maximum hierarchy depth, including the fine level.
     pub max_levels: usize,
@@ -34,6 +41,7 @@ impl Default for MgOptions {
     fn default() -> Self {
         Self {
             nu: 2,
+            autonu: false,
             verbose: false,
             max_levels: 8,
             cholesky_size: None,
@@ -55,58 +63,11 @@ struct MgLevel {
 /// `e` (error approximation), `d_prime` (residual of the error system),
 /// `d` (the level's right-hand side).
 struct LevelWorkspace {
+    nu: usize,
     e: Vec<f64>,
     d_prime: Vec<f64>,
     d: Vec<f64>,
     smoother: Smoother,
-}
-
-/// Coefficients are cached only for the diagonal-based smoother. Explicit MG
-/// retains its existing Gauss–Seidel update and damping.
-enum Smoother {
-    SymmetricGaussSeidel,
-    WeightedJacobi { diag_inv: Vec<f64>, omega: f64 },
-}
-
-impl Smoother {
-    fn weighted_jacobi(op: &dyn Operator, requested_omega: f64) -> Self {
-        let mut diag_inv = vec![0.0; op.n()];
-        let mut upper_bound: f64 = 0.0;
-        for (row, inverse) in diag_inv.iter_mut().enumerate() {
-            let mut diagonal: f64 = 0.0;
-            let mut abs_sum: f64 = 0.0;
-            op.for_each_entry(row, &mut |col, value| {
-                abs_sum += value.abs();
-                if col == row {
-                    diagonal = value;
-                }
-            });
-            if diagonal.abs() > 1e-15 {
-                *inverse = 1.0 / diagonal.abs();
-                upper_bound = upper_bound.max(abs_sum * *inverse);
-            }
-        }
-        // Gershgorin bounds the eigenvalues of D^-1 L by the largest absolute
-        // row sum. Keep omega*lambda_max <= 1.8 < 2 for damped Jacobi.
-        let omega = requested_omega.min(1.8 / upper_bound.max(1.0));
-        Self::WeightedJacobi { diag_inv, omega }
-    }
-
-    fn smooth(
-        &self,
-        op: &dyn Operator,
-        e: &mut [f64],
-        d: &[f64],
-        scratch: &mut [f64],
-        gs_omega: f64,
-    ) {
-        match self {
-            Self::SymmetricGaussSeidel => symmetric_gauss_seidel_smooth(op, e, d, gs_omega),
-            Self::WeightedJacobi { diag_inv, omega } => {
-                weighted_jacobi_smooth(op, e, d, diag_inv, *omega, scratch)
-            }
-        }
-    }
 }
 
 /// Persistent scratch for P^T L (P x). Both buffers have the fine operator's
@@ -137,7 +98,6 @@ pub struct MgPreconditioner<'a> {
     // Retain operators for post-smoothing on ascent and reuse across PCG iterations.
     coarse: Vec<MgLevel>,
     fine_cholesky_l: Option<Vec<f64>>,
-    nu: usize,
     omega: f64,
     // Preconditioner::apply takes &self; RefCell permits scratch-buffer reuse.
     // Borrow once at the boundary, then recurse with ordinary mutable slices.
@@ -615,7 +575,9 @@ impl<'a> MgPreconditioner<'a> {
             };
             let n = op.n();
             let smoother = if low_memory && level < coarse.len() {
-                Smoother::weighted_jacobi(&op, 0.67)
+                // Request full Jacobi on every level; the spectral bound
+                // determines the largest permitted weight independently.
+                Smoother::weighted_jacobi(&op, 1.0)
             } else {
                 Smoother::SymmetricGaussSeidel
             };
@@ -654,7 +616,16 @@ impl<'a> MgPreconditioner<'a> {
                     matvec_bytes,
                 );
             }
+            let nu = if level == coarse.len() {
+                0
+            } else if options.autonu && level >= 2 {
+                options.nu.max(if level <= 6 { 10 - level } else { 1 })
+            } else {
+                options.nu
+            };
+            timing::sweeps(level, nu);
             workspaces.push(LevelWorkspace {
+                nu,
                 e: vec![0.0; n],
                 d_prime: vec![0.0; n],
                 d: vec![0.0; n],
@@ -666,7 +637,6 @@ impl<'a> MgPreconditioner<'a> {
             fine,
             coarse,
             fine_cholesky_l,
-            nu: options.nu,
             omega: 0.67,
             workspaces: RefCell::new(workspaces),
         }
@@ -691,6 +661,7 @@ impl<'a> MgPreconditioner<'a> {
         current.e.fill(0.0);
 
         if deeper.is_empty() {
+            let before = timing::residual(level, 4, &op, &current.d, &current.e, None);
             let factor = if level == 0 {
                 self.fine_cholesky_l.as_ref()
             } else {
@@ -707,11 +678,13 @@ impl<'a> MgPreconditioner<'a> {
                 let result = crate::linalg::pcg::cg_solve(&op, &current.d, 50, 1e-3);
                 current.e.copy_from_slice(&result.v);
             }
+            timing::residual(level, 5, &op, &current.d, &current.e, before);
             return;
         }
 
+        let before = timing::residual(level, 0, &op, &current.d, &current.e, None);
         let phase_timer = timing::timer(Some(level), "Pre-smoothing");
-        for _ in 0..self.nu {
+        for _ in 0..current.nu {
             current.smoother.smooth(
                 &op,
                 &mut current.e,
@@ -721,6 +694,7 @@ impl<'a> MgPreconditioner<'a> {
             );
         }
         drop(phase_timer);
+        let after_pre = timing::residual(level, 1, &op, &current.d, &current.e, before);
         let phase_timer = timing::timer(Some(level), "Residual calculation");
         op.matvec(&current.e, &mut current.d_prime);
         for (residual, &source) in current.d_prime.iter_mut().zip(&current.d) {
@@ -736,9 +710,10 @@ impl<'a> MgPreconditioner<'a> {
         let phase_timer = timing::timer(Some(level), "Prolongation/correction");
         transfer.prolongate(&deeper[0].e, &mut current.e);
         drop(phase_timer);
-        let _phase_timer = timing::timer(Some(level), "Post-smoothing");
+        let after_correction = timing::residual(level, 2, &op, &current.d, &current.e, after_pre);
+        let phase_timer = timing::timer(Some(level), "Post-smoothing");
 
-        for _ in 0..self.nu {
+        for _ in 0..current.nu {
             current.smoother.smooth(
                 &op,
                 &mut current.e,
@@ -747,6 +722,8 @@ impl<'a> MgPreconditioner<'a> {
                 self.omega,
             );
         }
+        drop(phase_timer);
+        timing::residual(level, 3, &op, &current.d, &current.e, after_correction);
     }
 }
 
@@ -758,58 +735,6 @@ impl<'a> Preconditioner for MgPreconditioner<'a> {
         self.v_cycle(&mut workspaces, 0);
         e0.resize(r.len(), 0.0);
         e0.copy_from_slice(&workspaces[0].e);
-    }
-}
-
-/// One simultaneous weighted Jacobi sweep. The entire product uses the old e;
-/// only after that product is complete are any entries of e updated.
-fn weighted_jacobi_smooth(
-    op: &dyn Operator,
-    e: &mut [f64],
-    d: &[f64],
-    diag_inv: &[f64],
-    omega: f64,
-    scratch: &mut [f64],
-) {
-    op.matvec(e, scratch);
-    for i in 0..e.len() {
-        e[i] += omega * diag_inv[i] * (d[i] - scratch[i]);
-    }
-}
-
-fn symmetric_gauss_seidel_smooth(op: &dyn Operator, e: &mut [f64], d: &[f64], omega: f64) {
-    let n = d.len();
-    // Forward sweep
-    for row in 0..n {
-        let mut diag = 0.0;
-        let mut off_diag_sum = 0.0;
-        op.for_each_entry(row, &mut |col, val| {
-            if col == row {
-                diag = val;
-            } else {
-                off_diag_sum += val * e[col];
-            }
-        });
-        if diag.abs() > 1e-15 {
-            let new_e = (d[row] - off_diag_sum) / diag;
-            e[row] = (1.0 - omega) * e[row] + omega * new_e;
-        }
-    }
-    // Backward sweep
-    for row in (0..n).rev() {
-        let mut diag = 0.0;
-        let mut off_diag_sum = 0.0;
-        op.for_each_entry(row, &mut |col, val| {
-            if col == row {
-                diag = val;
-            } else {
-                off_diag_sum += val * e[col];
-            }
-        });
-        if diag.abs() > 1e-15 {
-            let new_e = (d[row] - off_diag_sum) / diag;
-            e[row] = (1.0 - omega) * e[row] + omega * new_e;
-        }
     }
 }
 
@@ -866,7 +791,7 @@ mod tests {
     // MG still selects Gauss–Seidel; only this numerical reference uses Jacobi.
     fn use_jacobi_reference(mg: &MgPreconditioner<'_>) {
         let smoothers: Vec<_> = (0..mg.coarse.len())
-            .map(|level| Smoother::weighted_jacobi(&mg.level_operator(level), 0.67))
+            .map(|level| Smoother::weighted_jacobi(&mg.level_operator(level), 1.0))
             .collect();
         let mut workspaces = mg.workspaces.borrow_mut();
         for (workspace, smoother) in workspaces.iter_mut().zip(smoothers) {
@@ -1120,6 +1045,55 @@ mod tests {
     }
 
     #[test]
+    fn autonu_schedule_covers_all_default_coarse_levels() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let resistance = vec![1.0; 128 * 128];
+        for nu in [2, 9] {
+            let fine = FineOperator::Stencil(StencilOperator::new(
+                128, 128, -9999.0, &resistance,
+                GroundSpec::Shunt(vec![1.0; resistance.len()]),
+            ));
+            let mg = MgPreconditioner::build_with_options(fine, 128, 128,
+                MgOptions { nu, autonu: true, cholesky_size: Some(1), ..MgOptions::default() });
+            let counts: Vec<_> = mg.workspaces.borrow().iter().map(|w| w.nu).collect();
+            assert_eq!(counts, vec![nu, nu, nu.max(8), nu.max(7), nu.max(6), nu.max(5), nu.max(4), 0]);
+        }
+    }
+
+    #[test]
+    fn autonu_keeps_fine_sweeps_and_preserves_preconditioner_symmetry() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let n = 32 * 32;
+        let resistance = vec![1.0; n];
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.2).cos()).collect();
+        for low_memory in [false, true] {
+            for (autonu, nu) in [(false, 2), (true, 1), (true, 2), (true, 5)] {
+                let fine = if low_memory {
+                    FineOperator::Stencil(StencilOperator::new(
+                        32, 32, -9999.0, &resistance, GroundSpec::Shunt(vec![1.0; n]),
+                    ))
+                } else {
+                    let (_, _, _, matrix) = crate::build_circuit_model(&resistance, 32, 32, -9999.0);
+                    FineOperator::Explicit(crate::circuit::laplacian::add_diagonal(&matrix, &vec![1.0; n]))
+                };
+                let mg = MgPreconditioner::build_with_options(fine, 32, 32,
+                    MgOptions { nu, autonu, ..MgOptions::default() });
+                let counts: Vec<usize> = mg.workspaces.borrow().iter().map(|w| w.nu).collect();
+                assert_eq!(counts, vec![nu, nu, if autonu { nu.max(8) } else { nu }, 0]);
+                let mut mx = Vec::new();
+                let mut my = Vec::new();
+                mg.apply(&x, &mut mx);
+                mg.apply(&y, &mut my);
+                let x_my: f64 = x.iter().zip(&my).map(|(a, b)| a * b).sum();
+                let y_mx: f64 = y.iter().zip(&mx).map(|(a, b)| a * b).sum();
+                assert!((x_my - y_mx).abs() < 1e-9 * x_my.abs().max(y_mx.abs()).max(1.0));
+                assert!(x.iter().zip(&mx).map(|(a, b)| a * b).sum::<f64>() > 0.0);
+            }
+        }
+    }
+
+    #[test]
     fn weighted_jacobi_updates_simultaneously_using_only_matvec() {
         let mut entries = sprs::TriMat::new((3, 3));
         for i in 0..3 {
@@ -1159,11 +1133,86 @@ mod tests {
             panic!("expected Jacobi")
         };
         assert_eq!(diag_inv, &vec![1.0; 4]);
-        assert!((*omega - 1.8 / 3.7).abs() < 1e-14);
+        assert!((*omega - 1.95 / 3.7).abs() < 1e-14);
         let mut e = vec![1.0; 4];
         smoother.smooth(&matrix, &mut e, &[0.0; 4], &mut [0.0; 4], 0.67);
         for value in e {
-            assert!((value + 0.8).abs() < 1e-14);
+            assert!((value + 0.95).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn all_jacobi_levels_request_full_weight_and_damp_quiet_cells() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let resistance = vec![1e4; 32 * 32];
+        let op = StencilOperator::new(32, 32, -9999.0, &resistance,
+            GroundSpec::Shunt(vec![1.0; resistance.len()]));
+        let mg = MgPreconditioner::build_with_options(FineOperator::Stencil(op), 32, 32,
+            MgOptions { autonu: true, ..MgOptions::default() });
+        let workspaces = mg.workspaces.borrow();
+        let Smoother::WeightedJacobi { omega, .. } = workspaces[0].smoother else {
+            panic!("expected fine Jacobi smoother")
+        };
+        assert_eq!(omega, 1.0);
+        let fine = mg.level_operator(0);
+        let mut error = vec![1.0; resistance.len()];
+        workspaces[0].smoother.smooth(&fine, &mut error, &vec![0.0; resistance.len()],
+            &mut vec![0.0; resistance.len()], 0.67);
+        // A constant error has no branch flux; the shunt dominates this
+        // interior equation, so full Jacobi should almost remove it in one sweep.
+        assert!(error[16 * 32 + 16] > 0.0 && error[16 * 32 + 16] < 0.001);
+        for level in 1..workspaces.len() - 1 {
+            let op = mg.level_operator(level);
+            let Smoother::WeightedJacobi { omega: expected, .. } = Smoother::weighted_jacobi(&op, 1.0) else {
+                unreachable!()
+            };
+            let Smoother::WeightedJacobi { omega: actual, .. } = workspaces[level].smoother else {
+                panic!("expected coarse Jacobi smoother")
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn jacobi_damping_uses_symmetric_scaling_for_unequal_diagonals() {
+        let mut entries = sprs::TriMat::new((2, 2));
+        for (i, j, value) in [(0, 0, 1.0), (0, 1, 9.0), (1, 0, 9.0), (1, 1, 100.0)] {
+            entries.add_triplet(i, j, value);
+        }
+        let matrix = entries.to_csr::<usize>();
+        let smoother = Smoother::weighted_jacobi(&matrix, 0.67);
+        let Smoother::WeightedJacobi { omega, .. } = &smoother else {
+            panic!("expected Jacobi")
+        };
+        // The original bound is 10; the symmetric bound and largest
+        // eigenvalue are both 1.9, so the requested weight is safe.
+        assert_eq!(*omega, 0.67);
+        let mut e = vec![1.0, 0.1];
+        smoother.smooth(&matrix, &mut e, &[0.0; 2], &mut [0.0; 2], 0.67);
+        assert!((e[0] - (1.0 - 0.67 * 1.9)).abs() < 1e-14);
+        assert!((e[1] - 0.1 * (1.0 - 0.67 * 1.9)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn symmetric_jacobi_bound_still_caps_unequal_diagonal_systems() {
+        let scales = [1.0, 10.0, 100.0, 1000.0];
+        let mut entries = sprs::TriMat::new((4, 4));
+        for i in 0..4 {
+            for j in 0..4 {
+                entries.add_triplet(i, j, scales[i] * scales[j]
+                    * if i == j { 1.0 } else { 0.9 });
+            }
+        }
+        let matrix = entries.to_csr::<usize>();
+        let smoother = Smoother::weighted_jacobi(&matrix, 0.67);
+        let Smoother::WeightedJacobi { omega, .. } = &smoother else {
+            panic!("expected Jacobi")
+        };
+        assert!((*omega - 1.95 / 3.7).abs() < 1e-14);
+        let mut e: Vec<f64> = scales.iter().map(|scale| 1.0 / scale).collect();
+        smoother.smooth(&matrix, &mut e, &[0.0; 4], &mut [0.0; 4], 0.67);
+        for (value, scale) in e.iter().zip(scales) {
+            assert!((value * scale + 0.95).abs() < 1e-14);
         }
     }
 
@@ -1237,6 +1286,7 @@ mod tests {
                 crate::circuit::laplacian::add_diagonal(&laplacian, &vec![1.0; nr * nc]);
             let options = MgOptions {
                 nu: 2,
+                autonu: false,
                 verbose: false,
                 max_levels: depth,
                 cholesky_size: target,
