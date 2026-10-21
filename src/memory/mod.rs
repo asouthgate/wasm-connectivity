@@ -359,8 +359,9 @@ pub fn record_fine_level(cholesky_factor_bytes: u64) {
             operator_repr: profile.operator_repr.clone(),
             laplacian_bytes: profile.laplacian_bytes,
             cholesky_factor_bytes,
-            workspace_e_bytes: workspace,
-            workspace_d_bytes: workspace,
+            // The finest correction and RHS borrow CG's existing vectors.
+            workspace_e_bytes: 0,
+            workspace_d_bytes: 0,
             workspace_d_prime_bytes: workspace,
             ..LevelMemory::default()
         });
@@ -565,7 +566,9 @@ mod tests {
         assert_eq!(profile.ground_storage_bytes, 100);
         assert_eq!(profile.hierarchy[0].level, 0);
         assert_eq!(profile.hierarchy[0].laplacian_bytes, 0);
-        assert_eq!(profile.hierarchy[0].workspace_e_bytes, 800);
+        assert_eq!(profile.hierarchy[0].workspace_e_bytes, 0);
+        assert_eq!(profile.hierarchy[0].workspace_d_bytes, 0);
+        assert_eq!(profile.hierarchy[0].workspace_d_prime_bytes, 800);
     }
 
     #[cfg(feature = "instrumentation-profile")]

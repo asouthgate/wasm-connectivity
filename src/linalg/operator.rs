@@ -19,12 +19,14 @@ use sprs::CsMat;
 
 /// Ground boundary conditions, declared in terms of the full grid (one entry
 /// per node, node index == flat cell index).
-pub enum GroundSpec {
+pub enum GroundSpec<'a> {
     /// No physical grounds. The usual numerical regularization is retained;
     /// the solver may separately remove the source mean to balance injection.
     None,
     /// Conductance-to-ground (Shunt): `shunt[i]` is added to `L[i,i]`.
     Shunt(Vec<f64>),
+    /// Original ground raster, filtered on access without allocating a copy.
+    ShuntRaster(&'a [f64]),
     /// Fixed-voltage (Dirichlet): `ground[i]` pins node `i` at `V = 0`.
     Dirichlet(Vec<bool>),
 }
@@ -79,7 +81,7 @@ pub struct StencilOperator<'a> {
     ncols: usize,
     nodata: f64,
     resistance: &'a [f64],
-    ground: GroundSpec,
+    ground: GroundSpec<'a>,
     /// For ground-free systems, `1e-5 * ||L||` added to node 0, matching
     /// [`crate::circuit::laplacian::regularize_laplacian`].
     reg_diag0: f64,
@@ -102,24 +104,31 @@ fn edge_conductance(ri: f64, rj: f64) -> f64 {
     2.0 / (ri + rj)
 }
 
+#[inline]
+fn valid_raster_shunt(value: f64, nodata: f64) -> bool {
+    value.is_finite() && value > 0.0 && (value - nodata).abs() > 1e-10
+}
+
 impl<'a> StencilOperator<'a> {
     pub fn new(
         nrows: usize,
         ncols: usize,
         nodata: f64,
         resistance: &'a [f64],
-        ground: GroundSpec,
+        ground: GroundSpec<'a>,
     ) -> Self {
         assert!(nrows > 0 && ncols > 0, "Stencil requires nonempty dimensions");
         assert_eq!(resistance.len(), nrows * ncols);
         match &ground {
             GroundSpec::None => {},
             GroundSpec::Shunt(shunt) => assert_eq!(shunt.len(), resistance.len()),
+            GroundSpec::ShuntRaster(shunt) => assert_eq!(shunt.len(), resistance.len()),
             GroundSpec::Dirichlet(mask) => assert_eq!(mask.len(), resistance.len()),
         }
         let grounded = match &ground {
             GroundSpec::None => false,
             GroundSpec::Shunt(shunt) => shunt.iter().any(|&value| value.is_finite() && value > 0.0),
+            GroundSpec::ShuntRaster(shunt) => shunt.iter().any(|&value| valid_raster_shunt(value, nodata)),
             GroundSpec::Dirichlet(mask) => mask.iter().any(|&value| value),
         };
         let reg_diag0 = if grounded {
@@ -142,6 +151,7 @@ impl<'a> StencilOperator<'a> {
         match &self.ground {
             GroundSpec::None => 0,
             GroundSpec::Shunt(shunt) => std::mem::size_of_val(shunt.as_slice()) as u64,
+            GroundSpec::ShuntRaster(_) => 0,
             GroundSpec::Dirichlet(mask) => std::mem::size_of_val(mask.as_slice()) as u64,
         }
     }
@@ -151,6 +161,18 @@ impl<'a> StencilOperator<'a> {
         match &self.ground {
             GroundSpec::Dirichlet(g) => g[idx],
             _ => false,
+        }
+    }
+
+    #[inline]
+    fn shunt_conductance(&self, idx: usize) -> f64 {
+        match &self.ground {
+            GroundSpec::Shunt(shunt) => shunt[idx],
+            GroundSpec::ShuntRaster(shunt) => {
+                let value = shunt[idx];
+                if valid_raster_shunt(value, self.nodata) { value } else { 0.0 }
+            }
+            _ => 0.0,
         }
     }
 
@@ -169,9 +191,7 @@ impl<'a> StencilOperator<'a> {
             return 1.0;
         }
         let mut d = self.sum_neighbour_conductance(idx);
-        if let GroundSpec::Shunt(shunt) = &self.ground {
-            d += shunt[idx];
-        }
+        d += self.shunt_conductance(idx);
         if idx == 0 {
             d += self.reg_diag0;
         }
@@ -255,9 +275,7 @@ impl<'a> Operator for StencilOperator<'a> {
             }
 
             let mut d = diag;
-            if let GroundSpec::Shunt(shunt) = &self.ground {
-                d += shunt[idx];
-            }
+            d += self.shunt_conductance(idx);
             if idx == 0 {
                 d += self.reg_diag0;
             }
@@ -324,9 +342,7 @@ impl<'a> Operator for StencilOperator<'a> {
         }
 
         let mut d = diag;
-        if let GroundSpec::Shunt(shunt) = &self.ground {
-            d += shunt[row];
-        }
+        d += self.shunt_conductance(row);
         if row == 0 {
             d += self.reg_diag0;
         }
@@ -409,6 +425,42 @@ impl<'a> Operator for FineOperator<'a> {
         match self {
             FineOperator::Explicit(m) => m.for_each_entry(row, f),
             FineOperator::Stencil(s) => s.for_each_entry(row, f),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_ground_raster_matches_prepared_shunts() {
+        let resistance = vec![2.0; 12];
+        let input: Vec<f64> = (0..12).map(|i| (i as f64 * 0.7).sin()).collect();
+        for nodata in [-9999.0, 5.0, f64::NAN] {
+            for has_ground in [false, true] {
+                let mut ground = vec![0.0, -2.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY,
+                    nodata, nodata + 5e-11, 0.0, 0.0, 0.0, 0.0, 0.0];
+                if has_ground { ground[11] = 3.0; }
+                let prepared = ground.iter().map(|&value| {
+                    if valid_raster_shunt(value, nodata) { value } else { 0.0 }
+                }).collect();
+                let expected = StencilOperator::new(3, 4, nodata, &resistance, GroundSpec::Shunt(prepared));
+                let actual = StencilOperator::new(3, 4, nodata, &resistance, GroundSpec::ShuntRaster(&ground));
+                let (mut a, mut b) = (vec![0.0; 12], vec![0.0; 12]);
+                expected.matvec(&input, &mut a);
+                actual.matvec(&input, &mut b);
+                assert_eq!(a, b);
+                assert_eq!(expected.diag_inv(), actual.diag_inv());
+                for row in 0..12 {
+                    let (mut a, mut b) = (Vec::new(), Vec::new());
+                    expected.for_each_entry(row, &mut |col, value| a.push((col, value)));
+                    actual.for_each_entry(row, &mut |col, value| b.push((col, value)));
+                    assert_eq!(a, b);
+                }
+                #[cfg(feature = "instrumentation-profile")]
+                assert_eq!(actual.ground_storage_bytes(), 0);
+            }
         }
     }
 }

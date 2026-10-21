@@ -124,24 +124,25 @@ pub fn solve_raster_sources_mg_stencil(
     nrows: usize,
     ncols: usize,
     nodata: f64,
-    source_data: Vec<f64>,
+    mut source_data: Vec<f64>,
     ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
     use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
-    let annotated = solve::solve_raster_sources_mg_stencil(
+    let annotated = solve::solve_raster_sources_mg_stencil_in_place_with_options(
         &resistance_data,
         nrows,
         ncols,
         nodata,
-        &source_data,
+        &mut source_data,
         &ground_data,
         max_iter,
         tol,
         true,
         ground_mode,
+        linalg::multigrid::MgOptions::default(),
     );
     json_response(&annotated)
 }

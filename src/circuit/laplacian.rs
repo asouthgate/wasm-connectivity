@@ -1,6 +1,82 @@
 use sprs::CsMat;
 use crate::circuit::graph::EdgeTriplets;
 
+pub(crate) fn build_grid_laplacian(
+    conductance: &crate::circuit::grid::Grid,
+    cell_to_node: &[i32],
+    num_nodes: usize,
+) -> CsMat<f64> {
+    let nr = conductance.nrows;
+    let nc = conductance.ncols;
+    let neighbors = |row: usize, col: usize| {
+        [
+            row.checked_sub(1).map(|r| r * nc + col),
+            col.checked_sub(1).map(|c| row * nc + c),
+            (col + 1 < nc).then_some(row * nc + col + 1),
+            (row + 1 < nr).then_some((row + 1) * nc + col),
+        ]
+    };
+
+    // Count structural entries, then allocate the final CSR arrays exactly once.
+    let mut indptr = Vec::with_capacity(num_nodes + 1);
+    indptr.push(0);
+    for row in 0..nr {
+        for col in 0..nc {
+            if cell_to_node[row * nc + col] <= 0 {
+                continue;
+            }
+            let degree = neighbors(row, col).into_iter().flatten()
+                .filter(|&idx| cell_to_node[idx] > 0).count();
+            indptr.push(indptr.last().unwrap() + degree + 1);
+        }
+    }
+    let nnz = *indptr.last().unwrap();
+    let mut indices = Vec::with_capacity(nnz);
+    let mut values = Vec::with_capacity(nnz);
+    for row in 0..nr {
+        for col in 0..nc {
+            let idx = row * nc + col;
+            let node = cell_to_node[idx];
+            if node <= 0 {
+                continue;
+            }
+            let mut entries = [(0, 0.0); 4];
+            let mut count = 0;
+            let mut diagonal = 0.0;
+            // Up, left, right, down matches the old edge accumulation order.
+            for neighbor in neighbors(row, col).into_iter().flatten() {
+                let other = cell_to_node[neighbor];
+                if other <= 0 {
+                    continue;
+                }
+                let (first, second) = if neighbor < idx { (neighbor, idx) } else { (idx, neighbor) };
+                let g = crate::circuit::graph::conductance_avg(
+                    conductance.data[first], conductance.data[second],
+                );
+                diagonal += g;
+                entries[count] = ((other - 1) as usize, -g);
+                count += 1;
+            }
+            let node = (node - 1) as usize;
+            let mut inserted_diagonal = false;
+            for &(other, value) in &entries[..count] {
+                if !inserted_diagonal && other > node {
+                    indices.push(node);
+                    values.push(diagonal);
+                    inserted_diagonal = true;
+                }
+                indices.push(other);
+                values.push(value);
+            }
+            if !inserted_diagonal {
+                indices.push(node);
+                values.push(diagonal);
+            }
+        }
+    }
+    CsMat::new((num_nodes, num_nodes), indptr, indices, values)
+}
+
 pub fn extract_diag_inv(lap: &CsMat<f64>) -> Vec<f64> {
     let n = lap.rows();
     let mut diag_inv = vec![0.0f64; n];
@@ -120,10 +196,76 @@ pub fn add_diagonal(lap: &CsMat<f64>, diag: &[f64]) -> CsMat<f64> {
     sprs::TriMat::from_triplets((n, n), rows, cols, vals).to_csr()
 }
 
+/// Update the stored diagonal of a circuit Laplacian without rebuilding it.
+/// `build_laplacian` stores a diagonal entry for every node, including isolated nodes.
+pub(crate) fn add_diagonal_in_place(lap: &mut CsMat<f64>, diag: &[f64]) {
+    assert_eq!(lap.rows(), lap.cols());
+    assert_eq!(lap.rows(), diag.len());
+    for (row, &boost) in diag.iter().enumerate() {
+        *lap.get_mut(row, row).expect("circuit Laplacian must store every diagonal") += boost;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::circuit::graph::EdgeTriplets;
+
+    #[test]
+    fn direct_grid_csr_matches_triplet_assembly() {
+        let nodata = -9999.0;
+        for (nr, nc) in [(0, 0), (1, 1), (1, 9), (9, 1), (2, 2), (7, 11)] {
+            for pattern in 0..3 {
+                let resistance: Vec<f64> = (0..nr * nc).map(|idx| {
+                    if pattern == 2 {
+                        return nodata;
+                    }
+                    if pattern == 1 {
+                        match idx % 7 {
+                            0 => return nodata,
+                            1 => return 0.0,
+                            2 => return -1.0,
+                            3 => return f64::NAN,
+                            4 => return f64::INFINITY,
+                            _ => {}
+                        }
+                    }
+                    10.0f64.powi((idx % 23) as i32 - 11) * (1.0 + idx as f64 / 137.0)
+                }).collect();
+                let (old_map, old_nodes, _, expected) =
+                    crate::build_circuit_model(&resistance, nr, nc, nodata);
+                let (new_map, new_nodes, actual) =
+                    crate::circuit::build_circuit_matrix(&resistance, nr, nc, nodata);
+                assert_eq!(new_map, old_map);
+                assert_eq!(new_nodes, old_nodes);
+                assert_eq!(actual, expected, "{nr}x{nc}, pattern {pattern}");
+                for (&a, &b) in actual.data().iter().zip(expected.data()) {
+                    assert_eq!(a.to_bits(), b.to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grounding_in_place_matches_rebuild_and_reuses_storage() {
+        let mut edges = EdgeTriplets::new();
+        for (i, j, value) in [(0, 1, 2.5), (1, 0, 2.5), (1, 2, 0.125), (2, 1, 0.125)] {
+            edges.push(i, j, value);
+        }
+        let original = build_laplacian(&edges, 4);
+        for diagonal in [[0.0; 4], [1e-20, 3.0, 0.0, 7.0]] {
+            let expected = add_diagonal(&original, &diagonal);
+            let mut actual = original.clone();
+            let data = actual.data().as_ptr();
+            let indices = actual.indices().as_ptr();
+            let indptr = actual.indptr().raw_storage().as_ptr();
+            add_diagonal_in_place(&mut actual, &diagonal);
+            assert_eq!(actual, expected);
+            assert_eq!(actual.data().as_ptr(), data);
+            assert_eq!(actual.indices().as_ptr(), indices);
+            assert_eq!(actual.indptr().raw_storage().as_ptr(), indptr);
+        }
+    }
 
     #[test]
     fn test_build_laplacian_two_node() {

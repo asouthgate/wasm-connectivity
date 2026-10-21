@@ -2,7 +2,7 @@ use crate::circuit::grid::Grid;
 
 // Compute the harmonic mean of two conductances
 // which is used to determine the effective conductance between two nodes in a grid.
-fn conductance_avg(a: f64, b: f64) -> f64 {
+pub(crate) fn conductance_avg(a: f64, b: f64) -> f64 {
     let denom = a + b;
     if denom > 0.0 {
         2.0 * a * b / denom

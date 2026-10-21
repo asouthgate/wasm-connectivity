@@ -83,6 +83,29 @@ struct LevelWorkspace {
     smoother: Smoother,
 }
 
+// The finest level borrows its RHS and correction directly from CG.
+struct CycleWorkspace<'a> {
+    nu: usize,
+    omega_override: Option<f64>,
+    e: &'a mut [f64],
+    d_prime: &'a mut [f64],
+    d: &'a [f64],
+    smoother: &'a Smoother,
+}
+
+impl LevelWorkspace {
+    fn as_cycle(&mut self) -> CycleWorkspace<'_> {
+        CycleWorkspace {
+            nu: self.nu,
+            omega_override: self.omega_override,
+            e: &mut self.e,
+            d_prime: &mut self.d_prime,
+            d: &self.d,
+            smoother: &self.smoother,
+        }
+    }
+}
+
 /// Persistent scratch for P^T L (P x). Both buffers have the fine operator's
 /// size and are reused across all level-1 matvecs and smoothing sweeps.
 struct GalerkinMatvecWorkspace {
@@ -648,9 +671,9 @@ impl<'a> MgPreconditioner<'a> {
             workspaces.push(LevelWorkspace {
                 nu,
                 omega_override,
-                e: vec![0.0; n],
+                e: if level == 0 { Vec::new() } else { vec![0.0; n] },
                 d_prime: vec![0.0; n],
-                d: vec![0.0; n],
+                d: if level == 0 { Vec::new() } else { vec![0.0; n] },
                 smoother,
             });
         }
@@ -677,17 +700,18 @@ impl<'a> MgPreconditioner<'a> {
         }
     }
 
-    fn v_cycle<const PROFILE: bool>(&self, workspaces: &mut [LevelWorkspace], level: usize) {
-        let (current, deeper) = workspaces.split_first_mut().unwrap();
+    fn v_cycle<const PROFILE: bool>(
+        &self, mut current: CycleWorkspace<'_>, deeper: &mut [LevelWorkspace], level: usize,
+    ) {
         let op = self.level_operator(level);
         current.e.fill(0.0);
         if PROFILE {
-            let cached = match &current.smoother {
+            let cached = match current.smoother {
                 Smoother::WeightedJacobi { diag_inv, omega } => Some((diag_inv.as_slice(), *omega)),
                 _ => None,
             };
             profile::smoother_info(level, &op, cached);
-            profile::level_sample(level, "entry", None, &op, &current.d, &current.e, true);
+            profile::level_sample(level, "entry", None, &op, current.d, current.e, true);
         }
 
         if deeper.is_empty() {
@@ -698,25 +722,25 @@ impl<'a> MgPreconditioner<'a> {
             };
             if let Some(factor) = factor {
                 let _timer = timing::timer(Some(level), "Coarse direct solve");
-                let error = cholesky::cholesky_solve(factor, &current.d, current.e.len());
+                let error = cholesky::cholesky_solve(factor, current.d, current.e.len());
                 current.e.copy_from_slice(&error);
             } else {
                 // Start from zero so the result does not depend on an earlier
                 // application when Cholesky is unavailable.
                 let _timer = timing::timer(Some(level), "Coarse fallback CG");
-                let result = crate::linalg::pcg::cg_solve(&op, &current.d, 50, 1e-3);
+                let result = crate::linalg::pcg::cg_solve(&op, current.d, 50, 1e-3);
                 current.e.copy_from_slice(&result.v);
             }
             if PROFILE {
-                profile::level_sample(level, "terminal solve", None, &op, &current.d, &current.e, false);
+                profile::level_sample(level, "terminal solve", None, &op, current.d, current.e, false);
             }
             return;
         }
 
-        self.smooth_phase::<PROFILE>(current, &op, level, false);
+        self.smooth_phase::<PROFILE>(&mut current, &op, level, false);
         let phase_timer = timing::timer(Some(level), "Residual calculation");
-        op.matvec(&current.e, &mut current.d_prime);
-        for (residual, &source) in current.d_prime.iter_mut().zip(&current.d) {
+        op.matvec(current.e, current.d_prime);
+        for (residual, &source) in current.d_prime.iter_mut().zip(current.d) {
             *residual = source - *residual;
         }
 
@@ -725,37 +749,38 @@ impl<'a> MgPreconditioner<'a> {
         let phase_timer = timing::timer(Some(level), "Restriction");
         transfer.restrict(&current.d_prime, &mut deeper[0].d);
         drop(phase_timer);
-        self.v_cycle::<PROFILE>(deeper, level + 1);
+        let (next, rest) = deeper.split_first_mut().unwrap();
+        self.v_cycle::<PROFILE>(next.as_cycle(), rest, level + 1);
         let phase_timer = timing::timer(Some(level), "Prolongation/correction");
-        transfer.prolongate(&deeper[0].e, &mut current.e);
+        transfer.prolongate(&deeper[0].e, current.e);
         drop(phase_timer);
         if PROFILE {
-            profile::level_sample(level, "coarse correction", None, &op, &current.d, &current.e, false);
+            profile::level_sample(level, "coarse correction", None, &op, current.d, current.e, false);
         }
-        self.smooth_phase::<PROFILE>(current, &op, level, true);
+        self.smooth_phase::<PROFILE>(&mut current, &op, level, true);
     }
 
     #[inline]
     fn smooth_phase<const PROFILE: bool>(
-        &self, current: &mut LevelWorkspace, op: &dyn Operator, level: usize, post: bool,
+        &self, current: &mut CycleWorkspace<'_>, op: &dyn Operator, level: usize, post: bool,
     ) {
         let name = if post { "Post-smoothing" } else { "Pre-smoothing" };
         if PROFILE {
             let mut elapsed = std::time::Duration::ZERO;
             for sweep in 0..current.nu {
                 let start = std::time::Instant::now();
-                current.smoother.smooth(op, &mut current.e, &current.d,
-                    &mut current.d_prime, current.omega_override.unwrap_or(self.omega));
+                current.smoother.smooth(op, current.e, current.d,
+                    current.d_prime, current.omega_override.unwrap_or(self.omega));
                 elapsed += start.elapsed();
                 profile::level_sample(level, if post { "post-sweep" } else { "pre-sweep" },
-                    Some((sweep + 1, current.nu)), op, &current.d, &current.e, false);
+                    Some((sweep + 1, current.nu)), op, current.d, current.e, false);
             }
             timing::record_duration(level, name, elapsed);
         } else {
             let _timer = timing::timer(Some(level), name);
             for _ in 0..current.nu {
-                current.smoother.smooth(op, &mut current.e, &current.d,
-                    &mut current.d_prime, current.omega_override.unwrap_or(self.omega));
+                current.smoother.smooth(op, current.e, current.d,
+                    current.d_prime, current.omega_override.unwrap_or(self.omega));
             }
         }
     }
@@ -805,10 +830,12 @@ impl<'a> MgPreconditioner<'a> {
     fn apply_impl<const PROFILE: bool>(&self, r: &[f64], e0: &mut Vec<f64>) {
         assert_eq!(r.len(), self.fine.n());
         let mut workspaces = self.workspaces.borrow_mut();
-        workspaces[0].d.copy_from_slice(r);
-        self.v_cycle::<PROFILE>(&mut workspaces, 0);
         e0.resize(r.len(), 0.0);
-        e0.copy_from_slice(&workspaces[0].e);
+        let (fine, deeper) = workspaces.split_first_mut().unwrap();
+        let mut current = fine.as_cycle();
+        current.d = r;
+        current.e = e0;
+        self.v_cycle::<PROFILE>(current, deeper, 0);
     }
 
 }
@@ -1191,6 +1218,8 @@ mod tests {
                 let omega = if level == 0 { 0.61 } else { 0.83 };
                 let mut workspaces = mg.workspaces.borrow_mut();
                 let current = &mut workspaces[level];
+                current.d.resize(op.n(), 1.0);
+                current.e.resize(op.n(), 0.0);
                 current.d.fill(1.0);
                 let mut expected = vec![0.0; op.n()];
                 if let Smoother::WeightedJacobi { diag_inv, omega: actual } = &current.smoother {
@@ -1200,7 +1229,7 @@ mod tests {
                 } else {
                     symmetric_gauss_seidel_smooth(&op, &mut expected, &current.d, omega);
                 }
-                mg.smooth_phase::<false>(current, &op, level, true);
+                mg.smooth_phase::<false>(&mut current.as_cycle(), &op, level, true);
                 assert_eq!(current.e, expected);
                 if level == 0 {
                     drop(workspaces);
@@ -1570,9 +1599,15 @@ mod tests {
                 }
             }
             let source: Vec<f64> = (0..nr * nc).map(|i| 1.0 + (i as f64).sin()).collect();
+            let original_source = source.clone();
             let (mut first, mut again, mut reference) = (Vec::new(), Vec::new(), Vec::new());
             stencil.apply(&source, &mut first);
+            let output_storage = first.as_ptr();
+            stencil.apply(&source, &mut first);
+            assert_eq!(first.as_ptr(), output_storage);
+            assert_eq!(source, original_source);
             stencil.apply(&vec![0.0; nr * nc], &mut again);
+            assert!(again.iter().all(|&value| value == 0.0));
             stencil.apply(&source, &mut again);
             use_jacobi_reference(&explicit);
             explicit.apply(&source, &mut reference);
@@ -1582,6 +1617,11 @@ mod tests {
             );
             for (&a, &b) in first.iter().zip(&reference) {
                 assert!((a - b).abs() < 1e-8);
+            }
+            for mg in [&explicit, &stencil] {
+                let workspaces = mg.workspaces.borrow();
+                assert_eq!(workspaces[0].e.capacity(), 0);
+                assert_eq!(workspaces[0].d.capacity(), 0);
             }
         }
     }
