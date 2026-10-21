@@ -242,6 +242,13 @@ pub fn downsample_raster(
     json_response(&output)
 }
 
+#[wasm_bindgen]
+pub fn upsample_raster(
+    data: Vec<f64>, nrows: usize, ncols: usize, target_rows: usize, target_cols: usize,
+) -> Vec<f64> {
+    raster::upsample_raster(&data, nrows, ncols, target_rows, target_cols)
+}
+
 #[derive(Serialize)]
 struct RasterizeOutput {
     resistance_map: Vec<f64>,

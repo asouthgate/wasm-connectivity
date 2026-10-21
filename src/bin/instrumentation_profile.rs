@@ -10,7 +10,7 @@ use std::fs;
 use serde::Serialize;
 
 use wasm_connect::linalg::multigrid::MgOptions;
-use wasm_connect::raster::io::parse_asc;
+use wasm_connect::raster::io::{parse_asc, AscGrid};
 use wasm_connect::memory::{take_profile, InstrumentationProfile};
 use wasm_connect::solve::{self, GroundMode};
 
@@ -20,6 +20,7 @@ const DATA_DIR: &str = "example/public/geodata";
 struct ProfileRecord {
     accounting_scope: &'static str,
     resolution: usize,
+    source_resolution: usize,
     solver: String,
     ground: String,
     total_iters: usize,
@@ -30,6 +31,7 @@ fn emit(resolution: usize, solver: &str, ground: &str, total_iters: usize) {
     let rec = ProfileRecord {
         accounting_scope: "Native solver payloads; low-memory solver reuses the source input as RHS. Excludes rasterization, caller extras and WASM/JSON wrapper storage.",
         resolution,
+        source_resolution: resolution.min(1000),
         solver: solver.to_string(),
         ground: ground.to_string(),
         total_iters,
@@ -44,6 +46,16 @@ struct Args {
     resolution: usize,
     solver: String,
     ground: String,
+}
+
+fn upsample_grid(grid: &mut AscGrid, resolution: usize) {
+    let width = grid.ncols as f64 * grid.cellsize;
+    grid.data = wasm_connect::raster::upsample_raster(
+        &grid.data, grid.nrows, grid.ncols, resolution, resolution,
+    );
+    grid.cellsize = width / resolution as f64;
+    grid.nrows = resolution;
+    grid.ncols = resolution;
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -98,9 +110,10 @@ fn main() {
     });
     let options = MgOptions::default();
 
-    let base = parse_asc(&format!("{DATA_DIR}/base_resistance_{resolution}.asc"));
-    let mut src = parse_asc(&format!("{DATA_DIR}/source_{resolution}.asc"));
-    let gnd = parse_asc(&format!("{DATA_DIR}/ground_{resolution}.asc"));
+    let source_resolution = resolution.min(1000);
+    let mut base = parse_asc(&format!("{DATA_DIR}/base_resistance_{source_resolution}.asc"));
+    let mut src = parse_asc(&format!("{DATA_DIR}/source_{source_resolution}.asc"));
+    let mut gnd = parse_asc(&format!("{DATA_DIR}/ground_{source_resolution}.asc"));
     for grid in [&base, &src, &gnd] {
         assert!(grid.nrows > 0 && grid.ncols > 0, "ASC dimensions must be positive");
         assert_eq!(grid.data.len(), grid.nrows * grid.ncols,
@@ -116,8 +129,14 @@ fn main() {
         (base.nrows, base.ncols),
         "ground grid dimensions differ"
     );
+    if resolution > source_resolution {
+        for grid in [&mut base, &mut src, &mut gnd] {
+            upsample_grid(grid, resolution);
+        }
+        eprintln!("Upsampled {source_resolution}x{source_resolution} inputs to {resolution}x{resolution} using nearest neighbours; geographic extent is unchanged.");
+    }
     let geojson =
-        fs::read_to_string(format!("{DATA_DIR}/all_features_{resolution}.geojson")).unwrap();
+        fs::read_to_string(format!("{DATA_DIR}/all_features_{source_resolution}.geojson")).unwrap();
 
     let layer_params_str = r#"{"roads":{"resistance":5,"width":3},"rivers":{"resistance":0.5,"width":4},"buildings":{"resistance":500,"width":0}}"#;
 
@@ -185,4 +204,25 @@ fn main() {
         _ => unreachable!(),
     };
     emit(resolution, &solver, &ground, result.total_iters);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upsampling_preserves_geographic_extent() {
+        let mut grid = AscGrid {
+            data: vec![1.0, -9999.0, 0.0, 4.0], nrows: 2, ncols: 2,
+            xllcorner: 286100.0, yllcorner: 78550.0, ymax: 78552.0,
+            cellsize: 1.0, nodata: -9999.0,
+        };
+        upsample_grid(&mut grid, 4);
+        assert_eq!((grid.nrows, grid.ncols), (4, 4));
+        assert_eq!(grid.cellsize, 0.5);
+        assert_eq!(grid.ncols as f64 * grid.cellsize, 2.0);
+        assert_eq!(grid.yllcorner + grid.nrows as f64 * grid.cellsize, grid.ymax);
+        assert_eq!((grid.xllcorner, grid.yllcorner), (286100.0, 78550.0));
+        assert_eq!(grid.data, wasm_connect::raster::upsample_raster(&[1.0, -9999.0, 0.0, 4.0], 2, 2, 4, 4));
+    }
 }

@@ -91,10 +91,10 @@ def plot_hierarchy(rows, out_prefix, comparison=False):
                 indices = list(range(len(phases)))
                 maximum = max(maximum, stacked(left, indices, [phase_components(p) for p in phases]))
                 left.set_xticks(indices, [p['name'] for p in phases], rotation=45, ha='right', fontsize=8)
-                left.set_xlabel('Algorithm phase (temporary buffers included where live)')
+                left.set_xlabel('Algorithm phase')
             else:
                 left.text(0.5, 0.5, 'No phase accounting in this older profile', ha='center', transform=left.transAxes)
-            left.set_title(f'{title}\nLive objects by phase', fontsize=11)
+            left.set_title(f'{title}', fontsize=11)
         for ax in axes.flat:
             ax.set_ylim(0, maximum * 1.08 if maximum else 1)
         handles = {}
