@@ -26,6 +26,7 @@ export default function Example() {
     riverRes: 0.5, riverWidth: 4, buildRes: 500,
   });
   const [dirichlet, setDirichlet] = useState(true);
+  const [precision, setPrecision] = useState('f64');
   const [lowMem, setLowMem] = useState(false);
 
   async function loadData(res) {
@@ -66,7 +67,7 @@ export default function Example() {
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(layers), baseMeta.xllcorner, ymax, baseMeta.cellsize,
         srcData, gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols),
-        100_000, 1e-4, dirichlet,
+        100_000, undefined, dirichlet, precision,
       ));
       if (r.error) throw new Error(r.error);
       setResult(r);
@@ -110,6 +111,14 @@ export default function Example() {
               <select value={String(dirichlet)} onChange={e => setDirichlet(e.target.value === 'true')}>
                 <option value="false">Shunt ground</option>
                 <option value="true">Dirichlet ground (V=0)</option>
+              </select>
+            </label>
+            <label>Precision
+              <select value={precision} onChange={e => {
+                setPrecision(e.target.value); setResult(null); setError(false);
+                setStatus(`Ready · ${e.target.value}`);
+              }}>
+                <option value="f64">f64</option><option value="f32">f32</option>
               </select>
             </label>
             <label>Memory

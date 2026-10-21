@@ -1,3 +1,4 @@
+use crate::linalg::real::{Real, scalar};
 use crate::linalg::cholesky;
 use crate::linalg::operator::{FineOperator, Operator};
 use crate::linalg::pcg::Preconditioner;
@@ -62,11 +63,11 @@ impl Default for MgOptions {
 }
 
 /// One (coarse) level of the multigrid hierarchy.
-struct MgLevel {
-    laplacian: CoarseOperator,
+struct MgLevel<F: Real = f64> {
+    laplacian: CoarseOperator<F>,
     nrows: usize,
     ncols: usize,
-    cholesky_l: Option<Vec<f64>>,
+    cholesky_l: Option<Vec<F>>,
     /// Geometric transfer from this level to the finer level above.
     prolongation: Transfer,
 }
@@ -74,28 +75,28 @@ struct MgLevel {
 /// Per-level scratch vectors used by the V-cycle:
 /// `e` (error approximation), `d_prime` (residual of the error system),
 /// `d` (the level's right-hand side).
-struct LevelWorkspace {
+struct LevelWorkspace<F: Real = f64> {
     nu: usize,
-    omega_override: Option<f64>,
-    e: Vec<f64>,
-    d_prime: Vec<f64>,
-    d: Vec<f64>,
-    smoother: Smoother,
+    omega_override: Option<F>,
+    e: Vec<F>,
+    d_prime: Vec<F>,
+    d: Vec<F>,
+    smoother: Smoother<F>,
 }
 
 // The finest level borrows its RHS and correction directly from CG.
-struct CycleWorkspace<'a> {
+struct CycleWorkspace<'a, F: Real = f64> {
     nu: usize,
-    omega_override: Option<f64>,
-    e: &'a mut [f64],
-    d_prime: &'a mut [f64],
-    d: &'a [f64],
-    smoother: &'a Smoother,
+    omega_override: Option<F>,
+    e: &'a mut [F],
+    d_prime: &'a mut [F],
+    d: &'a [F],
+    smoother: &'a Smoother<F>,
 }
 
-impl LevelWorkspace {
-    fn as_cycle(&mut self) -> CycleWorkspace<'_> {
-        CycleWorkspace {
+impl<F: Real> LevelWorkspace<F> {
+    fn as_cycle(&mut self) -> CycleWorkspace<'_, F> {
+        CycleWorkspace::<F> {
             nu: self.nu,
             omega_override: self.omega_override,
             e: &mut self.e,
@@ -108,16 +109,16 @@ impl LevelWorkspace {
 
 /// Persistent scratch for P^T L (P x). Both buffers have the fine operator's
 /// size and are reused across all level-1 matvecs and smoothing sweeps.
-struct GalerkinMatvecWorkspace {
-    prolonged: Vec<f64>,
-    applied: Vec<f64>,
+struct GalerkinMatvecWorkspace<F: Real = f64> {
+    prolonged: Vec<F>,
+    applied: Vec<F>,
 }
 
-impl GalerkinMatvecWorkspace {
+impl<F: Real> GalerkinMatvecWorkspace<F> {
     fn new(n: usize) -> Self {
         Self {
-            prolonged: vec![0.0; n],
-            applied: vec![0.0; n],
+            prolonged: vec![scalar::<F>(0.0); n],
+            applied: vec![scalar::<F>(0.0); n],
         }
     }
 }
@@ -129,32 +130,32 @@ impl GalerkinMatvecWorkspace {
 /// and applies level 1 as P^T L_0 (P x); level 2 is the first CSR. Explicit MG
 /// stores every Laplacian and uses symmetric Gauss–Seidel. Both paths use
 /// geometric transfers without entry arrays.
-pub struct MgPreconditioner<'a> {
-    fine: FineOperator<'a>,
+pub struct MgPreconditioner<'a, F: Real = f64> {
+    fine: FineOperator<'a, F>,
     // Retain operators for post-smoothing on ascent and reuse across PCG iterations.
-    coarse: Vec<MgLevel>,
-    fine_cholesky_l: Option<Vec<f64>>,
-    omega: f64,
+    coarse: Vec<MgLevel<F>>,
+    fine_cholesky_l: Option<Vec<F>>,
+    omega: F,
     // Preconditioner::apply takes &self; RefCell permits scratch-buffer reuse.
     // Borrow once at the boundary, then recurse with ordinary mutable slices.
-    workspaces: RefCell<Vec<LevelWorkspace>>,
+    workspaces: RefCell<Vec<LevelWorkspace<F>>>,
 }
 
 /// Level 1 stores only its regularisation and structure count; deeper levels
 /// retain CSR matrices. The fine operator is borrowed only by temporary views,
 /// so the owning hierarchy never contains references into itself.
-enum CoarseOperator {
+enum CoarseOperator<F: Real = f64> {
     Galerkin {
-        reg_diag0: f64,
-        matvec_workspace: RefCell<GalerkinMatvecWorkspace>,
+        reg_diag0: F,
+        matvec_workspace: RefCell<GalerkinMatvecWorkspace<F>>,
         #[cfg(feature = "instrumentation-profile")]
         nnz: usize,
     },
-    Explicit(CsMat<f64>),
+    Explicit(CsMat<F>),
 }
 
-impl MgLevel {
-    fn operator<'b>(&'b self, fine: &'b FineOperator<'b>) -> LevelOperator<'b> {
+impl<F: Real> MgLevel<F> {
+    fn operator<'b>(&'b self, fine: &'b FineOperator<'b, F>) -> LevelOperator<'b, F> {
         match &self.laplacian {
             CoarseOperator::Explicit(matrix) => LevelOperator::Borrowed(matrix),
             CoarseOperator::Galerkin {
@@ -180,31 +181,31 @@ impl MgLevel {
 }
 
 /// A borrowed view of any hierarchy level.
-enum LevelOperator<'b> {
-    Borrowed(&'b dyn Operator),
-    Galerkin(GalerkinOperator<'b, FineOperator<'b>>),
+enum LevelOperator<'b, F: Real = f64> {
+    Borrowed(&'b dyn Operator<F>),
+    Galerkin(GalerkinOperator<'b, FineOperator<'b, F>, F>),
 }
 
-impl Operator for LevelOperator<'_> {
+impl<F: Real> Operator<F> for LevelOperator<'_, F> {
     fn n(&self) -> usize {
         match self {
             Self::Borrowed(op) => op.n(),
             Self::Galerkin(op) => op.n(),
         }
     }
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+    fn matvec(&self, x: &[F], y: &mut [F]) {
         match self {
             Self::Borrowed(op) => op.matvec(x, y),
             Self::Galerkin(op) => op.matvec(x, y),
         }
     }
-    fn diag_inv(&self) -> Vec<f64> {
+    fn diag_inv(&self) -> Vec<F> {
         match self {
             Self::Borrowed(op) => op.diag_inv(),
             Self::Galerkin(op) => op.diag_inv(),
         }
     }
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         match self {
             Self::Borrowed(op) => op.for_each_entry(row, f),
             Self::Galerkin(op) => op.for_each_entry(row, f),
@@ -217,30 +218,30 @@ impl Operator for LevelOperator<'_> {
 /// by one cell. The resulting coarse columns lie within one cell of the row.
 /// Keep presence separate from values: cancellation must not drop structural
 /// entries that the explicit symbolic Galerkin pass would retain.
-struct GalerkinRow {
-    values: [f64; 9],
+struct GalerkinRow<F: Real = f64> {
+    values: [F; 9],
     present: u32,
 }
 
-struct GalerkinOperator<'b, T: Operator + ?Sized> {
-    fine: &'b T,
+struct GalerkinOperator<'b, O: Operator<F> + ?Sized, F: Real = f64> {
+    fine: &'b O,
     transfer: Transfer,
-    reg_diag0: f64,
-    matvec_workspace: &'b RefCell<GalerkinMatvecWorkspace>,
+    reg_diag0: F,
+    matvec_workspace: &'b RefCell<GalerkinMatvecWorkspace<F>>,
 }
 
-impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
-    fn row(&self, row: usize) -> GalerkinRow {
-        let mut result = GalerkinRow {
-            values: [0.0; 9],
+impl<F: Real, O: Operator<F> + ?Sized> GalerkinOperator<'_, O, F> {
+    fn row(&self, row: usize) -> GalerkinRow::<F> {
+        let mut result = GalerkinRow::<F> {
+            values: [scalar::<F>(0.0); 9],
             present: 0,
         };
         let nc = self.transfer.coarse_ncols;
         let cr = (row / nc) as isize;
         let cc = (row % nc) as isize;
-        self.transfer.for_each_column(row, |a, p_ai| {
+        self.transfer.for_each_column::<F>(row, |a, p_ai| {
             self.fine.for_each_entry(a, &mut |b, l_ab| {
-                self.transfer.for_each_row_coordinate(b, |jr, jc, p_bj| {
+                self.transfer.for_each_row_coordinate::<F>(b, |jr, jc, p_bj| {
                     let dr = jr as isize - cr;
                     let dc = jc as isize - cc;
                     assert!(
@@ -259,7 +260,7 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
         result
     }
 
-    fn visit_row(&self, row: usize, entries: &GalerkinRow, f: &mut dyn FnMut(usize, f64)) {
+    fn visit_row(&self, row: usize, entries: &GalerkinRow<F>, f: &mut dyn FnMut(usize, F)) {
         let nc = self.transfer.coarse_ncols;
         let cr = (row / nc) as isize;
         let cc = (row % nc) as isize;
@@ -274,8 +275,8 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
 
     /// Match regularize_laplacian: norm of the aggregated, unregularised
     /// entries, followed by a correction at node 0. No rows are retained.
-    fn setup_metadata(&self) -> (f64, usize) {
-        let mut norm2 = 0.0;
+    fn setup_metadata(&self) -> (F, usize) {
+        let mut norm2 = scalar::<F>(0.0);
         let mut nnz = 0;
         for row in 0..self.n() {
             self.for_each_entry(row, &mut |_, val| {
@@ -284,60 +285,60 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
             });
         }
         let norm = norm2.sqrt();
-        let reg = if norm.is_finite() && norm > 0.0 {
-            1e-5 * norm
+        let reg = if norm.is_finite() && norm > scalar::<F>(0.0) {
+            scalar::<F>(1e-5) * norm
         } else {
-            0.0
+            scalar::<F>(0.0)
         };
         (reg, nnz)
     }
 }
 
-impl<T: Operator + ?Sized> Operator for GalerkinOperator<'_, T> {
+impl<F: Real, O: Operator<F> + ?Sized> Operator<F> for GalerkinOperator<'_, O, F> {
     fn n(&self) -> usize {
         self.transfer.coarse_n()
     }
 
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+    fn matvec(&self, x: &[F], y: &mut [F]) {
         let mut workspace = self.matvec_workspace.borrow_mut();
-        let GalerkinMatvecWorkspace { prolonged, applied } = &mut *workspace;
-        prolonged.fill(0.0);
+        let GalerkinMatvecWorkspace::<F> { prolonged, applied } = &mut *workspace;
+        prolonged.fill(scalar::<F>(0.0));
         self.transfer.prolongate(x, prolonged);
         self.fine.matvec(prolonged, applied);
         self.transfer.restrict(applied, y);
         y[0] += self.reg_diag0 * x[0];
     }
 
-    fn diag_inv(&self) -> Vec<f64> {
+    fn diag_inv(&self) -> Vec<F> {
         (0..self.n())
             .map(|row| {
                 let diag = self.row(row).values[4];
-                if diag.abs() > 1e-15 {
-                    1.0 / diag.abs()
+                if diag.abs() > scalar::<F>(1e-15) {
+                    scalar::<F>(1.0) / diag.abs()
                 } else {
-                    0.0
+                    scalar::<F>(0.0)
                 }
             })
             .collect()
     }
 
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         self.visit_row(row, &self.row(row), f);
     }
 }
 
 /// Galerkin coarse operator: L_coarse = P^T L_fine P. Transfer entries are
 /// generated in both orientations; neither P nor L_fine P is materialised.
-fn galerkin_coarsen_operator(fine: &dyn Operator, p: Transfer) -> CsMat<f64> {
+fn galerkin_coarsen_operator<F: Real>(fine: &dyn Operator<F>, p: Transfer) -> CsMat::<F> {
     let coarse_n = p.coarse_n();
     // Symbolic pass: count distinct columns before allocating exact CSR slots.
     // This avoids hash maps and the potentially large intermediate L_fine P.
     let mut seen = vec![usize::MAX; coarse_n];
     let mut row_nnz = vec![0usize; coarse_n];
     for i in 0..coarse_n {
-        p.for_each_column(i, |a, _| {
+        p.for_each_column::<F>(i, |a, _| {
             fine.for_each_entry(a, &mut |b, _| {
-                p.for_each_row(b, |j, _| {
+                p.for_each_row::<F>(b, |j, _| {
                     if seen[j] != i {
                         seen[j] = i;
                         row_nnz[i] += 1;
@@ -357,11 +358,11 @@ fn galerkin_coarsen_operator(fine: &dyn Operator, p: Transfer) -> CsMat<f64> {
     let mut pos = vec![0usize; coarse_n];
     let mut row_count = vec![0usize; coarse_n];
     let mut cols = vec![0usize; nnz];
-    let mut vals = vec![0.0f64; nnz];
+    let mut vals = vec![scalar::<F>(0.0); nnz];
     for i in 0..coarse_n {
-        p.for_each_column(i, |a, p_ai| {
+        p.for_each_column::<F>(i, |a, p_ai| {
             fine.for_each_entry(a, &mut |b, l_ab| {
-                p.for_each_row(b, |j, p_bj| {
+                p.for_each_row::<F>(b, |j, p_bj| {
                     let slot = if seen[j] != i {
                         seen[j] = i;
                         let slot = indptr[i] + row_count[i];
@@ -380,19 +381,19 @@ fn galerkin_coarsen_operator(fine: &dyn Operator, p: Transfer) -> CsMat<f64> {
     CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
 }
 
-fn operator_to_dense(op: &dyn Operator) -> Vec<f64> {
+fn operator_to_dense<F: Real>(op: &dyn Operator<F>) -> Vec<F> {
     let n = op.n();
-    let mut dense = vec![0.0; n * n];
+    let mut dense = vec![scalar::<F>(0.0); n * n];
     for row in 0..n {
         op.for_each_entry(row, &mut |col, val| dense[row * n + col] = val);
     }
     dense
 }
 
-impl MgPreconditioner<'static> {
+impl<F: Real> MgPreconditioner<'static, F> {
     /// Build a multigrid hierarchy from a materialised fine-grid matrix.
     pub fn build_from_laplacian(
-        laplacian: CsMat<f64>,
+        laplacian: CsMat<F>,
         nrows: usize,
         ncols: usize,
         max_levels: usize,
@@ -401,12 +402,12 @@ impl MgPreconditioner<'static> {
     }
 }
 
-impl<'a> MgPreconditioner<'a> {
+impl<'a, F: Real> MgPreconditioner<'a, F> {
     /// Build a multigrid hierarchy from a fine-grid operator (materialised or
     /// matrix-free). A stencil fine grid also keeps level 1 matrix-free;
     /// subsequent levels are Galerkin-coarsened and materialised.
     pub fn build_from_operator(
-        fine: FineOperator<'a>,
+        fine: FineOperator<'a, F>,
         nrows: usize,
         ncols: usize,
         max_levels: usize,
@@ -425,7 +426,7 @@ impl<'a> MgPreconditioner<'a> {
     /// Build with an optional direct-solve grid size. Rejects zero dimensions,
     /// zero hierarchy depth and a zero Cholesky size.
     pub fn build_with_options(
-        fine: FineOperator<'a>,
+        fine: FineOperator<'a, F>,
         nrows: usize,
         ncols: usize,
         options: MgOptions,
@@ -452,7 +453,7 @@ impl<'a> MgPreconditioner<'a> {
             FineOperator::Explicit(_) => "explicit",
             FineOperator::Stencil(_) => "stencil",
         });
-        let mut coarse: Vec<MgLevel> = Vec::new();
+        let mut coarse: Vec<MgLevel<F>> = Vec::new();
         let (mut nr, mut nc) = (nrows, ncols);
 
         while 1 + coarse.len() < options.max_levels {
@@ -485,7 +486,7 @@ impl<'a> MgPreconditioner<'a> {
                 let op = GalerkinOperator {
                     fine: &fine,
                     transfer: prolongation,
-                    reg_diag0: 0.0,
+                    reg_diag0: scalar::<F>(0.0),
                     matvec_workspace: &matvec_workspace,
                 };
                 let (reg_diag0, _nnz) = op.setup_metadata();
@@ -506,7 +507,7 @@ impl<'a> MgPreconditioner<'a> {
                 crate::circuit::laplacian::regularize_laplacian(&mut matrix);
                 CoarseOperator::Explicit(matrix)
             };
-            coarse.push(MgLevel {
+            coarse.push(MgLevel::<F> {
                 laplacian,
                 nrows: next_nr,
                 ncols: next_nc,
@@ -528,17 +529,17 @@ impl<'a> MgPreconditioner<'a> {
         let mut fine_cholesky_l = None;
         if let Some(coarsest) = coarse.last_mut() {
             let cnodes = coarsest.nrows * coarsest.ncols;
-            memory::record_coarse_dense(cnodes);
+            memory::record_coarse_dense_typed::<F>(cnodes);
             let dense = operator_to_dense(&coarsest.operator(&fine));
             coarsest.cholesky_l = cholesky::cholesky_decompose(&dense, cnodes);
         } else if fine.n() <= options.cholesky_size.unwrap_or(SMALL_FINE_DIRECT_LIMIT) {
             let n = fine.n();
-            memory::record_coarse_dense(n);
+            memory::record_coarse_dense_typed::<F>(n);
             let dense = operator_to_dense(&fine);
             fine_cholesky_l = cholesky::cholesky_decompose(&dense, n);
         }
         memory::record_fine_operator(&fine);
-        memory::record_coarsest(
+        memory::record_coarsest_typed::<F>(
             nr * nc,
             options.cholesky_size,
             coarse
@@ -549,10 +550,10 @@ impl<'a> MgPreconditioner<'a> {
 
         #[cfg(feature = "instrumentation-profile")]
         {
-            memory::record_fine_level(
+            memory::record_fine_level_typed::<F>(
                 fine_cholesky_l
                     .as_ref()
-                    .map(|factor| memory::vec_f64_bytes(factor.len()))
+                    .map(|factor| memory::vec_scalar_bytes::<F>(factor.len()))
                     .unwrap_or(0),
             );
             for (k, lvl) in coarse.iter().enumerate() {
@@ -562,7 +563,7 @@ impl<'a> MgPreconditioner<'a> {
                         0,
                         "galerkin-stencil",
                         GalerkinScratch {
-                            row_accumulator_bytes: std::mem::size_of::<GalerkinRow>() as u64,
+                            row_accumulator_bytes: std::mem::size_of::<GalerkinRow<F>>() as u64,
                             ..GalerkinScratch::default()
                         },
                     ),
@@ -577,7 +578,7 @@ impl<'a> MgPreconditioner<'a> {
                             row_accumulator_bytes: if k == 1
                                 && matches!(&coarse[0].laplacian, CoarseOperator::Galerkin { .. })
                             {
-                                std::mem::size_of::<GalerkinRow>() as u64
+                                std::mem::size_of::<GalerkinRow<F>>() as u64
                             } else {
                                 0
                             },
@@ -588,9 +589,9 @@ impl<'a> MgPreconditioner<'a> {
                 let cholesky_bytes = lvl
                     .cholesky_l
                     .as_ref()
-                    .map(|l| memory::vec_f64_bytes(l.len()))
+                    .map(|l| memory::vec_scalar_bytes::<F>(l.len()))
                     .unwrap_or(0);
-                memory::record_level(
+                memory::record_level_typed::<F>(
                     k + 1,
                     nodes,
                     lvl.nnz(),
@@ -613,10 +614,10 @@ impl<'a> MgPreconditioner<'a> {
                 coarse[level - 1].operator(&fine)
             };
             let n = op.n();
-            let omega_override = if level == 0 { options.l0omega } else { options.coarseomega };
+            let omega_override = if level == 0 { options.l0omega } else { options.coarseomega }.map(scalar::<F>);
             let mut smoother = if low_memory && level < coarse.len() {
                 // Without an override, the spectral bound selects each level's weight.
-                Smoother::weighted_jacobi(&op, 1.0)
+                Smoother::weighted_jacobi(&op, scalar::<F>(1.0))
             } else {
                 Smoother::SymmetricGaussSeidel
             };
@@ -629,10 +630,10 @@ impl<'a> MgPreconditioner<'a> {
                     ("none", 0, None)
                 } else {
                     match &smoother {
-                        Smoother::SymmetricGaussSeidel => ("symmetric-gauss-seidel", 0, Some(omega_override.unwrap_or(0.67))),
+                        Smoother::SymmetricGaussSeidel => ("symmetric-gauss-seidel", 0, Some(omega_override.unwrap_or(scalar::<F>(0.67)))),
                         Smoother::WeightedJacobi { diag_inv, omega } => (
                             "weighted-jacobi",
-                            memory::vec_f64_bytes(diag_inv.len()),
+                            memory::vec_scalar_bytes::<F>(diag_inv.len()),
                             Some(*omega),
                         ),
                     }
@@ -643,7 +644,7 @@ impl<'a> MgPreconditioner<'a> {
                             matvec_workspace, ..
                         } => {
                             let scratch = matvec_workspace.borrow();
-                            memory::vec_f64_bytes(scratch.prolonged.len() + scratch.applied.len())
+                            memory::vec_scalar_bytes::<F>(scratch.prolonged.len() + scratch.applied.len())
                         }
                         CoarseOperator::Explicit(_) => 0,
                     }
@@ -654,7 +655,7 @@ impl<'a> MgPreconditioner<'a> {
                     level,
                     repr,
                     diag_bytes,
-                    omega,
+                    omega.map(|v| v.to_f64().unwrap()),
                     matvec_bytes,
                 );
             }
@@ -668,12 +669,12 @@ impl<'a> MgPreconditioner<'a> {
                 options.l0nu
             };
             timing::sweeps(level, nu);
-            workspaces.push(LevelWorkspace {
+            workspaces.push(LevelWorkspace::<F> {
                 nu,
                 omega_override,
-                e: if level == 0 { Vec::new() } else { vec![0.0; n] },
-                d_prime: vec![0.0; n],
-                d: if level == 0 { Vec::new() } else { vec![0.0; n] },
+                e: if level == 0 { Vec::new() } else { vec![scalar::<F>(0.0); n] },
+                d_prime: vec![scalar::<F>(0.0); n],
+                d: if level == 0 { Vec::new() } else { vec![scalar::<F>(0.0); n] },
                 smoother,
             });
         }
@@ -682,17 +683,17 @@ impl<'a> MgPreconditioner<'a> {
             fine,
             coarse,
             fine_cholesky_l,
-            omega: 0.67,
+            omega: scalar::<F>(0.67),
             workspaces: RefCell::new(workspaces),
         }
     }
 
     /// The fine-grid operator (level 0).
-    pub fn fine_operator(&self) -> &dyn Operator {
+    pub fn fine_operator(&self) -> &dyn Operator<F> {
         &self.fine
     }
 
-    fn level_operator(&self, level: usize) -> LevelOperator<'_> {
+    fn level_operator(&self, level: usize) -> LevelOperator<'_, F> {
         if level == 0 {
             LevelOperator::Borrowed(&self.fine)
         } else {
@@ -701,10 +702,10 @@ impl<'a> MgPreconditioner<'a> {
     }
 
     fn v_cycle<const PROFILE: bool>(
-        &self, mut current: CycleWorkspace<'_>, deeper: &mut [LevelWorkspace], level: usize,
+        &self, mut current: CycleWorkspace<'_, F>, deeper: &mut [LevelWorkspace<F>], level: usize,
     ) {
         let op = self.level_operator(level);
-        current.e.fill(0.0);
+        current.e.fill(scalar::<F>(0.0));
         if PROFILE {
             let cached = match current.smoother {
                 Smoother::WeightedJacobi { diag_inv, omega } => Some((diag_inv.as_slice(), *omega)),
@@ -728,7 +729,7 @@ impl<'a> MgPreconditioner<'a> {
                 // Start from zero so the result does not depend on an earlier
                 // application when Cholesky is unavailable.
                 let _timer = timing::timer(Some(level), "Coarse fallback CG");
-                let result = crate::linalg::pcg::cg_solve(&op, current.d, 50, 1e-3);
+                let result = crate::linalg::pcg::cg_solve(&op, current.d, 50, scalar::<F>(1e-3));
                 current.e.copy_from_slice(&result.v);
             }
             if PROFILE {
@@ -762,7 +763,7 @@ impl<'a> MgPreconditioner<'a> {
 
     #[inline]
     fn smooth_phase<const PROFILE: bool>(
-        &self, current: &mut CycleWorkspace<'_>, op: &dyn Operator, level: usize, post: bool,
+        &self, current: &mut CycleWorkspace<'_, F>, op: &dyn Operator<F>, level: usize, post: bool,
     ) {
         let name = if post { "Post-smoothing" } else { "Pre-smoothing" };
         if PROFILE {
@@ -785,18 +786,18 @@ impl<'a> MgPreconditioner<'a> {
         }
     }
 
-    pub(crate) fn solve_cg(&self, rhs: &[f64], max_iter: usize, tol: f64, profile: bool)
-        -> crate::linalg::pcg::CgResult
+    pub(crate) fn solve_cg(&self, rhs: &[F], max_iter: usize, tol: F, profile: bool)
+        -> crate::linalg::pcg::CgResult::<F>
     {
         if profile {
             crate::linalg::pcg::cg_solve_precond_profiled(self.fine_operator(), rhs,
-                max_iter, tol, &ProfiledPreconditioner(self))
+                max_iter, tol, &ProfiledPreconditioner::<F>(self))
         } else {
             crate::linalg::pcg::cg_solve_precond(self.fine_operator(), rhs, max_iter, tol, self)
         }
     }
 
-    pub(crate) fn final_post_smooth(&self, rhs: &[f64], x: &mut [f64], count: usize,
+    pub(crate) fn final_post_smooth(&self, rhs: &[F], x: &mut [F], count: usize,
         profiled: bool, iteration: usize)
     {
         if count == 0 { return; }
@@ -807,7 +808,7 @@ impl<'a> MgPreconditioner<'a> {
         }
     }
 
-    fn final_post_smooth_impl<const PROFILE: bool>(&self, rhs: &[f64], x: &mut [f64],
+    fn final_post_smooth_impl<const PROFILE: bool>(&self, rhs: &[F], x: &mut [F],
         count: usize, iteration: usize)
     {
         let op = self.fine_operator();
@@ -827,10 +828,10 @@ impl<'a> MgPreconditioner<'a> {
         }
     }
 
-    fn apply_impl<const PROFILE: bool>(&self, r: &[f64], e0: &mut Vec<f64>) {
+    fn apply_impl<const PROFILE: bool>(&self, r: &[F], e0: &mut Vec<F>) {
         assert_eq!(r.len(), self.fine.n());
         let mut workspaces = self.workspaces.borrow_mut();
-        e0.resize(r.len(), 0.0);
+        e0.resize(r.len(), scalar::<F>(0.0));
         let (fine, deeper) = workspaces.split_first_mut().unwrap();
         let mut current = fine.as_cycle();
         current.d = r;
@@ -840,16 +841,16 @@ impl<'a> MgPreconditioner<'a> {
 
 }
 
-impl Preconditioner for MgPreconditioner<'_> {
-    fn apply(&self, r: &[f64], e0: &mut Vec<f64>) {
+impl<F: Real> Preconditioner<F> for MgPreconditioner<'_, F> {
+    fn apply(&self, r: &[F], e0: &mut Vec<F>) {
         self.apply_impl::<false>(r, e0);
     }
 }
 
-struct ProfiledPreconditioner<'m, 'a>(&'m MgPreconditioner<'a>);
+struct ProfiledPreconditioner<'m, 'a, F: Real = f64>(&'m MgPreconditioner<'a, F>);
 
-impl Preconditioner for ProfiledPreconditioner<'_, '_> {
-    fn apply(&self, r: &[f64], e0: &mut Vec<f64>) {
+impl<F: Real> Preconditioner<F> for ProfiledPreconditioner<'_, '_, F> {
+    fn apply(&self, r: &[F], e0: &mut Vec<F>) {
         self.0.apply_impl::<true>(r, e0);
     }
 }
@@ -941,7 +942,7 @@ mod tests {
             transfer.coarse_n(),
         ));
         for col in 0..transfer.coarse_n() {
-            transfer.for_each_column(col, |row, val| triplets.add_triplet(row, col, val));
+            transfer.for_each_column::<f64>(col, |row, val| triplets.add_triplet(row, col, val));
         }
         triplets.to_csr()
     }
@@ -1292,7 +1293,7 @@ mod tests {
 
     #[test]
     fn weighted_jacobi_updates_simultaneously_using_only_matvec() {
-        let mut entries = sprs::TriMat::new((3, 3));
+        let mut entries = sprs::TriMat::<f64>::new((3, 3));
         for i in 0..3 {
             entries.add_triplet(i, i, 2.0);
         }
@@ -1318,7 +1319,7 @@ mod tests {
 
     #[test]
     fn jacobi_damping_is_capped_for_large_normalized_eigenvalues() {
-        let mut entries = sprs::TriMat::new((4, 4));
+        let mut entries = sprs::TriMat::<f64>::new((4, 4));
         for i in 0..4 {
             for j in 0..4 {
                 entries.add_triplet(i, j, if i == j { 1.0 } else { 0.9 });
@@ -1372,7 +1373,7 @@ mod tests {
 
     #[test]
     fn jacobi_damping_uses_symmetric_scaling_for_unequal_diagonals() {
-        let mut entries = sprs::TriMat::new((2, 2));
+        let mut entries = sprs::TriMat::<f64>::new((2, 2));
         for (i, j, value) in [(0, 0, 1.0), (0, 1, 9.0), (1, 0, 9.0), (1, 1, 100.0)] {
             entries.add_triplet(i, j, value);
         }
@@ -1393,7 +1394,7 @@ mod tests {
     #[test]
     fn symmetric_jacobi_bound_still_caps_unequal_diagonal_systems() {
         let scales = [1.0, 10.0, 100.0, 1000.0];
-        let mut entries = sprs::TriMat::new((4, 4));
+        let mut entries = sprs::TriMat::<f64>::new((4, 4));
         for i in 0..4 {
             for j in 0..4 {
                 entries.add_triplet(i, j, scales[i] * scales[j]

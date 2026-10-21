@@ -84,7 +84,7 @@ def plot_hierarchy(rows, out_prefix, comparison=False):
         maximum = 0.0
         for row, record in enumerate(records):
             profile = record['profile']
-            title = f"{SOLVER_LABELS.get(record['solver'], record['solver'])} · {record['resolution']} × {record['resolution']} · {record['ground']}"
+            title = f"{SOLVER_LABELS.get(record['solver'], record['solver'])} · {record['resolution']} × {record['resolution']} · {record['ground']} · {record.get('precision', record.get('profile', {}).get('precision', 'f64'))}"
             phases = profile.get('phases', [])
             left = axes[row, 0]
             if phases:

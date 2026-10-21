@@ -1,3 +1,4 @@
+use crate::linalg::real::{Real, scalar};
 /// Compute the per-cell current map directly from the resistance raster and
 /// the (per-cell) voltage map.
 ///
@@ -27,19 +28,19 @@
 ///
 /// # Returns
 /// Per-cell current map, length `nrows * ncols`.
-pub fn compute_current_map_from_raster(
-    resistance_data: &[f64],
-    ground_data: &[f64],
-    voltages: &[f64],
+pub fn compute_current_map_from_raster<F: Real>(
+    resistance_data: &[F],
+    ground_data: &[F],
+    voltages: &[F],
     nrows: usize,
     ncols: usize,
-    nodata: f64,
+    nodata: F,
     shunt_ground: bool,
-) -> Vec<f64> {
+) -> Vec<F> {
     let n = nrows * ncols;
-    let mut out = vec![0.0f64; n];
+    let mut out = vec![scalar::<F>(0.0); n];
 
-    let is_conductive = |r: f64| r.is_finite() && r > 0.0 && r != nodata;
+    let is_conductive = |r: F| r.is_finite() && r > scalar::<F>(0.0) && r != nodata;
 
     for ind in 0..n {
         let res = resistance_data[ind];
@@ -47,45 +48,45 @@ pub fn compute_current_map_from_raster(
             continue;
         }
         let v = voltages[ind];
-        let mut pos = 0.0f64;
-        let mut neg = 0.0f64;
+        let mut pos = scalar::<F>(0.0);
+        let mut neg = scalar::<F>(0.0);
 
         // upper neighbor
         if ind >= ncols {
             let nb = ind - ncols;
             if is_conductive(resistance_data[nb]) {
-                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
-                if branch > 0.0 { pos += branch; } else { neg -= branch; }
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
         // lower neighbor
         if ind < (nrows - 1) * ncols {
             let nb = ind + ncols;
             if is_conductive(resistance_data[nb]) {
-                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
-                if branch > 0.0 { pos += branch; } else { neg -= branch; }
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
         // left neighbor
         if ind % ncols != 0 {
             let nb = ind - 1;
             if is_conductive(resistance_data[nb]) {
-                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
-                if branch > 0.0 { pos += branch; } else { neg -= branch; }
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
         // right neighbor
         if (ind + 1) % ncols != 0 {
             let nb = ind + 1;
             if is_conductive(resistance_data[nb]) {
-                let branch = 2.0 * (v - voltages[nb]) / (res + resistance_data[nb]);
-                if branch > 0.0 { pos += branch; } else { neg -= branch; }
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
 
-        if shunt_ground && ground_data[ind] > 0.0 {
+        if shunt_ground && ground_data[ind] > scalar::<F>(0.0) {
             let shunt = ground_data[ind] * v;
-            if shunt > 0.0 { pos += shunt; } else { neg -= shunt; }
+            if shunt > scalar::<F>(0.0) { pos += shunt; } else { neg -= shunt; }
         }
 
         out[ind] = pos.max(neg);
@@ -102,13 +103,13 @@ pub fn compute_current_map_from_raster(
 // * `n` - The total number of grid points (size of the output vector).
 // # Returns
 // A vector containing the reconstructed grid values
-pub fn reconstruct_grid_map(
-    node_values: &[f64],
+pub fn reconstruct_grid_map<F: Real>(
+    node_values: &[F],
     cell_to_node: &[i32],
     n: usize,
-) -> Vec<f64> {
+) -> Vec<F> {
     debug_assert!(n <= cell_to_node.len(), "Requested grid size `n` exceeds cell_to_node length");
-    let mut grid = vec![0.0f64; n];
+    let mut grid = vec![scalar::<F>(0.0); n];
     for aj in 0..n {
         let node = cell_to_node[aj];
         debug_assert!(node >= 0, "Invalid cell_to_node data: node ID cannot be negative (found {})", node);

@@ -1,19 +1,22 @@
+use crate::linalg::real::{Real, scalar};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
-pub struct AscGrid {
-    pub data: Vec<f64>,
+pub struct AscGrid<F: Real = f64> {
+    pub data: Vec<F>,
     pub nrows: usize,
     pub ncols: usize,
     pub xllcorner: f64,
     pub yllcorner: f64,
     pub cellsize: f64,
-    pub nodata: f64,
+    pub nodata: F,
     pub ymax: f64,
 }
 
-pub fn parse_asc<P: AsRef<Path>>(path: P) -> AscGrid {
+pub fn parse_asc<P: AsRef<Path>>(path: P) -> AscGrid { parse_asc_typed::<f64, P>(path) }
+
+pub fn parse_asc_typed<F: Real, P: AsRef<Path>>(path: P) -> AscGrid<F> {
     let text = fs::read_to_string(path.as_ref())
         .unwrap_or_else(|e| panic!("cannot read {}: {}", path.as_ref().display(), e));
 
@@ -22,7 +25,7 @@ pub fn parse_asc<P: AsRef<Path>>(path: P) -> AscGrid {
     let mut xllcorner = 0.0f64;
     let mut yllcorner = 0.0f64;
     let mut cellsize = 0.0f64;
-    let mut nodata = -9999.0f64;
+    let mut nodata = scalar::<F>(-9999.0);
     let mut data = Vec::new();
 
     for (i, line) in BufReader::new(text.as_bytes()).lines().enumerate() {
@@ -41,13 +44,13 @@ pub fn parse_asc<P: AsRef<Path>>(path: P) -> AscGrid {
                     "xllcorner" | "xllcenter" => xllcorner = val,
                     "yllcorner" | "yllcenter" => yllcorner = val,
                     "cellsize" => cellsize = val,
-                    "nodata_value" => nodata = val,
+                    "nodata_value" => nodata = scalar::<F>(val),
                     _ => {}
                 }
             }
         } else {
             for token in trimmed.split_whitespace() {
-                data.push(token.parse::<f64>().unwrap_or(nodata));
+                data.push(token.parse::<F>().unwrap_or(nodata));
             }
         }
     }
@@ -56,9 +59,9 @@ pub fn parse_asc<P: AsRef<Path>>(path: P) -> AscGrid {
     AscGrid { data, nrows, ncols, xllcorner, yllcorner, cellsize, nodata, ymax }
 }
 
-pub fn write_asc<P: AsRef<Path>>(
-    path: P, data: &[f64], nrows: usize, ncols: usize,
-    xllcorner: f64, yllcorner: f64, cellsize: f64, nodata: f64,
+pub fn write_asc<F: Real, P: AsRef<Path>>(
+    path: P, data: &[F], nrows: usize, ncols: usize,
+    xllcorner: f64, yllcorner: f64, cellsize: f64, nodata: F,
 ) {
     let mut f = fs::File::create(path.as_ref())
         .unwrap_or_else(|e| panic!("cannot create {}: {}", path.as_ref().display(), e));

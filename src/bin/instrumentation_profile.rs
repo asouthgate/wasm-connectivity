@@ -5,12 +5,13 @@
 //!       --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt
 //! Diagnostics go to stderr.
 
+use wasm_connect::linalg::real::Real;
 use std::fs;
 
 use serde::Serialize;
 
 use wasm_connect::linalg::multigrid::MgOptions;
-use wasm_connect::raster::io::{parse_asc, AscGrid};
+use wasm_connect::raster::io::{parse_asc_typed, AscGrid};
 use wasm_connect::memory::{take_profile, InstrumentationProfile};
 use wasm_connect::solve::{self, GroundMode};
 
@@ -23,32 +24,35 @@ struct ProfileRecord {
     source_resolution: usize,
     solver: String,
     ground: String,
+    precision: String,
     total_iters: usize,
     profile: Option<InstrumentationProfile>,
 }
 
-fn emit(resolution: usize, solver: &str, ground: &str, total_iters: usize) {
+fn emit<F: Real>(resolution: usize, solver: &str, ground: &str, total_iters: usize) {
     let rec = ProfileRecord {
         accounting_scope: "Native solver payloads; low-memory solver reuses the source input as RHS. Excludes rasterization, caller extras and WASM/JSON wrapper storage.",
         resolution,
         source_resolution: resolution.min(1000),
         solver: solver.to_string(),
         ground: ground.to_string(),
+        precision: if std::mem::size_of::<F>() == 4 { "f32" } else { "f64" }.into(),
         total_iters,
         profile: take_profile(),
     };
     println!("{}", serde_json::to_string_pretty(&rec).unwrap());
 }
 
-const USAGE: &str = "Usage: instrumentation-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground shunt|dirichlet";
+const USAGE: &str = "Usage: instrumentation-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground shunt|dirichlet [--precision f32|f64]";
 
 struct Args {
     resolution: usize,
     solver: String,
     ground: String,
+    precision: String,
 }
 
-fn upsample_grid(grid: &mut AscGrid, resolution: usize) {
+fn upsample_grid<F: Real>(grid: &mut AscGrid<F>, resolution: usize) {
     let width = grid.ncols as f64 * grid.cellsize;
     grid.data = wasm_connect::raster::upsample_raster(
         &grid.data, grid.nrows, grid.ncols, resolution, resolution,
@@ -68,10 +72,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         .ok_or("resolution must be a positive integer")?;
     let mut solver = None;
     let mut ground = None;
+    let mut precision = None;
     let mut i = 1;
     while i < args.len() {
         let flag = args[i].as_str();
-        if !matches!(flag, "--solver" | "--ground") {
+        if !matches!(flag, "--solver" | "--ground" | "--precision") {
             return Err(format!("unknown argument: {flag}"));
         }
         let value = args
@@ -80,6 +85,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         let target = match flag {
             "--solver" if matches!(value.as_str(), "jacobi" | "mg" | "mg-lowmem") => &mut solver,
             "--ground" if matches!(value.as_str(), "shunt" | "dirichlet") => &mut ground,
+            "--precision" if matches!(value.as_str(), "f32" | "f64") => &mut precision,
             _ => return Err(format!("unsupported value for {flag}: {value}")),
         };
         if target.replace(value.clone()).is_some() {
@@ -91,6 +97,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         resolution,
         solver: solver.ok_or("--solver is required")?,
         ground: ground.ok_or("--ground is required")?,
+        precision: precision.unwrap_or_else(|| "f64".into()),
     })
 }
 
@@ -104,16 +111,22 @@ fn main() {
         resolution,
         solver,
         ground,
+        precision,
     } = parse_args(&arguments).unwrap_or_else(|error| {
         eprintln!("{error}\n{USAGE}");
         std::process::exit(2);
     });
+    if precision == "f32" { run::<f32>(resolution, solver, ground); }
+    else { run::<f64>(resolution, solver, ground); }
+}
+
+fn run<F: Real>(resolution: usize, solver: String, ground: String) {
     let options = MgOptions::default();
 
     let source_resolution = resolution.min(1000);
-    let mut base = parse_asc(&format!("{DATA_DIR}/base_resistance_{source_resolution}.asc"));
-    let mut src = parse_asc(&format!("{DATA_DIR}/source_{source_resolution}.asc"));
-    let mut gnd = parse_asc(&format!("{DATA_DIR}/ground_{source_resolution}.asc"));
+    let mut base = parse_asc_typed::<F, _>(&format!("{DATA_DIR}/base_resistance_{source_resolution}.asc"));
+    let mut src = parse_asc_typed::<F, _>(&format!("{DATA_DIR}/source_{source_resolution}.asc"));
+    let mut gnd = parse_asc_typed::<F, _>(&format!("{DATA_DIR}/ground_{source_resolution}.asc"));
     for grid in [&base, &src, &gnd] {
         assert!(grid.nrows > 0 && grid.ncols > 0, "ASC dimensions must be positive");
         assert_eq!(grid.data.len(), grid.nrows * grid.ncols,
@@ -160,7 +173,7 @@ fn main() {
         _ => unreachable!(),
     };
     let max_iter = 100_000;
-    let tol = wasm_connect::DEFAULT_TOL;
+    let tol = F::DEFAULT_TOLERANCE;
     let remove_average = true;
     let result = match solver.as_str() {
         "jacobi" => solve::solve_raster_sources_jacobi(
@@ -203,7 +216,7 @@ fn main() {
         ),
         _ => unreachable!(),
     };
-    emit(resolution, &solver, &ground, result.total_iters);
+    emit::<F>(resolution, &solver, &ground, result.total_iters);
 }
 
 #[cfg(test)]

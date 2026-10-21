@@ -10,11 +10,11 @@ pub const FILL_RESISTANCE: f64 = 1e9;
 
 /// Replace nodata / non-positive / non-finite resistance with
 /// [`FILL_RESISTANCE`] so every cell becomes a graph node.
-pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
+pub fn fill_nodata<F: crate::linalg::real::Real>(data: &[F], nodata: F) -> Vec<F> {
     data.iter()
         .map(|&v| {
-            if v == nodata || !v.is_finite() || v <= 0.0 {
-                FILL_RESISTANCE
+            if v == nodata || !v.is_finite() || v <= F::zero() {
+                F::from_f64(FILL_RESISTANCE).unwrap()
             } else {
                 v
             }
@@ -24,13 +24,13 @@ pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
 
 /// Nearest-neighbour upsampling in row-major order. Values, including nodata,
 /// are copied unchanged; callers scale cell size to preserve the extent.
-pub fn upsample_raster(
-    data: &[f64], nrows: usize, ncols: usize, target_rows: usize, target_cols: usize,
-) -> Vec<f64> {
+pub fn upsample_raster<F: crate::linalg::real::Real>(
+    data: &[F], nrows: usize, ncols: usize, target_rows: usize, target_cols: usize,
+) -> Vec<F> {
     assert!(nrows > 0 && ncols > 0, "source dimensions must be positive");
     assert_eq!(data.len(), nrows * ncols, "source dimensions must match its data");
     assert!(target_rows >= nrows && target_cols >= ncols, "upsampling cannot shrink a dimension");
-    let mut output = vec![0.0; target_rows * target_cols];
+    let mut output = vec![F::zero(); target_rows * target_cols];
     for row in 0..target_rows {
         let source_row = row * nrows / target_rows;
         for col in 0..target_cols {

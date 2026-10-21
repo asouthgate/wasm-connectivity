@@ -6,6 +6,7 @@ import { SCENARIOS } from '../scenarios';
 export default function ScenarioBenchmark() {
   const [previews, setPreviews] = useState({});
   const [results, setResults] = useState({});
+  const [precision, setPrecision] = useState('f64');
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState('Loading scenario previews...');
   const [error, setError] = useState(false);
@@ -43,14 +44,14 @@ export default function ScenarioBenchmark() {
     try {
       for (const scenario of SCENARIOS) {
         if (!mounted.current) break;
-        setStatus(`Running ${scenario.name}...`);
+        setStatus(`Running ${scenario.name} (${precision})...`);
         const worker = new Worker(new URL('../workers/benchmark.js', import.meta.url), { type: 'module' });
         try {
           const result = await new Promise((resolve, reject) => {
             active.current = { cancel: () => { worker.terminate(); reject(new Error('Run cancelled')); } };
             worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.result);
             worker.onerror = event => reject(new Error(event.message || 'Worker failed'));
-            worker.postMessage({ id: 1, fn: 'benchmark_scenario', args: [scenario.id] });
+            worker.postMessage({ id: 1, fn: 'benchmark_scenario', args: [scenario.id, precision] });
           });
           if (mounted.current) setResults(previous => ({ ...previous, [scenario.id]: result }));
         } catch (err) {
@@ -65,7 +66,7 @@ export default function ScenarioBenchmark() {
       busy.current = false;
       if (mounted.current) {
         setRunning(false); setError(failed > 0);
-        setStatus(failed ? `Finished · ${failed} scenario${failed === 1 ? '' : 's'} failed` : 'Finished · 3 scenarios');
+        setStatus(failed ? `Finished · ${failed} scenario${failed === 1 ? '' : 's'} failed` : `Finished · 3 scenarios · ${precision}`);
       }
     }
   }
@@ -73,6 +74,14 @@ export default function ScenarioBenchmark() {
   return (
     <div>
       <div className="row">
+        <label>Precision
+          <select value={precision} disabled={running} onChange={e => {
+            setPrecision(e.target.value); setResults({}); setError(false);
+            setStatus(`2000x2000 · low-memory MG · Shunt ground · ${e.target.value}`);
+          }}>
+            <option value="f64">f64</option><option value="f32">f32</option>
+          </select>
+        </label>
         <button onClick={run} disabled={running || Object.keys(previews).length !== 3}>Run</button>
       </div>
       <StatusBar status={status} loading={running} error={error} />

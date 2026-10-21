@@ -1,3 +1,4 @@
+use crate::linalg::real::Real;
 use std::cell::RefCell;
 use crate::linalg::operator::Operator;
 
@@ -68,19 +69,20 @@ fn divide(value: f64, denominator: f64) -> f64 {
 }
 
 #[cfg(test)]
-fn measure(op: &dyn Operator, rhs: &[f64], x: &[f64]) -> (f64, f64) {
+fn measure<F: Real>(op: &dyn Operator<F>, rhs: &[F], x: &[F]) -> (f64, f64) {
     let (absolute, relative, _) = measure_weighted(op, rhs, x);
     (absolute, relative)
 }
 
-fn measure_weighted(op: &dyn Operator, rhs: &[f64], x: &[f64]) -> (f64, f64, f64) {
-    let mut applied = vec![0.0; op.n()];
+fn measure_weighted<F: Real>(op: &dyn Operator<F>, rhs: &[F], x: &[F]) -> (f64, f64, f64) {
+    let mut applied = vec![F::zero(); op.n()];
     op.matvec(x, &mut applied);
     let diagonal = op.diag_inv();
     let mut weighted = 0.0_f64;
     let mut residual = 0.0_f64;
     let mut rhs_norm = 0.0_f64;
     for ((&d, &ae), &inverse) in rhs.iter().zip(&applied).zip(&diagonal) {
+        let (d, ae, inverse) = (d.to_f64().unwrap(), ae.to_f64().unwrap(), inverse.to_f64().unwrap());
         weighted = weighted.hypot((d - ae) * inverse.abs().sqrt());
         residual = residual.hypot(d - ae);
         rhs_norm = rhs_norm.hypot(d);
@@ -127,8 +129,8 @@ impl Trace {
     }
 }
 
-pub(crate) fn level_sample(level: usize, phase: &'static str, sweep: Option<(usize, usize)>,
-    op: &dyn Operator, rhs: &[f64], x: &[f64], entry: bool)
+pub(crate) fn level_sample<F: Real>(level: usize, phase: &'static str, sweep: Option<(usize, usize)>,
+    op: &dyn Operator<F>, rhs: &[F], x: &[F], entry: bool)
 {
     let (absolute, relative, weighted) = measure_weighted(op, rhs, x);
     TRACE.with(|slot| {
@@ -137,7 +139,7 @@ pub(crate) fn level_sample(level: usize, phase: &'static str, sweep: Option<(usi
     });
 }
 
-pub(crate) fn smoother_info(level: usize, op: &dyn Operator, cached: Option<(&[f64], f64)>) {
+pub(crate) fn smoother_info<F: Real>(level: usize, op: &dyn Operator<F>, cached: Option<(&[F], F)>) {
     let first = TRACE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let trace = slot.as_mut().expect("profiling scope required");
@@ -150,7 +152,7 @@ pub(crate) fn smoother_info(level: usize, op: &dyn Operator, cached: Option<(&[f
     if let Some((cached, omega)) = cached {
         let actual = op.diag_inv();
         let mismatch = cached.iter().zip(actual).fold(0.0_f64, |max, (&a, b)| {
-            max.max(divide((a - b).abs(), a.abs().max(b.abs())))
+            max.max(divide((a - b).abs().to_f64().unwrap(), a.abs().max(b.abs()).to_f64().unwrap()))
         });
         eprintln!("PROFILE level {level}: Jacobi omega={omega:.9e}, max relative cached diagonal mismatch={mismatch:.6e}");
     } else {
@@ -158,14 +160,14 @@ pub(crate) fn smoother_info(level: usize, op: &dyn Operator, cached: Option<(&[f
     }
 }
 
-pub(crate) fn global_sample(iteration: usize, phase: &'static str,
-    op: &dyn Operator, rhs: &[f64], x: &[f64])
+pub(crate) fn global_sample<F: Real>(iteration: usize, phase: &'static str,
+    op: &dyn Operator<F>, rhs: &[F], x: &[F])
 {
     global_sweep_sample(iteration, phase, None, op, rhs, x);
 }
 
-pub(crate) fn global_sweep_sample(iteration: usize, phase: &'static str, sweep: Option<(usize, usize)>,
-    op: &dyn Operator, rhs: &[f64], x: &[f64])
+pub(crate) fn global_sweep_sample<F: Real>(iteration: usize, phase: &'static str, sweep: Option<(usize, usize)>,
+    op: &dyn Operator<F>, rhs: &[F], x: &[F])
 {
     let (absolute, relative, weighted) = measure_weighted(op, rhs, x);
     TRACE.with(|slot| {

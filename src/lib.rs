@@ -1,3 +1,4 @@
+use crate::linalg::real::Real;
 pub mod circuit;
 pub mod geospatial;
 pub mod linalg;
@@ -15,7 +16,7 @@ use serde_json::json;
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
 pub const DEFAULT_MAX_ITER: usize = 100_000;
-pub const DEFAULT_TOL: f64 = 1e-4;
+pub const DEFAULT_TOL: f64 = <f64 as Real>::DEFAULT_TOLERANCE;
 
 fn json_response<T: Serialize>(output: &T) -> String {
     serde_json::to_string(output).unwrap_or_else(|e| {
@@ -101,6 +102,31 @@ pub fn solve_raster_sources_mg(
     max_iter: usize,
     tol: f64,
     use_dirichlet_ground: bool,
+) -> String { solve_raster_sources_mg_impl(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+#[wasm_bindgen]
+pub fn solve_raster_sources_mg_f32(
+    resistance_data: Vec<f32>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f32,
+    source_data: Vec<f32>,
+    ground_data: Vec<f32>,
+    max_iter: usize,
+    tol: f32,
+    use_dirichlet_ground: bool,
+) -> String { solve_raster_sources_mg_impl(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+fn solve_raster_sources_mg_impl<F: Real>(
+    resistance_data: Vec<F>,
+    nrows: usize,
+    ncols: usize,
+    nodata: F,
+    source_data: Vec<F>,
+    ground_data: Vec<F>,
+    max_iter: usize,
+    tol: F,
+    use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
     let annotated = solve::solve_raster_sources_mg(
@@ -124,10 +150,35 @@ pub fn solve_raster_sources_mg_stencil(
     nrows: usize,
     ncols: usize,
     nodata: f64,
-    mut source_data: Vec<f64>,
-    mut ground_data: Vec<f64>,
+    source_data: Vec<f64>,
+    ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
+    use_dirichlet_ground: bool,
+) -> String { solve_raster_sources_mg_stencil_impl(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+#[wasm_bindgen]
+pub fn solve_raster_sources_mg_stencil_f32(
+    resistance_data: Vec<f32>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f32,
+    source_data: Vec<f32>,
+    ground_data: Vec<f32>,
+    max_iter: usize,
+    tol: f32,
+    use_dirichlet_ground: bool,
+) -> String { solve_raster_sources_mg_stencil_impl(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+fn solve_raster_sources_mg_stencil_impl<F: Real>(
+    resistance_data: Vec<F>,
+    nrows: usize,
+    ncols: usize,
+    nodata: F,
+    mut source_data: Vec<F>,
+    mut ground_data: Vec<F>,
+    max_iter: usize,
+    tol: F,
     use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
@@ -171,6 +222,41 @@ pub fn run_geospatial_pipeline_mg(
     max_iter: usize,
     tol: f64,
     use_dirichlet_ground: bool,
+) -> String { run_geospatial_pipeline_mg_impl(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+#[wasm_bindgen]
+pub fn run_geospatial_pipeline_mg_f32(
+    base_raster: Vec<f32>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f32,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<f32>,
+    ground_data: Vec<f32>,
+    max_iter: usize,
+    tol: f32,
+    use_dirichlet_ground: bool,
+) -> String { run_geospatial_pipeline_mg_impl(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+fn run_geospatial_pipeline_mg_impl<F: Real>(
+    base_raster: Vec<F>,
+    nrows: usize,
+    ncols: usize,
+    nodata: F,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<F>,
+    ground_data: Vec<F>,
+    max_iter: usize,
+    tol: F,
+    use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
     let output = geospatial::run_geospatial_pipeline_mg(
@@ -207,6 +293,41 @@ pub fn run_geospatial_pipeline_mg_stencil(
     ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
+    use_dirichlet_ground: bool,
+) -> String { run_geospatial_pipeline_mg_stencil_impl(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+#[wasm_bindgen]
+pub fn run_geospatial_pipeline_mg_stencil_f32(
+    base_raster: Vec<f32>,
+    nrows: usize,
+    ncols: usize,
+    nodata: f32,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<f32>,
+    ground_data: Vec<f32>,
+    max_iter: usize,
+    tol: f32,
+    use_dirichlet_ground: bool,
+) -> String { run_geospatial_pipeline_mg_stencil_impl(base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
+
+fn run_geospatial_pipeline_mg_stencil_impl<F: Real>(
+    base_raster: Vec<F>,
+    nrows: usize,
+    ncols: usize,
+    nodata: F,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+    source_data: Vec<F>,
+    ground_data: Vec<F>,
+    max_iter: usize,
+    tol: F,
     use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
@@ -250,9 +371,9 @@ pub fn upsample_raster(
 }
 
 #[derive(Serialize)]
-struct RasterizeOutput {
-    resistance_map: Vec<f64>,
-    layer_masks: Vec<geospatial::LayerMask>,
+struct RasterizeOutput<F: Real = f64> {
+    resistance_map: Vec<F>,
+    layer_masks: Vec<geospatial::LayerMask<F>>,
     nrows: usize,
     ncols: usize,
     warnings: Vec<String>,
@@ -264,6 +385,31 @@ pub fn rasterize_geojson(
     nrows: usize,
     ncols: usize,
     _nodata: f64,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+) -> String { rasterize_geojson_impl(base_raster, nrows, ncols, _nodata, geojson_str, layer_params_str, xmin, ymax, cellsize) }
+
+#[wasm_bindgen]
+pub fn rasterize_geojson_f32(
+    base_raster: Vec<f32>,
+    nrows: usize,
+    ncols: usize,
+    _nodata: f32,
+    geojson_str: String,
+    layer_params_str: String,
+    xmin: f64,
+    ymax: f64,
+    cellsize: f64,
+) -> String { rasterize_geojson_impl(base_raster, nrows, ncols, _nodata, geojson_str, layer_params_str, xmin, ymax, cellsize) }
+
+fn rasterize_geojson_impl<F: Real>(
+    base_raster: Vec<F>,
+    nrows: usize,
+    ncols: usize,
+    _nodata: F,
     geojson_str: String,
     layer_params_str: String,
     xmin: f64,

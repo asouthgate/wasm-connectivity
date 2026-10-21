@@ -1,25 +1,26 @@
+use crate::linalg::real::{Real, scalar};
 use crate::circuit::grid::Grid;
 
 // Compute the harmonic mean of two conductances
 // which is used to determine the effective conductance between two nodes in a grid.
-pub(crate) fn conductance_avg(a: f64, b: f64) -> f64 {
+pub(crate) fn conductance_avg<F: Real>(a: F, b: F) -> F {
     let denom = a + b;
-    if denom > 0.0 {
-        2.0 * a * b / denom
+    if denom > scalar::<F>(0.0) {
+        scalar::<F>(2.0) * a * b / denom
     } else {
-        0.0
+        scalar::<F>(0.0)
     }
 }
 
-pub struct EdgeTriplets {
+pub struct EdgeTriplets<F: Real = f64> {
     pub row_indices: Vec<usize>,
     pub col_indices: Vec<usize>,
-    pub values: Vec<f64>,
+    pub values: Vec<F>,
 }
 
-impl EdgeTriplets {
+impl<F: Real> EdgeTriplets<F> {
     pub fn new() -> Self {
-        EdgeTriplets {
+        EdgeTriplets::<F> {
             row_indices: Vec::new(),
             col_indices: Vec::new(),
             values: Vec::new(),
@@ -28,14 +29,14 @@ impl EdgeTriplets {
 
     // Convenience method to create an EdgeTriplets with pre-allocated capacity
     pub fn with_capacity(capacity: usize) -> Self {
-        EdgeTriplets {
+        EdgeTriplets::<F> {
             row_indices: Vec::with_capacity(capacity),
             col_indices: Vec::with_capacity(capacity),
             values: Vec::with_capacity(capacity),
         }
     }
 
-    pub fn push(&mut self, i: usize, j: usize, v: f64) {
+    pub fn push(&mut self, i: usize, j: usize, v: F) {
         self.row_indices.push(i);
         self.col_indices.push(j);
         self.values.push(v);
@@ -46,7 +47,7 @@ impl EdgeTriplets {
     }
 }
 
-impl Default for EdgeTriplets {
+impl<F: Real> Default for EdgeTriplets<F> {
     fn default() -> Self {
         Self::new()
     }
@@ -59,7 +60,7 @@ impl Default for EdgeTriplets {
 // * `cell_to_node` - A slice containing the mapping from grid indices to node indices (1-based).
 // # Returns
 // An EdgeTriplets struct containing the edges and their corresponding conductance values.
-pub fn build_conductance_edges(conductance: &Grid, cell_to_node: &[i32]) -> EdgeTriplets {
+pub fn build_conductance_edges<F: Real>(conductance: &Grid<F>, cell_to_node: &[i32]) -> EdgeTriplets::<F> {
     let nrows = conductance.nrows;
     let ncols = conductance.ncols;
 

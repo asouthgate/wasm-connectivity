@@ -1,5 +1,6 @@
 //! Node-centred bilinear transfers: dimensions are stored, entries are generated.
 
+use crate::linalg::real::{Real, scalar};
 // One-dimensional weights at fine offsets -1, 0, 1 from a coarse node.
 const STENCIL_WEIGHTS: [f64; 3] = [0.5, 1.0, 0.5];
 
@@ -22,7 +23,7 @@ impl Transfer {
     /// Out-of-grid contributions are omitted; unmatched final fine points copy
     /// the nearest coarse endpoint.
     #[inline]
-    pub fn for_each_column(&self, coarse: usize, mut f: impl FnMut(usize, f64)) {
+    pub fn for_each_column<F: Real>(&self, coarse: usize, mut f: impl FnMut(usize, F)) {
         let cr = coarse / self.coarse_ncols;
         let cc = coarse % self.coarse_ncols;
         for (ri, &rw) in STENCIL_WEIGHTS.iter().enumerate() {
@@ -45,7 +46,7 @@ impl Transfer {
                 } else {
                     cw
                 };
-                f(fr as usize * self.fine_ncols + fc as usize, rw * cw);
+                f(fr as usize * self.fine_ncols + fc as usize, scalar::<F>(rw * cw));
             }
         }
     }
@@ -54,8 +55,8 @@ impl Transfer {
     /// it, in coarse-index order. In P^T A P, this supplies P[b, j] for a fine
     /// index b reached through A[a, b]; columns instead select coarse indices.
     #[inline]
-    pub fn for_each_row(&self, fine: usize, mut f: impl FnMut(usize, f64)) {
-        self.for_each_row_coordinate(fine, |cr, cc, weight| {
+    pub fn for_each_row<F: Real>(&self, fine: usize, mut f: impl FnMut(usize, F)) {
+        self.for_each_row_coordinate::<F>(fine, |cr, cc, weight| {
             f(cr * self.coarse_ncols + cc, weight);
         });
     }
@@ -63,7 +64,7 @@ impl Transfer {
     /// Coordinate form avoids dividing generated coarse indices again when
     /// accumulating into a local stencil centred on a known coarse cell.
     #[inline]
-    pub fn for_each_row_coordinate(&self, fine: usize, mut f: impl FnMut(usize, usize, f64)) {
+    pub fn for_each_row_coordinate<F: Real>(&self, fine: usize, mut f: impl FnMut(usize, usize, F)) {
         let fr = fine / self.fine_ncols;
         let fc = fine % self.fine_ncols;
         let r0 = fr / 2;
@@ -74,23 +75,23 @@ impl Transfer {
             STENCIL_WEIGHTS[usize::from(r0 == r1)] * STENCIL_WEIGHTS[usize::from(c0 == c1)];
         for cr in r0..=r1 {
             for cc in c0..=c1 {
-                f(cr, cc, weight);
+                f(cr, cc, scalar::<F>(weight));
             }
         }
     }
 
     /// fine += P * coarse.
-    pub fn prolongate(&self, coarse: &[f64], fine: &mut [f64]) {
+    pub fn prolongate<F: Real>(&self, coarse: &[F], fine: &mut [F]) {
         for (col, &value) in coarse.iter().enumerate() {
-            self.for_each_column(col, |row, weight| fine[row] += weight * value);
+            self.for_each_column::<F>(col, |row, weight| fine[row] += weight * value);
         }
     }
 
     /// coarse = P^T * fine.
-    pub fn restrict(&self, fine: &[f64], coarse: &mut [f64]) {
+    pub fn restrict<F: Real>(&self, fine: &[F], coarse: &mut [F]) {
         for (col, value) in coarse.iter_mut().enumerate() {
-            *value = 0.0;
-            self.for_each_column(col, |row, weight| *value += weight * fine[row]);
+            *value = scalar::<F>(0.0);
+            self.for_each_column::<F>(col, |row, weight| *value += weight * fine[row]);
         }
     }
 }

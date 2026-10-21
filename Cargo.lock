@@ -937,6 +937,7 @@ dependencies = [
  "geo",
  "geojson",
  "image",
+ "num-traits",
  "serde",
  "serde_json",
  "sprs",

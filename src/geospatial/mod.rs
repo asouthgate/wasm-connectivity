@@ -1,3 +1,4 @@
+use crate::linalg::real::{Real, scalar};
 use geojson::GeoJson;
 use geo::{
     BoundingRect, Contains, EuclideanDistance, Geometry, LineString,
@@ -66,13 +67,13 @@ fn point_to_line_distance(pt: &Point<f64>, ls: &LineString<f64>) -> f64 {
     min_dist
 }
 
-fn rasterize_lines_bresenham(
-    raster: &mut [f64],
-    mask: &mut [f64],
+fn rasterize_lines_bresenham<F: Real>(
+    raster: &mut [F],
+    mask: &mut [F],
     nrows: usize,
     ncols: usize,
     lines: &[&LineString<f64>],
-    value: f64,
+    value: F,
     transform: &GeoTransform,
 ) {
     for ls in lines {
@@ -97,7 +98,7 @@ fn rasterize_lines_bresenham(
                     if value > raster[idx] {
                         raster[idx] = value;
                     }
-                    mask[idx] = 1.0;
+                    mask[idx] = F::one();
                 }
                 if c0 == c1 && r0 == r1 {
                     break;
@@ -132,13 +133,13 @@ fn rasterize_lines_bresenham(
 /// * `poly` - The polygon to rasterize.
 /// * `value` - The resistance value to assign to the raster cells covered by the polygon.
 /// * `transform` - The geospatial transformation for coordinate conversions.
-fn rasterize_polygon(
-    raster: &mut [f64],
-    mask: &mut [f64],
+fn rasterize_polygon<F: Real>(
+    raster: &mut [F],
+    mask: &mut [F],
     nrows: usize,
     ncols: usize,
     poly: &Polygon<f64>,
-    value: f64,
+    value: F,
     transform: &GeoTransform,
 ) {
     let bbox = match poly.bounding_rect() {
@@ -170,20 +171,20 @@ fn rasterize_polygon(
                     raster[idx] = value;
                 }
                 // Write to layer mask (always 1.0 if inside)
-                mask[idx] = 1.0;
+                mask[idx] = F::one();
             }
         }
     }
 }
 
 /// Rasterizes a set of lines into a raster grid, updating the raster values and mask.
-fn rasterize_lines(
-    raster: &mut [f64],
-    mask: &mut [f64],
+fn rasterize_lines<F: Real>(
+    raster: &mut [F],
+    mask: &mut [F],
     nrows: usize,
     ncols: usize,
     lines: &[&LineString<f64>],
-    value: f64,
+    value: F,
     width: f64,
     transform: &GeoTransform,
 ) {
@@ -224,7 +225,7 @@ fn rasterize_lines(
                     if value > raster[idx] {
                         raster[idx] = value;
                     }
-                    mask[idx] = 1.0;
+                    mask[idx] = F::one();
                 }
             }
         }
@@ -242,18 +243,18 @@ fn rasterize_lines(
 /// * `base_raster` - The base resistance raster data.
 /// * `nrows` - Number of rows in the raster.
 /// * `ncols` - Number of columns in the raster.        
-pub fn rasterize_features(
+pub fn rasterize_features<F: Real>(
     geojson_str: &str,
     layer_params: &HashMap<String, LayerParams>,
-    base_raster: &[f64],
+    base_raster: &[F],
     nrows: usize,
     ncols: usize,
     transform: &GeoTransform,
     warnings: &mut Vec<String>,
-) -> (Vec<f64>, HashMap<String, Vec<f64>>) {
+) -> (Vec<F>, HashMap<String, Vec<F>>) {
     let mut res_map = base_raster.to_vec();
     let n = nrows * ncols;
-    let mut layer_masks: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut layer_masks: HashMap<String, Vec<F>> = HashMap::new();
 
     let geojson: GeoJson = match geojson_str.parse() {
         Ok(g) => g,
@@ -301,8 +302,9 @@ pub fn rasterize_features(
             .get("resistanceValue")
             .and_then(|v| v.as_f64())
             .unwrap_or(params.resistance);
+        let feature_resistance = scalar::<F>(feature_resistance);
 
-        let mask = layer_masks.entry(layer_name.to_string()).or_insert_with(|| vec![0.0f64; n]);
+        let mask = layer_masks.entry(layer_name.to_string()).or_insert_with(|| vec![F::zero(); n]);
 
         match geo_geom {
             Geometry::Polygon(poly) => {
@@ -329,17 +331,17 @@ pub fn rasterize_features(
 }
 
 #[derive(Serialize)]
-pub struct LayerMask {
+pub struct LayerMask<F: Real = f64> {
     pub name: String,
-    pub data: Vec<f64>,
+    pub data: Vec<F>,
 }
 
 #[derive(Serialize)]
-pub struct GeospatialOutput {
-    pub resistance_map: Vec<f64>,
-    pub current_map: Vec<f64>,
-    pub voltage_map: Vec<f64>,
-    pub layer_masks: Vec<LayerMask>,
+pub struct GeospatialOutput<F: Real = f64> {
+    pub resistance_map: Vec<F>,
+    pub current_map: Vec<F>,
+    pub voltage_map: Vec<F>,
+    pub layer_masks: Vec<LayerMask<F>>,
     pub nrows: usize,
     pub ncols: usize,
     pub warnings: Vec<String>,
@@ -347,8 +349,8 @@ pub struct GeospatialOutput {
     pub total_iters: usize,
 }
 
-pub fn prepare_geospatial_layers(
-    base_raster: &[f64],
+pub fn prepare_geospatial_layers<F: Real>(
+    base_raster: &[F],
     nrows: usize,
     ncols: usize,
     geojson_str: &str,
@@ -356,7 +358,7 @@ pub fn prepare_geospatial_layers(
     xmin: f64,
     ymax: f64,
     cellsize: f64,
-) -> (Vec<f64>, Vec<LayerMask>, Vec<String>) {
+) -> (Vec<F>, Vec<LayerMask<F>>, Vec<String>) {
     let layer_params: HashMap<String, LayerParams> = match serde_json::from_str(layer_params_str) {
         Ok(p) => p,
         Err(e) => {
@@ -374,30 +376,30 @@ pub fn prepare_geospatial_layers(
     let (resistance_data, m) = rasterize_features(
         geojson_str, &layer_params, base_raster, nrows, ncols, &transform, &mut warnings,
     );
-    let mut layer_masks: Vec<LayerMask> = m.into_iter()
-        .filter(|(_, v)| v.iter().any(|&x| x > 0.0))
+    let mut layer_masks: Vec<LayerMask<F>> = m.into_iter()
+        .filter(|(_, v)| v.iter().any(|&x| x > F::zero()))
         .map(|(name, data)| LayerMask { name, data })
         .collect();
     layer_masks.sort_by(|a, b| a.name.cmp(&b.name));
     (resistance_data, layer_masks, warnings)
 }
 
-pub fn run_geospatial_pipeline_mg(
-    base_raster: &[f64],
+pub fn run_geospatial_pipeline_mg<F: Real>(
+    base_raster: &[F],
     nrows: usize,
     ncols: usize,
-    nodata: f64,
+    nodata: F,
     geojson_str: &str,
     layer_params_str: &str,
     xmin: f64,
     ymax: f64,
     cellsize: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
+    source_data: &[F],
+    ground_data: &[F],
     max_iter: usize,
-    tol: f64,
+    tol: F,
     ground_mode: crate::solve::GroundMode,
-) -> GeospatialOutput {
+) -> GeospatialOutput<F> {
     run_geospatial_pipeline_mg_impl(
         base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize,
         source_data, ground_data, max_iter, tol, ground_mode, false,
@@ -407,22 +409,22 @@ pub fn run_geospatial_pipeline_mg(
 /// Like [`run_geospatial_pipeline_mg`], but solves with the
 /// low-memory hierarchy: levels 0 and 1 are matrix-free and all transfers
 /// are geometric stencils.
-pub fn run_geospatial_pipeline_mg_stencil(
-    base_raster: &[f64],
+pub fn run_geospatial_pipeline_mg_stencil<F: Real>(
+    base_raster: &[F],
     nrows: usize,
     ncols: usize,
-    nodata: f64,
+    nodata: F,
     geojson_str: &str,
     layer_params_str: &str,
     xmin: f64,
     ymax: f64,
     cellsize: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
+    source_data: &[F],
+    ground_data: &[F],
     max_iter: usize,
-    tol: f64,
+    tol: F,
     ground_mode: crate::solve::GroundMode,
-) -> GeospatialOutput {
+) -> GeospatialOutput<F> {
     run_geospatial_pipeline_mg_impl(
         base_raster, nrows, ncols, nodata, geojson_str, layer_params_str, xmin, ymax, cellsize,
         source_data, ground_data, max_iter, tol, ground_mode, true,
@@ -430,23 +432,23 @@ pub fn run_geospatial_pipeline_mg_stencil(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_geospatial_pipeline_mg_impl(
-    base_raster: &[f64],
+fn run_geospatial_pipeline_mg_impl<F: Real>(
+    base_raster: &[F],
     nrows: usize,
     ncols: usize,
-    nodata: f64,
+    nodata: F,
     geojson_str: &str,
     layer_params_str: &str,
     xmin: f64,
     ymax: f64,
     cellsize: f64,
-    source_data: &[f64],
-    ground_data: &[f64],
+    source_data: &[F],
+    ground_data: &[F],
     max_iter: usize,
-    tol: f64,
+    tol: F,
     ground_mode: crate::solve::GroundMode,
     use_stencil: bool,
-) -> GeospatialOutput {
+) -> GeospatialOutput<F> {
     let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
         base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
     );

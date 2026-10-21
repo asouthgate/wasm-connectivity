@@ -12,11 +12,12 @@ const DEFAULT_PARAMS = {
   buildings:{ resistance: 500, width: 0 },
 };
 
-const RUNS = ['gmg', 'gmg-lowmem'];
+const RUNS = ['gmg', 'gmg-lowmem', 'gmg-lowmem-f32'];
 
 const RUN_LABELS = {
-  gmg: 'GMG CG',
-  'gmg-lowmem': 'GMG CG (low-mem)',
+  gmg: 'GMG CG (f64)',
+  'gmg-lowmem': 'GMG CG (low-mem, f64)',
+  'gmg-lowmem-f32': 'GMG CG (low-mem, f32)',
 };
 
 export const BENCHMARK_HEADERS = [

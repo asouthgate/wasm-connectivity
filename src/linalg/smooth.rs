@@ -1,36 +1,37 @@
+use crate::linalg::real::{Real, scalar};
 use crate::linalg::operator::Operator;
 
 /// Coefficients are cached only for the diagonal-based smoother. Explicit MG
 /// retains its existing Gauss–Seidel update and damping.
-pub(super) enum Smoother {
+pub(super) enum Smoother<F: Real = f64> {
     SymmetricGaussSeidel,
-    WeightedJacobi { diag_inv: Vec<f64>, omega: f64 },
+    WeightedJacobi { diag_inv: Vec<F>, omega: F },
 }
 
-impl Smoother {
-    pub(super) fn weighted_jacobi(op: &dyn Operator, requested_omega: f64) -> Self {
-        let mut diag_inv = vec![0.0; op.n()];
-        let mut upper_bound: f64 = 0.0;
+impl<F: Real> Smoother<F> {
+    pub(super) fn weighted_jacobi(op: &dyn Operator<F>, requested_omega: F) -> Self {
+        let mut diag_inv = vec![scalar::<F>(0.0); op.n()];
+        let mut upper_bound: F = scalar::<F>(0.0);
         for (row, inverse) in diag_inv.iter_mut().enumerate() {
-            let mut diagonal: f64 = 0.0;
-            let mut abs_sum: f64 = 0.0;
+            let mut diagonal: F = scalar::<F>(0.0);
+            let mut abs_sum: F = scalar::<F>(0.0);
             op.for_each_entry(row, &mut |col, value| {
                 abs_sum += value.abs();
                 if col == row {
                     diagonal = value;
                 }
             });
-            if diagonal.abs() > 1e-15 {
-                *inverse = 1.0 / diagonal.abs();
+            if diagonal.abs() > scalar::<F>(1e-15) {
+                *inverse = scalar::<F>(1.0) / diagonal.abs();
                 upper_bound = upper_bound.max(abs_sum * *inverse);
             }
         }
         // Symmetric diagonal scaling has the same eigenvalues as D^-1 L,
         // but can give a much tighter row-sum bound when diagonals vary.
-        let mut symmetric_bound: f64 = 0.0;
+        let mut symmetric_bound: F = scalar::<F>(0.0);
         for row in 0..op.n() {
             let row_scale = diag_inv[row].sqrt();
-            let mut abs_sum = 0.0;
+            let mut abs_sum = scalar::<F>(0.0);
             op.for_each_entry(row, &mut |col, value| {
                 abs_sum += value.abs() * row_scale * diag_inv[col].sqrt();
             });
@@ -39,17 +40,17 @@ impl Smoother {
         upper_bound = upper_bound.min(symmetric_bound);
         // Both bounds are conservative. Keep omega*lambda_max <= 1.95 < 2,
         // leaving a 2.5% margin below the Jacobi stability boundary.
-        let omega = requested_omega.min(1.95 / upper_bound.max(1.0));
+        let omega = requested_omega.min(scalar::<F>(1.95) / upper_bound.max(scalar::<F>(1.0)));
         Self::WeightedJacobi { diag_inv, omega }
     }
 
     pub(super) fn smooth(
         &self,
-        op: &dyn Operator,
-        e: &mut [f64],
-        d: &[f64],
-        scratch: &mut [f64],
-        gs_omega: f64,
+        op: &dyn Operator<F>,
+        e: &mut [F],
+        d: &[F],
+        scratch: &mut [F],
+        gs_omega: F,
     ) {
         match self {
             Self::SymmetricGaussSeidel => symmetric_gauss_seidel_smooth(op, e, d, gs_omega),
@@ -62,13 +63,13 @@ impl Smoother {
 
 /// One simultaneous weighted Jacobi sweep. The entire product uses the old e;
 /// only after that product is complete are any entries of e updated.
-pub(super) fn weighted_jacobi_smooth(
-    op: &dyn Operator,
-    e: &mut [f64],
-    d: &[f64],
-    diag_inv: &[f64],
-    omega: f64,
-    scratch: &mut [f64],
+pub(super) fn weighted_jacobi_smooth<F: Real>(
+    op: &dyn Operator<F>,
+    e: &mut [F],
+    d: &[F],
+    diag_inv: &[F],
+    omega: F,
+    scratch: &mut [F],
 ) {
     op.matvec(e, scratch);
     for i in 0..e.len() {
@@ -76,12 +77,12 @@ pub(super) fn weighted_jacobi_smooth(
     }
 }
 
-pub(super) fn symmetric_gauss_seidel_smooth(op: &dyn Operator, e: &mut [f64], d: &[f64], omega: f64) {
+pub(super) fn symmetric_gauss_seidel_smooth<F: Real>(op: &dyn Operator<F>, e: &mut [F], d: &[F], omega: F) {
     let n = d.len();
     // Forward sweep
     for row in 0..n {
-        let mut diag = 0.0;
-        let mut off_diag_sum = 0.0;
+        let mut diag = scalar::<F>(0.0);
+        let mut off_diag_sum = scalar::<F>(0.0);
         op.for_each_entry(row, &mut |col, val| {
             if col == row {
                 diag = val;
@@ -89,15 +90,15 @@ pub(super) fn symmetric_gauss_seidel_smooth(op: &dyn Operator, e: &mut [f64], d:
                 off_diag_sum += val * e[col];
             }
         });
-        if diag.abs() > 1e-15 {
+        if diag.abs() > scalar::<F>(1e-15) {
             let new_e = (d[row] - off_diag_sum) / diag;
-            e[row] = (1.0 - omega) * e[row] + omega * new_e;
+            e[row] = (scalar::<F>(1.0) - omega) * e[row] + omega * new_e;
         }
     }
     // Backward sweep
     for row in (0..n).rev() {
-        let mut diag = 0.0;
-        let mut off_diag_sum = 0.0;
+        let mut diag = scalar::<F>(0.0);
+        let mut off_diag_sum = scalar::<F>(0.0);
         op.for_each_entry(row, &mut |col, val| {
             if col == row {
                 diag = val;
@@ -105,9 +106,9 @@ pub(super) fn symmetric_gauss_seidel_smooth(op: &dyn Operator, e: &mut [f64], d:
                 off_diag_sum += val * e[col];
             }
         });
-        if diag.abs() > 1e-15 {
+        if diag.abs() > scalar::<F>(1e-15) {
             let new_e = (d[row] - off_diag_sum) / diag;
-            e[row] = (1.0 - omega) * e[row] + omega * new_e;
+            e[row] = (scalar::<F>(1.0) - omega) * e[row] + omega * new_e;
         }
     }
 }

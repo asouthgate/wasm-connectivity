@@ -15,53 +15,54 @@
 //! triplets). An uncoarsened small system may use a temporary dense matrix
 //! for direct factorization; the retained operator remains a stencil.
 
+use crate::linalg::real::{Real, scalar};
 use sprs::CsMat;
 
 /// Ground boundary conditions, declared in terms of the full grid (one entry
 /// per node, node index == flat cell index).
-pub enum GroundSpec<'a> {
+pub enum GroundSpec<'a, F: Real = f64> {
     /// No physical grounds. The usual numerical regularization is retained;
     /// the solver may separately remove the source mean to balance injection.
     None,
     /// Conductance-to-ground (Shunt): `shunt[i]` is added to `L[i,i]`.
-    Shunt(Vec<f64>),
+    Shunt(Vec<F>),
     /// Original ground raster, filtered on access without allocating a copy.
-    ShuntRaster(&'a [f64]),
+    ShuntRaster(&'a [F]),
     /// Fixed-voltage (Dirichlet): `ground[i]` pins node `i` at `V = 0`.
     Dirichlet(Vec<bool>),
 }
 
 /// A linear operator representing the graph Laplacian `L`.
-pub trait Operator {
+pub trait Operator<F: Real = f64> {
     /// Number of unknowns (nodes).
     fn n(&self) -> usize;
 
     /// `y = L x`.
-    fn matvec(&self, x: &[f64], y: &mut [f64]);
+    fn matvec(&self, x: &[F], y: &mut [F]);
 
     /// `1 / |L[i,i]|` per node (used by the Jacobi preconditioner).
-    fn diag_inv(&self) -> Vec<f64>;
+    fn diag_inv(&self) -> Vec<F>;
 
     /// Invoke `f(col, val)` for every stored entry of row `row` (diagonal and
     /// off-diagonal). For a stencil these are computed on the fly.
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64));
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F));
 }
 
 /// The explicit CSR Laplacian implements the operator directly.
-impl Operator for CsMat<f64> {
+impl<F: Real> Operator<F> for CsMat<F> {
     fn n(&self) -> usize {
         self.rows()
     }
 
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+    fn matvec(&self, x: &[F], y: &mut [F]) {
         crate::linalg::pcg::mat_vec_mul_slice(self, x, y);
     }
 
-    fn diag_inv(&self) -> Vec<f64> {
+    fn diag_inv(&self) -> Vec<F> {
         crate::circuit::laplacian::extract_diag_inv(self)
     }
 
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         if let Some(rv) = self.outer_view(row) {
             for (col, &val) in rv.iter() {
                 f(col, val);
@@ -76,22 +77,22 @@ impl Operator for CsMat<f64> {
 /// non-positive / non-finite cells are treated as `FILL_RESISTANCE`, and each
 /// edge conductance is `2 / (r_i + r_j)`. Nothing beyond the borrowed raster,
 /// the ground spec and a few scalars is stored.
-pub struct StencilOperator<'a> {
+pub struct StencilOperator<'a, F: Real = f64> {
     nrows: usize,
     ncols: usize,
-    nodata: f64,
-    resistance: &'a [f64],
-    ground: GroundSpec<'a>,
+    nodata: F,
+    resistance: &'a [F],
+    ground: GroundSpec<'a, F>,
     /// For ground-free systems, `1e-5 * ||L||` added to node 0, matching
     /// [`crate::circuit::laplacian::regularize_laplacian`].
-    reg_diag0: f64,
+    reg_diag0: F,
 }
 
 /// Effective resistance of a cell after nodata-filling.
 #[inline]
-fn effective_resistance(r: f64, nodata: f64) -> f64 {
-    if r == nodata || !r.is_finite() || r <= 0.0 {
-        crate::raster::FILL_RESISTANCE
+fn effective_resistance<F: Real>(r: F, nodata: F) -> F {
+    if r == nodata || !r.is_finite() || r <= scalar::<F>(0.0) {
+        scalar::<F>(crate::raster::FILL_RESISTANCE)
     } else {
         r
     }
@@ -100,22 +101,22 @@ fn effective_resistance(r: f64, nodata: f64) -> f64 {
 /// Edge conductance between two adjacent cells, the harmonic mean of their
 /// conductances: `2 / (r_i + r_j)`.
 #[inline]
-fn edge_conductance(ri: f64, rj: f64) -> f64 {
-    2.0 / (ri + rj)
+fn edge_conductance<F: Real>(ri: F, rj: F) -> F {
+    scalar::<F>(2.0) / (ri + rj)
 }
 
 #[inline]
-fn valid_raster_shunt(value: f64, nodata: f64) -> bool {
-    value.is_finite() && value > 0.0 && (value - nodata).abs() > 1e-10
+fn valid_raster_shunt<F: Real>(value: F, nodata: F) -> bool {
+    value.is_finite() && value > scalar::<F>(0.0) && (value - nodata).abs() > scalar::<F>(1e-10)
 }
 
-impl<'a> StencilOperator<'a> {
+impl<'a, F: Real> StencilOperator<'a, F> {
     pub fn new(
         nrows: usize,
         ncols: usize,
-        nodata: f64,
-        resistance: &'a [f64],
-        ground: GroundSpec<'a>,
+        nodata: F,
+        resistance: &'a [F],
+        ground: GroundSpec<'a, F>,
     ) -> Self {
         assert!(nrows > 0 && ncols > 0, "Stencil requires nonempty dimensions");
         assert_eq!(resistance.len(), nrows * ncols);
@@ -127,12 +128,12 @@ impl<'a> StencilOperator<'a> {
         }
         let grounded = match &ground {
             GroundSpec::None => false,
-            GroundSpec::Shunt(shunt) => shunt.iter().any(|&value| value.is_finite() && value > 0.0),
+            GroundSpec::Shunt(shunt) => shunt.iter().any(|&value| value.is_finite() && value > scalar::<F>(0.0)),
             GroundSpec::ShuntRaster(shunt) => shunt.iter().any(|&value| valid_raster_shunt(value, nodata)),
             GroundSpec::Dirichlet(mask) => mask.iter().any(|&value| value),
         };
         let reg_diag0 = if grounded {
-            0.0
+            scalar::<F>(0.0)
         } else {
             compute_reg_diag0(nrows, ncols, nodata, resistance)
         };
@@ -165,19 +166,19 @@ impl<'a> StencilOperator<'a> {
     }
 
     #[inline]
-    fn shunt_conductance(&self, idx: usize) -> f64 {
+    fn shunt_conductance(&self, idx: usize) -> F {
         match &self.ground {
             GroundSpec::Shunt(shunt) => shunt[idx],
             GroundSpec::ShuntRaster(shunt) => {
                 let value = shunt[idx];
-                if valid_raster_shunt(value, self.nodata) { value } else { 0.0 }
+                if valid_raster_shunt(value, self.nodata) { value } else { scalar::<F>(0.0) }
             }
-            _ => 0.0,
+            _ => scalar::<F>(0.0),
         }
     }
 
     #[inline]
-    fn conductance(&self, idx: usize, nb: usize) -> f64 {
+    fn conductance(&self, idx: usize, nb: usize) -> F {
         let ri = effective_resistance(self.resistance[idx], self.nodata);
         let rj = effective_resistance(self.resistance[nb], self.nodata);
         edge_conductance(ri, rj)
@@ -185,10 +186,10 @@ impl<'a> StencilOperator<'a> {
 
     /// Final diagonal `L[idx, idx]`, including grounds and regularization.
     #[inline]
-    fn diagonal(&self, idx: usize) -> f64 {
+    fn diagonal(&self, idx: usize) -> F {
         if self.is_ground(idx) {
             // Dirichlet: identity row.
-            return 1.0;
+            return scalar::<F>(1.0);
         }
         let mut d = self.sum_neighbour_conductance(idx);
         d += self.shunt_conductance(idx);
@@ -200,11 +201,11 @@ impl<'a> StencilOperator<'a> {
 
     /// Sum of conductances to the (up to four) orthogonal neighbours.
     #[inline]
-    fn sum_neighbour_conductance(&self, idx: usize) -> f64 {
+    fn sum_neighbour_conductance(&self, idx: usize) -> F {
         let ncols = self.ncols;
         let r = idx / ncols;
         let c = idx % ncols;
-        let mut d = 0.0;
+        let mut d = scalar::<F>(0.0);
         if r > 0 {
             d += self.conductance(idx, idx - ncols);
         }
@@ -221,12 +222,12 @@ impl<'a> StencilOperator<'a> {
     }
 }
 
-impl<'a> Operator for StencilOperator<'a> {
+impl<'a, F: Real> Operator<F> for StencilOperator<'a, F> {
     fn n(&self) -> usize {
         self.nrows * self.ncols
     }
 
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+    fn matvec(&self, x: &[F], y: &mut [F]) {
         let ncols = self.ncols;
         let n = self.n();
         for idx in 0..n {
@@ -238,8 +239,8 @@ impl<'a> Operator for StencilOperator<'a> {
 
             let r = idx / ncols;
             let c = idx % ncols;
-            let mut diag = 0.0;
-            let mut off = 0.0;
+            let mut diag = scalar::<F>(0.0);
+            let mut off = scalar::<F>(0.0);
 
             if r > 0 {
                 let nb = idx - ncols;
@@ -284,29 +285,29 @@ impl<'a> Operator for StencilOperator<'a> {
         }
     }
 
-    fn diag_inv(&self) -> Vec<f64> {
+    fn diag_inv(&self) -> Vec<F> {
         (0..self.n())
             .map(|idx| {
                 let d = self.diagonal(idx);
-                if d.abs() > 1e-15 {
-                    1.0 / d.abs()
+                if d.abs() > scalar::<F>(1e-15) {
+                    scalar::<F>(1.0) / d.abs()
                 } else {
-                    0.0
+                    scalar::<F>(0.0)
                 }
             })
             .collect()
     }
 
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         if self.is_ground(row) {
-            f(row, 1.0);
+            f(row, scalar::<F>(1.0));
             return;
         }
 
         let ncols = self.ncols;
         let r = row / ncols;
         let c = row % ncols;
-        let mut diag = 0.0;
+        let mut diag = scalar::<F>(0.0);
 
         if r > 0 {
             let nb = row - ncols;
@@ -353,13 +354,13 @@ impl<'a> Operator for StencilOperator<'a> {
 /// Recompute the `1e-5 * ||L||` regularization that
 /// [`crate::circuit::laplacian::regularize_laplacian`] applies to node 0,
 /// without materialising `L`.
-fn compute_reg_diag0(nrows: usize, ncols: usize, nodata: f64, resistance: &[f64]) -> f64 {
-    let mut norm2 = 0.0f64;
+fn compute_reg_diag0<F: Real>(nrows: usize, ncols: usize, nodata: F, resistance: &[F]) -> F {
+    let mut norm2 = scalar::<F>(0.0);
     for idx in 0..resistance.len() {
         let r = idx / ncols;
         let c = idx % ncols;
         let ri = effective_resistance(resistance[idx], nodata);
-        let mut diag = 0.0;
+        let mut diag = scalar::<F>(0.0);
         if r > 0 {
             let cond = edge_conductance(ri, effective_resistance(resistance[idx - ncols], nodata));
             diag += cond;
@@ -384,22 +385,22 @@ fn compute_reg_diag0(nrows: usize, ncols: usize, nodata: f64, resistance: &[f64]
     }
 
     let norm = norm2.sqrt();
-    if !norm.is_finite() || norm <= 0.0 {
-        0.0
+    if !norm.is_finite() || norm <= scalar::<F>(0.0) {
+        scalar::<F>(0.0)
     } else {
-        1e-5 * norm
+        scalar::<F>(1e-5) * norm
     }
 }
 
 /// The fine-grid Laplacian, either materialised (`Explicit`) or matrix-free
 /// (`Stencil`). Implements [`Operator`] by delegation so the solver treats
 /// both representations identically.
-pub enum FineOperator<'a> {
-    Explicit(CsMat<f64>),
-    Stencil(StencilOperator<'a>),
+pub enum FineOperator<'a, F: Real = f64> {
+    Explicit(CsMat<F>),
+    Stencil(StencilOperator<'a, F>),
 }
 
-impl<'a> Operator for FineOperator<'a> {
+impl<'a, F: Real> Operator<F> for FineOperator<'a, F> {
     fn n(&self) -> usize {
         match self {
             FineOperator::Explicit(m) => m.n(),
@@ -407,21 +408,21 @@ impl<'a> Operator for FineOperator<'a> {
         }
     }
 
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+    fn matvec(&self, x: &[F], y: &mut [F]) {
         match self {
             FineOperator::Explicit(m) => m.matvec(x, y),
             FineOperator::Stencil(s) => s.matvec(x, y),
         }
     }
 
-    fn diag_inv(&self) -> Vec<f64> {
+    fn diag_inv(&self) -> Vec<F> {
         match self {
             FineOperator::Explicit(m) => m.diag_inv(),
             FineOperator::Stencil(s) => s.diag_inv(),
         }
     }
 
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         match self {
             FineOperator::Explicit(m) => m.for_each_entry(row, f),
             FineOperator::Stencil(s) => s.for_each_entry(row, f),
