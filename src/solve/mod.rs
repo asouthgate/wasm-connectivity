@@ -155,6 +155,7 @@ fn prepare_explicit_system(
     ground_mode: GroundMode,
 ) -> (CsMat<f64>, Vec<f64>, Vec<i32>) {
     memory::reset();
+    memory::record_inputs(nrows * ncols, false);
     let filled = crate::raster::fill_nodata(resistance_data, nodata);
     memory::record_filled_resistance(filled.len());
 
@@ -389,14 +390,16 @@ pub fn solve_raster_sources_mg_stencil_with_options(
     options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput> {
     let mut source = source_data.to_vec();
-    solve_raster_sources_mg_stencil_in_place_with_options(
+    let result = solve_raster_sources_mg_stencil_in_place_with_options(
         resistance_data, nrows, ncols, nodata, &mut source, ground_data,
         max_iter, tol, remove_average, ground_mode, options,
-    )
+    );
+    memory::record_source_copy();
+    result
 }
 
 /// Prepare the caller's source buffer in place (WASM boundary).
-pub(crate) fn solve_raster_sources_mg_stencil_in_place_with_options(
+pub fn solve_raster_sources_mg_stencil_in_place_with_options(
     resistance_data: &[f64],
     nrows: usize,
     ncols: usize,
@@ -414,6 +417,7 @@ pub(crate) fn solve_raster_sources_mg_stencil_in_place_with_options(
     let phase_timer = timing::timer(None, "System preparation");
     memory::reset();
     let num_nodes = nrows * ncols;
+    memory::record_inputs(num_nodes, true);
 
     for value in source_data.iter_mut() {
         if !valid_positive_value(*value, nodata) {

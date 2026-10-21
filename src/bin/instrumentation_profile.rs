@@ -18,6 +18,7 @@ const DATA_DIR: &str = "example/public/geodata";
 
 #[derive(Serialize)]
 struct ProfileRecord {
+    accounting_scope: &'static str,
     resolution: usize,
     solver: String,
     ground: String,
@@ -27,6 +28,7 @@ struct ProfileRecord {
 
 fn emit(resolution: usize, solver: &str, ground: &str, total_iters: usize) {
     let rec = ProfileRecord {
+        accounting_scope: "Native solver payloads; low-memory solver reuses the source input as RHS. Excludes rasterization, caller extras and WASM/JSON wrapper storage.",
         resolution,
         solver: solver.to_string(),
         ground: ground.to_string(),
@@ -97,7 +99,7 @@ fn main() {
     let options = MgOptions::default();
 
     let base = parse_asc(&format!("{DATA_DIR}/base_resistance_{resolution}.asc"));
-    let src = parse_asc(&format!("{DATA_DIR}/source_{resolution}.asc"));
+    let mut src = parse_asc(&format!("{DATA_DIR}/source_{resolution}.asc"));
     let gnd = parse_asc(&format!("{DATA_DIR}/ground_{resolution}.asc"));
     for grid in [&base, &src, &gnd] {
         assert!(grid.nrows > 0 && grid.ncols > 0, "ASC dimensions must be positive");
@@ -139,7 +141,7 @@ fn main() {
         _ => unreachable!(),
     };
     let max_iter = 100_000;
-    let tol = 1e-6;
+    let tol = wasm_connect::DEFAULT_TOL;
     let remove_average = true;
     let result = match solver.as_str() {
         "jacobi" => solve::solve_raster_sources_jacobi(
@@ -167,12 +169,12 @@ fn main() {
             ground_mode,
             options,
         ),
-        "mg-lowmem" => solve::solve_raster_sources_mg_stencil_with_options(
+        "mg-lowmem" => solve::solve_raster_sources_mg_stencil_in_place_with_options(
             &resistance,
             base.nrows,
             base.ncols,
             base.nodata,
-            &src.data,
+            &mut src.data,
             &gnd.data,
             max_iter,
             tol,

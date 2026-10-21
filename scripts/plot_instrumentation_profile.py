@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Plot analytical solver payloads emitted by instrumentation-profile.
-
-Usage:
-    cargo run --profile release-prof --features bin,instrumentation-profile \
-        --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt > profile.json
-    python3 scripts/plot_instrumentation_profile.py profile.json
-"""
+"""Plot named analytical payloads by algorithm phase."""
 import argparse
 import json
 import sys
@@ -15,107 +9,126 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-SOLVER_COLORS = {'jacobi': '#444444', 'mg': '#e66101', 'mg-lowmem': '#2c7fb8'}
-SOLVER_LABELS = {'jacobi': 'Jacobi CG', 'mg': 'CGMG', 'mg-lowmem': 'MG low-memory'}
+MB = 1_000_000
+SOLVER_LABELS = {'jacobi': 'Jacobi CG', 'mg': 'Explicit MGCG', 'mg-lowmem': 'Low-memory MGCG'}
+COMPONENTS = [
+    ('inputs', 'Input rasters', '#7f7f7f'),
+    ('rhs', 'Separate RHS', '#bdbdbd'),
+    ('grounds', 'Owned ground data', '#525252'),
+    ('mapping', 'Cell-to-node map', '#9edae5'),
+    ('matrix_values', 'CSR values', '#e66101'),
+    ('matrix_indices', 'CSR column indices', '#fdb863'),
+    ('matrix_indptr', 'CSR row pointers', '#fee0b6'),
+    ('cycle_correction', 'V-cycle correction e', '#5e3c99'),
+    ('cycle_rhs', 'V-cycle RHS d', '#998ec3'),
+    ('cycle_residual', "V-cycle residual / matvec d′", '#d8daeb'),
+    ('implicit_prolonged', 'Implicit operator Px', '#1b9e77'),
+    ('implicit_applied', 'Implicit operator L(Px)', '#66c2a5'),
+    ('diagonals', 'Inverse diagonals', '#a6d854'),
+    ('factor', 'Cholesky factor', '#e7298a'),
+    ('cg_voltage', 'CG voltage v', '#084594'),
+    ('cg_residual', 'CG residual r', '#2171b5'),
+    ('cg_preconditioned', 'CG preconditioned residual e0', '#4292c6'),
+    ('cg_direction', 'CG search direction p', '#6baed6'),
+    ('cg_matvec', 'CG matrix product Lp', '#bdd7e7'),
+    ('outputs', 'Returned maps', '#b15928'),
+    ('setup', 'Temporary setup buffers', '#ffff99'),
+    ('coarse_solve', 'Temporary coarse solve', '#fb9a99'),
+    ('transfers', 'Stored transfer arrays', '#cab2d6'),
+]
 
 
 def load(filename=None):
-    if filename:
-        with open(filename) as stream:
-            return [json.load(stream)]
-    return [json.load(sys.stdin)]
+    with open(filename) if filename else sys.stdin as stream:
+        return [json.load(stream)]
 
 
-def total_level_bytes(level):
-    return sum(level[key] for key in (
-        'laplacian_bytes', 'prolongation_p_bytes', 'cholesky_factor_bytes',
-        'workspace_e_bytes', 'workspace_d_bytes', 'workspace_d_prime_bytes')) + sum(
-            level.get(key, 0) for key in ('smoother_diag_bytes', 'operator_matvec_scratch_bytes'))
+def phase_components(phase):
+    values = defaultdict(int)
+    for obj in phase['objects']:
+        values[obj['category']] += obj['bytes']
+    if sum(values.values()) != phase['total_bytes']:
+        raise ValueError(f"phase total does not match named objects: {phase['name']}")
+    unknown = set(values) - {key for key, _, _ in COMPONENTS}
+    if unknown:
+        raise ValueError(f"unknown memory categories: {', '.join(sorted(unknown))}")
+    return values
+
+
+def stacked(ax, indices, components):
+    bottom = [0.0] * len(indices)
+    for key, label, color in COMPONENTS:
+        values = [entry.get(key, 0) / MB for entry in components]
+        if not any(values):
+            continue
+        ax.bar(indices, values, bottom=bottom, label=label, color=color,
+               edgecolor='white', linewidth=0.35, zorder=3)
+        bottom = [a + b for a, b in zip(bottom, values)]
+    ax.set_ylabel('Size (MB)')
+    ax.grid(axis='y', alpha=0.25)
+    ax.set_axisbelow(True)
+    return max(bottom, default=0)
 
 
 def plot_hierarchy(rows, out_prefix, comparison=False):
-    groups = defaultdict(list)
-    for record in rows:
-        if record.get('profile') and record['profile'].get('hierarchy'):
-            groups[(record['solver'], record['ground'])].append(record)
-
     if comparison:
-        fig, axes = plt.subplots(2, 1, figsize=(10, 9), sharex=True, sharey=True)
-        groups_to_plot = [((record['solver'], record['ground']), [record])
-                          for record in sorted(rows, key=lambda row: row['solver'] == 'mg-lowmem')]
-        maximum = 0.0
-        all_indices = set()
-    else:
-        groups_to_plot = sorted(groups.items())
-
-    for panel, ((solver, ground), records) in enumerate(groups_to_plot):
-        best = max(records, key=lambda record: record['resolution'])
-        levels = best['profile']['hierarchy']
-        indices = [level['level'] for level in levels]
-        components = [
-            ('Laplacian', '#e66101', [level['laplacian_bytes'] for level in levels]),
-            ('Workspace', '#5e3c99',
-             [total_level_bytes(level) - level['laplacian_bytes'] for level in levels]),
-        ]
-        if comparison:
-            ax = axes[panel]
-            all_indices.update(indices)
-        else:
-            fig, ax = plt.subplots(figsize=(7, 6))
-        bottom = [0.0] * len(levels)
-        for label, color, values in components:
-            heights = [value / 1e6 for value in values]
-            ax.bar(indices, heights, bottom=bottom, label=label,
-                   facecolor='white', edgecolor=color, linewidth=2, zorder=3)
-            bottom = [a + b for a, b in zip(bottom, heights)]
-        if comparison:
-            maximum = max(maximum, max(bottom, default=0.0))
-        elif any(bottom):
-            ax.set_ylim(0, max(bottom) * 1.25)
-        if not comparison or panel == 1:
-            ax.set_xlabel('Level')
-        ax.set_ylabel('Memory (MB)' if comparison else 'Memory')
-        ax.set_xticks(indices)
-        ax.grid(axis='y', alpha=0.3)
-        ax.set_axisbelow(True)
-        if not comparison or panel == 0:
-            ax.legend(loc='upper left')
-        if not comparison:
-            fig.tight_layout()
-            output = f'{out_prefix}_{solver}_{ground}.png'
-            fig.savefig(output, dpi=300)
-            print(f'Saved {output}')
-            plt.close(fig)
-
-    if comparison:
-        axes[1].set_xticks(sorted(all_indices))
-        axes[0].set_ylim(0, maximum * 1.25 if maximum else 1)
-        fig.tight_layout()
+        records = sorted(rows, key=lambda row: row['solver'] == 'mg-lowmem')
         output = f'{out_prefix}_comparison.png'
-        fig.savefig(output, dpi=300)
+    else:
+        records = rows
+        output = None
+    # Preserve a separate output per input profile in single-profile mode.
+    batches = [records] if comparison else [[record] for record in records]
+    for records in batches:
+        fig, axes = plt.subplots(len(records), 1, figsize=(12, 5.5 * len(records)), squeeze=False)
+        maximum = 0.0
+        for row, record in enumerate(records):
+            profile = record['profile']
+            title = f"{SOLVER_LABELS.get(record['solver'], record['solver'])} · {record['resolution']} × {record['resolution']} · {record['ground']}"
+            phases = profile.get('phases', [])
+            left = axes[row, 0]
+            if phases:
+                indices = list(range(len(phases)))
+                maximum = max(maximum, stacked(left, indices, [phase_components(p) for p in phases]))
+                left.set_xticks(indices, [p['name'] for p in phases], rotation=45, ha='right', fontsize=8)
+                left.set_xlabel('Algorithm phase (temporary buffers included where live)')
+            else:
+                left.text(0.5, 0.5, 'No phase accounting in this older profile', ha='center', transform=left.transAxes)
+            left.set_title(f'{title}\nLive objects by phase', fontsize=11)
+        for ax in axes.flat:
+            ax.set_ylim(0, maximum * 1.08 if maximum else 1)
+        handles = {}
+        for ax in axes.flat:
+            for handle, label in zip(*ax.get_legend_handles_labels()):
+                handles.setdefault(label, handle)
+        ordered = [(label, handles[label]) for _, label, _ in COMPONENTS if label in handles]
+        if ordered:
+            fig.legend([h for _, h in ordered], [label for label, _ in ordered],
+                       loc='lower center', ncol=5, fontsize=8, frameon=False)
+        legend_rows = (len(ordered) + 4) // 5
+        fig.tight_layout(rect=(0, (0.035 + 0.025 * legend_rows) / len(records), 1, 1))
+        if not comparison:
+            record = records[0]
+            output = f"{out_prefix}_{record['solver']}_{record['ground']}.png"
+        fig.savefig(output, dpi=220)
         print(f'Saved {output}')
         plt.close(fig)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Plot one or two instrumentation profiles.')
+    parser = argparse.ArgumentParser(description='Plot detailed memory accounting from one or two instrumentation profiles.')
     parser.add_argument('profiles', nargs='*', help='JSON profiles (default: stdin)')
     args = parser.parse_args()
     if len(args.profiles) > 2:
         parser.error('expected at most two JSON profiles')
-    infile = args.profiles[0] if args.profiles else None
     try:
         rows = [record for filename in args.profiles for record in load(filename)] if args.profiles else load()
-    except (OSError, ValueError) as error:
-        parser.error(str(error))
-    comparison = len(args.profiles) == 2
-    if comparison:
-        if not all(isinstance(record, dict) and record.get('profile')
-                   and record['profile'].get('hierarchy') for record in rows):
-            parser.error('both profiles must contain a non-empty hierarchy')
-        if sum(record.get('solver') == 'mg-lowmem' for record in rows) != 1:
+        if not all(isinstance(record, dict) and record.get('profile') for record in rows):
+            parser.error('each input must contain a profile')
+        comparison = len(args.profiles) == 2
+        if comparison and sum(record.get('solver') == 'mg-lowmem' for record in rows) != 1:
             parser.error('two-profile mode requires exactly one mg-lowmem profile')
-    if not rows:
-        sys.exit('no rows')
-    base = infile.rsplit('.', 1)[0] if infile else 'instrumentation_profile'
-    plot_hierarchy(rows, base, comparison=comparison)
+        base = args.profiles[0].rsplit('.', 1)[0] if args.profiles else 'instrumentation_profile'
+        plot_hierarchy(rows, base, comparison=comparison)
+    except (OSError, ValueError, KeyError) as error:
+        parser.error(str(error))

@@ -70,7 +70,7 @@ export default function Benchmark() {
       setData(loaded);
       const { baseData, baseMeta } = loaded;
       const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
-      setStatus(`loaded Chudleigh 1000×1000`);
+      setStatus(`Loaded Chudleigh 1000×1000`);
     }).catch(err => setStatus(`error: ${err.message}`));
   }, []);
 
@@ -118,7 +118,7 @@ export default function Benchmark() {
       }
     }
 
-    setStatus(`done — ${allResults.length} runs across ${RESOLUTIONS.length} resolutions`);
+    setStatus(`Run complete: ${allResults.length} runs across ${RESOLUTIONS.length} resolutions`);
     setRunning(false);
   }, [baseData, srcData, gndData, geojsonStr, baseMeta, reps, running]);
 

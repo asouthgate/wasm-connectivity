@@ -125,13 +125,13 @@ pub fn solve_raster_sources_mg_stencil(
     ncols: usize,
     nodata: f64,
     mut source_data: Vec<f64>,
-    ground_data: Vec<f64>,
+    mut ground_data: Vec<f64>,
     max_iter: usize,
     tol: f64,
     use_dirichlet_ground: bool,
 ) -> String {
     let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
-    let annotated = solve::solve_raster_sources_mg_stencil_in_place_with_options(
+    let mut annotated = solve::solve_raster_sources_mg_stencil_in_place_with_options(
         &resistance_data,
         nrows,
         ncols,
@@ -144,6 +144,14 @@ pub fn solve_raster_sources_mg_stencil(
         ground_mode,
         linalg::multigrid::MgOptions::default(),
     );
+    // Reuse the input allocations for the returned maps, then release the
+    // solver's output allocations before JSON needs a large contiguous buffer.
+    source_data.copy_from_slice(&annotated.output.voltages);
+    ground_data.copy_from_slice(&annotated.output.current_map);
+    std::mem::swap(&mut source_data, &mut annotated.output.voltages);
+    std::mem::swap(&mut ground_data, &mut annotated.output.current_map);
+    drop(source_data);
+    drop(ground_data);
     json_response(&annotated)
 }
 
@@ -516,6 +524,28 @@ fn run_roost_finder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lowmem_wasm_buffer_reuse_preserves_serialized_output() {
+        let (nr, nc, nodata) = (16, 16, 5.0);
+        let resistance = vec![1.0; nr * nc];
+        let mut source = vec![0.0; nr * nc];
+        source[..6].copy_from_slice(&[1.0, f64::NAN, f64::INFINITY, -1.0, nodata, nodata + 5e-11]);
+        let mut ground = vec![0.0; nr * nc];
+        ground[8..12].copy_from_slice(&[f64::NAN, -2.0, nodata, nodata + 5e-11]);
+        ground[nr * nc - 1] = 3.0;
+        for dirichlet in [false, true] {
+            let mode = if dirichlet { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
+            let expected = solve::solve_raster_sources_mg_stencil(
+                &resistance, nr, nc, nodata, &source, &ground, 10000, 1e-8, true, mode,
+            );
+            let actual = solve_raster_sources_mg_stencil(
+                resistance.clone(), nr, nc, nodata, source.clone(), ground.clone(),
+                10000, 1e-8, dirichlet,
+            );
+            assert_eq!(actual, json_response(&expected));
+        }
+    }
 
     #[test]
     fn test_raster_edge_to_edge() {

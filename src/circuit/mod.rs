@@ -14,6 +14,7 @@ pub(crate) fn build_circuit_matrix(
     let (cell_to_node, num_nodes) = grid::build_cell_to_node(&conductance);
     crate::memory::record_cell_to_node_map(nrows * ncols);
     let laplacian = laplacian::build_grid_laplacian(&conductance, &cell_to_node, num_nodes);
+    crate::memory::record_assembly_matrix(&laplacian);
     (cell_to_node, num_nodes, laplacian)
 }
 
