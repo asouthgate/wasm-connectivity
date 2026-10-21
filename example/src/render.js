@@ -128,5 +128,13 @@ export function renderMap(canvas, data, nrows, ncols, nodata, logScale, maxSide 
     }
   }
   ctx.putImageData(img, 0, 0);
-  return { min: isFinite(minRaw) ? minRaw : 0, max: isFinite(maxRaw) ? maxRaw : 1 };
+  let ticks;
+  if (quantileScale && boundaries.length > 1) {
+    const indices = [...new Set(Array.from({ length: 4 }, (_, i) => Math.round(i * (boundaries.length - 1) / 3)))];
+    ticks = indices.map(index => ({ position: index / (boundaries.length - 1), value: boundaries[index] }));
+  } else if (logScale && minRaw > 0) {
+    ticks = Array.from({ length: 4 }, (_, i) => ({ position: i / 3,
+      value: i === 0 ? minRaw : i === 3 ? maxRaw : Math.exp(logMin + logSpan * i / 3) }));
+  }
+  return { min: isFinite(minRaw) ? minRaw : 0, max: isFinite(maxRaw) ? maxRaw : 1, ticks };
 }

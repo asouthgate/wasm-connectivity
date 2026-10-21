@@ -1,8 +1,8 @@
-:root { color-scheme: dark; }
+:root { color-scheme: light; color: #222; background: #fff; }
 
 * { box-sizing: border-box; }
 
-body { font: 14px monospace; margin: 12px; }
+body { font: 14px system-ui, sans-serif; margin: 12px; }
 
 button, input, select { font: inherit; }
 
@@ -33,7 +33,7 @@ nav a[aria-current] { font-weight: bold; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.error { color: #f66; }
+.error { color: #b91c1c; }
 
 .layout { display: flex; gap: 12px; }
 
@@ -71,6 +71,23 @@ nav a[aria-current] { font-weight: bold; }
   background: var(--legend-bg);
 }
 
+.map-view-preview { width: 100%; max-width: calc(var(--preview-size) + 80px); }
+.map-plot-with-legend { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 8px; }
+.map-colorbar { display: grid; grid-template-columns: 14px 1fr; gap: 8px; font-size: .85em; }
+.map-colorbar .map-legend-gradient { height: auto; }
+.map-legend-ticks { position: relative; }
+.map-legend-tick { position: absolute; left: 0; white-space: nowrap; }
+.map-legend-tick::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -8px;
+  width: 5px;
+  border-top: 1px solid currentColor;
+}
+.map-legend-tick:first-child::before { top: 100%; }
+.map-legend-tick:last-child::before { top: 0; }
+
 .log { max-height: 50vh; overflow: auto; margin-top: 8px; }
 
 table { border-collapse: collapse; width: 100%; }
@@ -83,14 +100,14 @@ td, th { padding: 3px 8px; border: 1px solid #666; text-align: right; }
 
 .scenario-previews {
   display: grid;
-  grid-template-columns: repeat(4, 200px);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  max-width: 1144px;
   gap: 8px;
-  overflow-x: auto;
 }
 
 .scenario-current-pending { height: 200px; }
 
-.scenario-preview { position: relative; }
+.scenario-preview { position: relative; min-width: 0; }
 
 .scenario-preview-asterisk {
   position: absolute;

@@ -27,9 +27,15 @@ export default function MapView({ type, data, meta, image, logScale, quantileSca
   const dim = meta ? `${meta.ncols}×${meta.nrows}` : '';
   const fmt = (v) => v === 0 ? '0.0' : Math.abs(v) < 0.01 || Math.abs(v) >= 1000 ? v.toExponential(1) : v.toPrecision(3);
   const displayRange = image || range;
+  const ticks = displayRange.ticks || Array.from({ length: 4 }, (_, i) => ({
+    position: i / 3,
+    value: displayRange.min + (displayRange.max - displayRange.min) * i / 3,
+  }));
+  const gradient = palette === 'jet' ? JET_GRADIENT : palette === 'plasma' ? PLASMA_GRADIENT : VIRIDIS_GRADIENT;
 
   return (
-    <div className="map-view">
+    <div className={`map-view${preview ? ' map-view-preview' : ''}`}
+      style={preview ? { '--preview-size': `${maxSide}px` } : undefined}>
       {showHeader && <div className="map-header">
         <span>{label || labels[type] || type}{preview ? ' preview' : ''} {dim && dim}</span>
         {onToggleScale && (
@@ -40,12 +46,19 @@ export default function MapView({ type, data, meta, image, logScale, quantileSca
           </select>
         )}
       </div>}
-      {image ? <img src={image.src} alt={label || labels[type] || type} className="map-canvas" /> :
-        <canvas ref={canvasRef} className="map-canvas" />}
-      <div className="map-legend">
-        <span className="map-legend-label">{fmt(displayRange.min)}</span>
-        <div className="map-legend-gradient" style={{ '--legend-bg': palette === 'jet' ? JET_GRADIENT : palette === 'plasma' ? PLASMA_GRADIENT : VIRIDIS_GRADIENT }} />
-        <span className="map-legend-label">{fmt(displayRange.max)}</span>
+      <div className="map-plot-with-legend">
+        {image ? <img src={image.src} alt={label || labels[type] || type} className="map-canvas" /> :
+          <canvas ref={canvasRef} className="map-canvas" />}
+        <div className="map-colorbar">
+          <div className="map-legend-gradient" style={{ '--legend-bg': gradient.replace('to right', 'to top') }} />
+          <div className="map-legend-ticks">
+            {ticks.map((tick, index) => <span key={index} className="map-legend-tick"
+              style={{ top: `${100 * (1 - tick.position)}%`,
+                transform: tick.position === 1 ? 'none' : tick.position === 0 ? 'translateY(-100%)' : 'translateY(-50%)' }}>
+              {fmt(tick.value)}
+            </span>)}
+          </div>
+        </div>
       </div>
     </div>
   );
