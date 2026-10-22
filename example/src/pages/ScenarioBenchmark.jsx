@@ -79,7 +79,7 @@ export default function ScenarioBenchmark() {
             setPrecision(e.target.value); setResults({}); setError(false);
             setStatus(`2000x2000 · low-memory MG · Shunt ground · ${e.target.value}`);
           }}>
-            <option value="f64">f64</option><option value="f32">f32</option>
+            <option value="f64">f64</option><option value="f32">f32</option><option value="mixed">Mixed precision</option>
           </select>
         </label>
         <button onClick={run} disabled={running || Object.keys(previews).length !== 3}>Run</button>

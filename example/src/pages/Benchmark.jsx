@@ -4,7 +4,7 @@ import { StatusBar } from '../components/StatusBar';
 import { downloadCSV } from '../stats';
 import { loadExampleData } from '../data';
 
-const RESOLUTIONS = [2000, 1800, 1600, 1400, 1200, 1000, 800, 600, 400, 200];
+const RESOLUTIONS = [2000, 1600, 1200, 800, 400];
 
 const DEFAULT_PARAMS = {
   roads:    { resistance: 5,  width: 3 },
@@ -12,12 +12,12 @@ const DEFAULT_PARAMS = {
   buildings:{ resistance: 500, width: 0 },
 };
 
-const RUNS = ['gmg', 'gmg-lowmem', 'gmg-lowmem-f32'];
+const RUNS = ['gmg', 'gmg-lowmem', 'gmg-mixedp-lowmem'];
 
 const RUN_LABELS = {
   gmg: 'GMG CG (f64)',
   'gmg-lowmem': 'GMG CG (low-mem, f64)',
-  'gmg-lowmem-f32': 'GMG CG (low-mem, f32)',
+  'gmg-mixedp-lowmem': 'GMG CG (mixedp-low-mem)',
 };
 
 export const BENCHMARK_HEADERS = [

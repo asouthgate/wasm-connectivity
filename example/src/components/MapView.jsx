@@ -39,9 +39,9 @@ export default function MapView({ type, data, meta, image, logScale, quantileSca
       {showHeader && <div className="map-header">
         <span>{label || labels[type] || type}{preview ? ' preview' : ''} {dim && dim}</span>
         {onToggleScale && (
-          <select aria-label={`${label || labels[type] || type} scale`} value={logScale ? 'log' : 'lin'}
+          <select aria-label={`${label || labels[type] || type} scale`} value={quantileScale ? 'quantile' : 'lin'}
             onChange={e => onToggleScale(e.target.value)}>
-            <option value="log">log</option>
+            <option value="quantile">quantile</option>
             <option value="lin">lin</option>
           </select>
         )}

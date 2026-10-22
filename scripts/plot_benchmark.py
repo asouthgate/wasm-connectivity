@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Plot benchmark time and memory trajectories for Jacobi CG, CGMG, and low-memory CGMG.
+"""Plot benchmark mean lines with minimum-to-maximum range bars, including mixed-precision CGMG.
 
 CSV schema (emitted by example/src/pages/Benchmark.jsx):
     resolution,repeat,run,prep_time_s,prep_mem_mb,conn_time_s,conn_mem_mb,total_iters
 
-run is one of: jacobi, gmg, gmg-lowmem. Legacy two-solver CSVs also work.
+run is one of: jacobi, gmg, gmg-lowmem, gmg-mixedp-lowmem.
+Legacy two-solver CSVs also work.
 Per row: total_time_s = prep_time_s + conn_time_s.
 """
 import sys
@@ -14,21 +15,24 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-RUNS = ('jacobi', 'gmg', 'gmg-lowmem')
+RUNS = ('jacobi', 'gmg', 'gmg-lowmem', 'gmg-mixedp-lowmem')
 RUN_LABELS = {
     'jacobi':  'Jacobi CG',
     'gmg':     'CGMG',
     'gmg-lowmem': 'CGMG (low-memory)',
+    'gmg-mixedp-lowmem': 'CGMG (mixed precision, low-memory)',
 }
 RUN_LINESTYLES = {
-    'jacobi':  '-',
-    'gmg':     '--',
+    'jacobi': '-',
+    'gmg': '--',
     'gmg-lowmem': ':',
+    'gmg-mixedp-lowmem': '-.',
 }
 RUN_COLORS = {
     'jacobi':  '#444444',
     'gmg':     '#e66101',
     'gmg-lowmem': '#2c7fb8',
+    'gmg-mixedp-lowmem': 'purple',
 }
 
 
@@ -80,66 +84,46 @@ def plot(csv_path, out_path):
                    if mem_by_key.get((res, r)) else float('nan')
                    for res in res_all] for r in RUNS}
 
-    # Setup side-by-side plots (1 row, 2 columns)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 9), sharex=True)
 
-    for run in RUNS:
-        if not any((res, run) in time_by_key for res in res_all):
-            continue
-        # Scatter individual data points
-        xs, ys = [], []
-        for res in res_all:
-            pts = time_by_key.get((res, run))
-            for y in pts or []:
-                xs.append(res)
-                ys.append(y)
-        ax1.scatter(xs, ys, c=RUN_COLORS[run], marker='x', alpha=0.4, zorder=2)
-        
-        # Plot mean trendlines
-        ax1.plot(res_all, mean_t[run], RUN_LINESTYLES[run], color=RUN_COLORS[run], 
-                 lw=2, ms=6, label=f'{RUN_LABELS[run]}', zorder=3)
-
-    for run in RUNS:
-        if not any((res, run) in time_by_key for res in res_all):
-            continue
-        # Scatter individual data points
-        xs, ys = [], []
-        for res in res_all:
-            pts = mem_by_key.get((res, run))
-            for y in pts or []:
-                xs.append(res)
-                ys.append(y)
-        ax2.scatter(xs, ys, c=RUN_COLORS[run], marker='x', alpha=0.4, zorder=2)
-        
-        # Plot mean trendlines
-        ax2.plot(res_all, mean_m[run], RUN_LINESTYLES[run], color=RUN_COLORS[run], 
-                 lw=2, ms=6, label=f'{RUN_LABELS[run]}', zorder=3)
+    active_runs = [run for run in RUNS
+                   if any((res, run) in time_by_key for res in res_all)]
+    for run in active_runs:
+        for ax, means, samples in [(ax1, mean_t, time_by_key),
+                                    (ax2, mean_m, mem_by_key)]:
+            if not any((res, run) in samples for res in res_all):
+                continue
+            lower, upper = [], []
+            for res, mean in zip(res_all, means[run]):
+                values = samples.get((res, run))
+                lower.append(max(0.0, mean - min(values)) if values else float('nan'))
+                upper.append(max(0.0, max(values) - mean) if values else float('nan'))
+            ax.errorbar(res_all, means[run], yerr=[lower, upper],
+                        color=RUN_COLORS[run], label=RUN_LABELS[run],
+                        linestyle=RUN_LINESTYLES[run], linewidth=2, capsize=4, zorder=3)
 
     # Formatter for labels (e.g., 1000x1000)
     res2str = lambda x: f"{x}x{x}"
 
-    # Polish Left Axes (Time)
-    ax1.set_xlabel('Resolution (pixels)')
+    # Upper axes (time)
     ax1.set_ylabel('Total time (s)')
-    ax1.set_title('Total Execution Time')
     ax1.set_xticks(res_all)
-    ax1.set_xticklabels([res2str(r) for r in res_all])
-    ax1.grid(True, alpha=0.3)
+    ax1.set_xticklabels([res2str(r) for r in res_all], rotation=45)
+    ax1.grid(True, axis='y', alpha=0.3)
     
-    all_t = [y for vals in mean_t.values() for y in vals if y == y]
+    all_t = [y for vals in time_by_key.values() for y in vals if y == y]
     if all_t:
         ax1.set_ylim(0, max(all_t) * 1.25)
     ax1.legend(loc='upper left')
 
-    # Polish Right Axes (Memory)
+    # Lower axes (memory)
     ax2.set_xlabel('Resolution (pixels)')
     ax2.set_ylabel('WASM linear memory (MiB)')
-    ax2.set_title('Memory usage')
     ax2.set_xticks(res_all)
-    ax2.set_xticklabels([res2str(r) for r in res_all])
-    ax2.grid(True, alpha=0.3)
+    ax2.set_xticklabels([res2str(r) for r in res_all], rotation=45)
+    ax2.grid(True, axis='y', alpha=0.3)
     
-    all_m = [y for vals in mean_m.values() for y in vals if y == y]
+    all_m = [y for vals in mem_by_key.values() for y in vals if y == y]
     if all_m:
         ax2.set_ylim(0, max(all_m) * 1.25)
     ax2.legend(loc='upper left')

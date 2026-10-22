@@ -6,10 +6,11 @@ use wasm_connect::solve::{solve_raster_sources_mg_stencil_with_options, solve_ra
 use wasm_connect::linalg::multigrid::MgOptions;
 
 const USAGE: &str = "Usage: scenario-solve --resistance FILE --source FILE --ground FILE
-    [--precision f32|f64] [--tol FLOAT] [--max-iter INTEGER] [--l0nu INTEGER] [--l1nu INTEGER] [--coarsenu INTEGER] [--l0omega FLOAT] [--coarseomega FLOAT] [--l0postnu INTEGER] [--explicit] [--output FILE] [--verbose] [--profile]
+    [--precision f32|f64|mixed] [--tol FLOAT] [--max-iter INTEGER] [--l0nu INTEGER] [--l1nu INTEGER] [--coarsenu INTEGER] [--l0omega FLOAT] [--coarseomega FLOAT] [--l0postnu INTEGER] [--explicit] [--output FILE] [--verbose] [--profile]
 
 Solve ASC rasters using low-memory CGMG with shunt grounding.
---explicit uses explicit matrices with symmetric Gauss–Seidel instead of low-memory Jacobi.
+--precision mixed uses f32 hierarchy/work vectors with f64 master voltages and reliable residual updates.
+--explicit uses explicit matrices; both hierarchies use weighted Jacobi smoothing.
 --l0postnu adds L0 sweeps once after CG (default 40).
 --l0omega directly overrides L0 damping; --coarseomega overrides L1 onward.
 Default damping: --l0omega 0.95 --coarseomega 0.4.
@@ -18,7 +19,7 @@ Default damping: --l0omega 0.95 --coarseomega 0.4.
 --coarsenu sets pre/post sweeps on L2 and deeper nonterminal levels (default 25).
 --verbose prints aggregate solve timings by level.
 --profile traces equation residuals at each CG iteration and V-cycle step.
-Defaults: --tol 1e-4 (f64), 1e-3 (f32); --max-iter 100000 --l0nu 2 --l1nu 5 --coarsenu 25 --l0omega 0.95 --coarseomega 0.4 --l0postnu 40 --output rust_current.asc";
+Defaults: --tol 1e-4 (f64), 1e-3 (f32/mixed); --max-iter 100000 --l0nu 2 --l1nu 5 --coarsenu 25 --l0omega 0.95 --coarseomega 0.4 --l0postnu 40 --output rust_current.asc";
 
 fn argument_error(message: &str) -> ! {
     eprintln!("{message}\n\n{USAGE}");
@@ -68,9 +69,9 @@ fn main() {
     }
     let precision = options.get("--precision").map(String::as_str).unwrap_or("f64");
     let default_tol = match precision {
-        "f32" => <f32 as Real>::DEFAULT_TOLERANCE as f64,
+        "f32" | "mixed" => <f32 as Real>::DEFAULT_TOLERANCE as f64,
         "f64" => <f64 as Real>::DEFAULT_TOLERANCE,
-        _ => argument_error("--precision must be f32 or f64"),
+        _ => argument_error("--precision must be f32, f64 or mixed"),
     };
     let tol = options.get("--tol").map(|value| value.parse::<f64>().ok()
         .filter(|value| value.is_finite() && *value > 0.0)
@@ -102,10 +103,12 @@ fn main() {
         .unwrap_or_else(|_| argument_error("--l0postnu must be a nonnegative integer")))
         .unwrap_or(defaults.l0postnu);
     let mg_options = MgOptions { verbose, profile, l0nu, l1nu, coarsenu, l0omega, coarseomega, l0postnu, ..defaults };
+    if precision == "mixed" && explicit { argument_error("mixed precision uses the low-memory solver; remove --explicit"); }
     match precision {
+        "mixed" => run_mixed(&options, output, max_iter, tol, mg_options),
         "f32" => run::<f32>(&options, output, max_iter, tol, explicit, mg_options),
         "f64" => run::<f64>(&options, output, max_iter, tol, explicit, mg_options),
-        _ => argument_error("--precision must be f32 or f64"),
+        _ => argument_error("--precision must be f32, f64 or mixed"),
     }
 }
 
@@ -176,10 +179,10 @@ fn run<F: Real>(options: &HashMap<String, String>, output: &Path, max_iter: usiz
         GroundMode::Shunt,
         mg_options,
     );
-    assert!(
-        result.total_iters < max_iter,
-        "CG reached the iteration limit"
-    );
+    if let Some(error) = &result.error {
+        eprintln!("error: {error}");
+        std::process::exit(1);
+    }
     assert!(
         result.output.voltages.iter().all(|v| v.is_finite()),
         "non-finite voltages"
@@ -203,6 +206,85 @@ fn run<F: Real>(options: &HashMap<String, String>, output: &Path, max_iter: usiz
         resistance.yllcorner,
         resistance.cellsize,
         resistance.nodata,
+    );
+    eprintln!("{}: {} iterations", output.display(), result.total_iters);
+}
+
+fn run_mixed(options: &HashMap<String, String>, output: &Path, max_iter: usize,
+    tol: f64, mg_options: MgOptions) {
+    let resistance = parse_asc_typed::<f32, _>(&options["--resistance"]);
+    let mut source = parse_asc_typed::<f32, _>(&options["--source"]);
+    let ground = parse_asc_typed::<f32, _>(&options["--ground"]);
+    for grid in [&resistance, &source, &ground] {
+        assert!(grid.nrows > 0 && grid.ncols > 0, "empty raster");
+        assert_eq!(
+            grid.data.len(),
+            grid.nrows * grid.ncols,
+            "incomplete raster"
+        );
+        assert_eq!(
+            (
+                grid.nrows,
+                grid.ncols,
+                grid.xllcorner,
+                grid.yllcorner,
+                grid.cellsize,
+                grid.nodata
+            ),
+            (
+                resistance.nrows,
+                resistance.ncols,
+                resistance.xllcorner,
+                resistance.yllcorner,
+                resistance.cellsize,
+                resistance.nodata
+            ),
+            "rasters must align and use the same nodata value"
+        );
+    }
+    assert!(
+        source
+            .data
+            .iter()
+            .any(|&v| v.is_finite() && v > 0.0 && v != source.nodata),
+        "no sources"
+    );
+    assert!(
+        ground
+            .data
+            .iter()
+            .any(|&v| v.is_finite() && v > 0.0 && v != ground.nodata),
+        "no grounds"
+    );
+
+    let mut result = wasm_connect::solve::mixed::solve_raster_sources_mg_mixed_with_options(
+        &resistance.data, resistance.nrows, resistance.ncols, resistance.nodata,
+        &mut source.data, &ground.data, max_iter, tol, false, GroundMode::Shunt, mg_options,
+    );
+    if let Some(error) = &result.error { eprintln!("error: {error}"); std::process::exit(1); }
+    assert!(
+        result.output.voltages.iter().all(|v| v.is_finite()),
+        "non-finite voltages"
+    );
+    for (value, &res) in result.output.current_map.iter_mut().zip(&resistance.data) {
+        if !res.is_finite() || res <= 0.0 || res == resistance.nodata {
+            *value = resistance.nodata as f64;
+        } else {
+            assert!(value.is_finite(), "non-finite current");
+        }
+    }
+    if let Some(parent) = output.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).expect("cannot create output directory");
+    }
+    write_asc(
+        output,
+        &result.output.current_map,
+        resistance.nrows,
+        resistance.ncols,
+        resistance.xllcorner,
+        resistance.yllcorner,
+        resistance.cellsize,
+        resistance.nodata as f64,
     );
     eprintln!("{}: {} iterations", output.display(), result.total_iters);
 }

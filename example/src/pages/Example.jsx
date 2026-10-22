@@ -10,14 +10,14 @@ function LayerMaskCanvas({ data, nrows, ncols }) {
   useEffect(() => {
     if (canvasRef.current && data) renderMap(canvasRef.current, data, nrows, ncols, -1, false);
   }, [data, nrows, ncols]);
-  return <canvas ref={canvasRef} />;
+  return <canvas ref={canvasRef} className="map-canvas" />;
 }
 
 export default function Example() {
   const [resolution, setResolution] = useState('500');
   const [data, setData] = useState(null);
   const [result, setResult] = useState(null);
-  const [scales, setScales] = useState({ res: 'log', cur: 'log', volt: 'lin' });
+  const [scales, setScales] = useState({ res: 'quantile', cur: 'quantile', volt: 'lin' });
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('Loading Chudleigh data...');
   const [error, setError] = useState(false);
@@ -62,7 +62,7 @@ export default function Example() {
         buildings: { resistance: buildRes, width: 0 },
       };
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
-      const solve = lowMem ? runGeospatialPipelineMgStencilAsync : runGeospatialPipelineMgAsync;
+      const solve = (lowMem || precision === 'mixed') ? runGeospatialPipelineMgStencilAsync : runGeospatialPipelineMgAsync;
       const r = JSON.parse(await solve(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
         geojsonStr, JSON.stringify(layers), baseMeta.xllcorner, ymax, baseMeta.cellsize,
@@ -115,14 +115,14 @@ export default function Example() {
             </label>
             <label>Precision
               <select value={precision} onChange={e => {
-                setPrecision(e.target.value); setResult(null); setError(false);
+                setPrecision(e.target.value); if (e.target.value === 'mixed') setLowMem(true); setResult(null); setError(false);
                 setStatus(`Ready · ${e.target.value}`);
               }}>
-                <option value="f64">f64</option><option value="f32">f32</option>
+                <option value="f64">f64</option><option value="f32">f32</option><option value="mixed">Mixed precision</option>
               </select>
             </label>
             <label>Memory
-              <select value={String(lowMem)} onChange={e => setLowMem(e.target.value === 'true')}>
+              <select value={String(lowMem)} disabled={precision === 'mixed'} onChange={e => setLowMem(e.target.value === 'true')}>
                 <option value="false">Standard (matrix)</option>
                 <option value="true">Low-memory (stencil)</option>
               </select>
@@ -139,7 +139,7 @@ export default function Example() {
                 ['volt', result.voltage_map, 0],
               ].map(([type, values, nodata]) => <MapView key={type} type={type} data={values}
                 meta={{ nrows: result.nrows, ncols: result.ncols, nodata }}
-                logScale={scales[type] === 'log'} onToggleScale={scale => setScales({ ...scales, [type]: scale })} />)}
+                quantileScale={scales[type] === 'quantile'} onToggleScale={scale => setScales({ ...scales, [type]: scale })} />)}
             </div>
             <div className="maps">
               {(result.layer_masks || []).map(m => <div key={m.name} className="map-view">

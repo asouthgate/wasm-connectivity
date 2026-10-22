@@ -133,9 +133,10 @@ where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. Equation \eqref{eq:
 
 For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation. For Robin-type boundary conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are shunts to ground (see the similar approach used in \cite{vasilyeva2026multiscale}). In this system, we have:
 
-\[
+\begin{equation}
+\label{eq:shunt}
 L_{{shunt},ii} = L_{ii} + a_i,
-\]
+\end{equation}
 
 and
 
@@ -244,14 +245,14 @@ As the final output, the $\mathbf{e}_{0}$ is often referred to as the preconditi
 
 Construction of coarser systems is recursive, so that the error in the second level refers to the error in the error from the first level. 
 As such, at each level within the V-cycle, the residuals of the system are not the same as the outer-layer CG residuals, but instead are residuals
-of the $l$th system. We use $d$ to denote these in Algorithm \ref{alg:gmg_vcycle}.
+of the $l$th system.
 Once this system is solved, interpolation is used to return to the fine grid,
 which works for low-frequency features with high-frequency features already having been smoothed out.
 Finally, smoothing is performed again to eliminate interpolation artifacts.
 If this process is applied recursively, one outer loop is known as a `V-cycle' \cite[Ch. 4.6]{leveque2007finite, alcouffe2000parallel};
 at the lowest resolution, the system is solved directly. 
 
-Algorithm \ref{alg:gmg_vcycle} shows one cycle. Overall, one cycle performs the application of matrix $\mathbf{M}^{-1}$.
+Overall, one cycle performs the application of matrix $\mathbf{M}^{-1}$.
 For the CG update, the preconditioned residual $\mathbf{e_{fine}}$ is used to update $\mathbf{p}$ as \cite[Ch. 9.2]{saad2003iterative}
 
 \[
@@ -264,61 +265,50 @@ with
 \beta_{k+1} = \frac{\mathbf{r}^T_{k+1} \mathbf{e}_{0,k+1}}{\mathbf{r}_k^T \mathbf{e}_{0,k}}
 \]
 
-\begin{algorithm}[h]
-\caption{\textbf{Geometric Multigrid V-Cycle Preconditioner Step}. Given level $l$, the coarse laplacian $L_l$ is precomputed.
-Note, $\mathbf{d}'_l$ is the residual for the error system at a given level, not the residual from the CG outer loop, 
-i.e. $\mathbf{d}'_l = \mathbf{d}_l - \mathbf{L}_l\mathbf{e}_l $.}
-\label{alg:gmg_vcycle}
-\begin{algorithmic}[1] % [1] adds line numbers; remove if you prefer no line numbers
-
-\Function{V}{$\mathbf{L}_l, \mathbf{d}_l, l$}
-    \If{$l == l_{max}$}
-        \State \Return $\mathbf{e}_{l_{max}} = \text{Solve}(\mathbf{L}_{l_{max}}, \mathbf{d}_{l_{max}})$
-    \EndIf
-    
-    \State $\mathbf{e}_l = \mathbf{0}$
-    \State $\mathbf{e}_l = \text{Smooth}(\mathbf{L}_l, \mathbf{e}_l, \mathbf{d}_l)$
-    
-    \State $\mathbf{d}'_l = \mathbf{d}_l - \mathbf{L}_l \mathbf{e}_l$
-    \State $\mathbf{d}_{l+1} = \mathbf{R} \mathbf{d}'_l$
-    
-    \State $\mathbf{e}_{l+1} = \text{V}(\mathbf{L}_{l+1}, \mathbf{d}_{l+1}, l+1)$
-    
-    \State $\mathbf{e}_l = \mathbf{e}_l + \mathbf{P} \mathbf{e}_{l+1}$
-    
-    \State $\mathbf{e}_l = \text{Smooth}(\mathbf{L}_l, \mathbf{e}_l, \mathbf{d}_l)$
-    
-    \State \Return $\mathbf{e}_l$
-\EndFunction
-
-\end{algorithmic}
-\end{algorithm}
-
 \subsubsection{Memory optimisation}
 
-We implement a low-memory mode for the solver in order to trade time for memory efficiency in
+We implemented a memory-optimised mode for the solver in order to trade time for memory efficiency in
 the browser context where memory constraints can be more important.
-The central optimisation we make is to take a hybrid approach to matrix storage. 
-The largest data structure during run-time is the fine Laplacian. 
-This is straightforward to replace with an implicit representation that computes
-entries lazily from the input conductance values.
-After the fine level-0 Laplacian is eliminated, the next largest object is the level-1
-Laplacian. As described, the level-1 Laplacian is:
+The first optimisation we make is to take a hybrid approach to matrix storage. 
+The largest data structure during run-time is the fine Laplacian, with off diagonal entries
 
 \[
-L_1 = P_1^T L_0 P_1.
+L_{ij} = -(C_i + C_j) / 2,
 \]
 
-The number of non-zero terms in this product depends on the operator used. For a 2D raster grid,
-each row and column of $L$ has at most $5$ non-zero entries, and each row of $P$ has 
-at most $9$ non-zero entries.
-For the 9-point bilinear transfer operator fine matrix, we use a stencil representation in order
-to avoid storage for level-0 and level-1 matrices. This process results in a tradeoff between
+and diagonal entries
+
+\[
+L_{ii} = \sum_{j\in N(i)} C_{ij} + a_i,
+\]
+
+where $a_i$ is the shunt, as in \ref{eq:shunt}.
+
+In the explicit representation, this Laplacian can be pre-computed before the CG algorithm.
+This is straightforward to replace with an implicit representation that computes
+entries lazily from the input conductance values with an additional averaging operation
+per access. 
+
+The level-1 Laplacian can also be made implicit to avoid storage.
+As described, the level-1 Laplacian is:
+
+\begin{equation}
+\label{eq:coarse1}
+L_1 = P_1^T L P_1.
+\end{equation}
+
+The number of non-zero terms in computing each element of $L_1$ depends on the operator used. For a 2D raster grid,
+each row and column of $L$ has at most $5$ non-zero entries. For a 9-point bilinear prolongation,
+each row of $P_1^T$ may have 9 non-zero entries. 
+Unlike with the fine matrix, computing each entry of $L_1$ can be costly, resulting in a tradeoff between
 runtime and memory. 
 
 For pre- and post- weighted Jacobi smoothing, we utilise separate parameters for the number of smoothing
-iterations $\eta$ and weighting parameter $\omega$, since smoothing the level-0 fine matrix is more costly than 
-smoothing the coarse laplacians, especially for implicit representation.
+iterations $\eta$ and weighting parameter $\omega$, since smoothing the level-0 and level-1 implicit
+matrices is more costly than smoothing the explicit coarse laplacians.
+
+Secondly, we introduce a mixed precision option, where 32-bit floats are used except for a 64-bit voltage vector. 
+This results in memory use similar to a 32-bit implementation, but with better convergence.
 
 \subsection{Example datasets and resistance map calculation}
 
@@ -348,28 +338,7 @@ Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be ru
 For comparison of our low-memory approach with Circuitscape v6.1.0, we used three scenarios from three realistic resistance maps, spanning 
 maps rich in both low- and high-frequency variation. We used a final residual tolerance of $1\times10^{-4}$ for both applications.
 For the three scenarios, parameters for features such as roads and point lights were taken from \cite{finch2020modelling}.
-These scenarios are described in Table \ref{tab:scenarios} with 
-minimum, maximum, ratio (contrast), and Geary's C \cite{shekhar2007encyclopedia}.
-
-\begin{table}[htbp]
-  \centering  
-  \caption{Scenarios used in benchmarking}
-  \vspace{0.5em}
-  \label{tab:scenarios}
-  \small
-  \setlength{\tabcolsep}{4.5pt}
-  \begin{adjustbox}{max width=\linewidth,center}
-  \begin{tabular}{l l l l l l l}
-    \toprule
-    \textbf{Scenario} & $R_{\min}$ & $R_{\max}$ & $R_{\max}/R_{\min}$ & $C$ & \textbf{Source \%} & \textbf{Ground \%} \\
-    \midrule
-    DSM          & 11.59       & 142.05      & 12.24    & $6.1 \times 10^{-4}$ & 0.48 & 10.85 \\
-    Landscape    & $4.54 \times 10^{-5}$ & $3.6 \times 10^{-4}$ & 7.99 & 0.035 & 6.37 & 6.97 \\
-    Point-lights & $4.75 \times 10^3$      & $1.0 \times 10^{8}$ & $2.1 \times 10^{4}$ & 0.084 & 7.74 & 1.08 \\
-    \bottomrule
-  \end{tabular}
-  \end{adjustbox}
-\end{table}
+These scenarios are shown in \ref{fig:grid_panel_scenarios}.
 
 
 \subsection{Code}
@@ -382,15 +351,11 @@ This code contains several simple examples. All results can be easily reproduced
 
 Figure \ref{fig:wasm-connectivity} gives an example of a $1000\times1000$ resistance input and current map output
 computed and rendered in a browser frontend for an example region.
-Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size. As shown,
-the CGMG preconditioner was expectedly faster than Jacobi preconditioning. 
-For the low-memory mode, run-time increased modestly for a large ($>2\times$) reduction in memory.
+Figure \ref{fig:benchmarking} shows time and memory benchmarks as a function of raster size for the explicit CGMG, memory-optimised CGMG, and low-memory mixed-precision MGCG.
+For the low-memory mode, run-time increased modestly for a large reduction in memory. For the $2000\times2000$ rasters, the and low-memory mixed-precision implementation used
+under 300 MB, compared to 800 MB used in the explicit mode. This trade-off was reflected in runtime, where solving the largest rasters took approximately $3\times$ longer.
 For the browser context, this trade-off can enable workloads not practically possible otherwise,
-such as for high-resolution LIDAR data.
-
-Figure \ref{fig:hierarchy_memory} shows the savings made by using implicit representations of level-0 and level-1 matrices for 500$\times$500 rasters.
-Compared to other data structures used during computation, the majority of memory is taken by these two matrices. 
-We did not consider the process worth continuing for level-2 given the small potential for memory savings.
+such as for high-resolution LIDAR data at $1$ metre per pixel, covering several kilometres.
 
 
 \begin{figure}[htb!]
@@ -398,7 +363,7 @@ We did not consider the process worth continuing for level-2 given the small pot
 \includegraphics[width=0.48\textwidth]{figures/resistance-1000x1000-example.png}
 \hfill
 \includegraphics[width=0.48\textwidth]{figures/current-1000x1000-example.png}
-\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with Wasm connectivity library, computed in 13.01 seconds.}
+\caption{Example dataset $1000\times1000$ log resistance and log current maps rendered using a frontend with Wasm connectivity library.}
 \label{fig:wasm-connectivity}
 \end{figure}
 
@@ -407,15 +372,8 @@ We did not consider the process worth continuing for level-2 given the small pot
 \makebox[\textwidth][c]{%
     \includegraphics[width=1.2\textwidth]{figures/benchmarking.png}%
 }
-\caption{Time and memory comparison across resolutions for each solver. Individual data points are shown as crosses, the mean as solid lines.}
+\caption{Time and memory comparison across resolutions for each solver. Bars represent sample range, the mean as solid lines. The number of iterations at each resolution were 12, 12, 11, and 13 for explicit and low-mem versions, and 12, 12, 10 and 9 for low-mem mixed-precision.}
 \label{fig:benchmarking}
-\end{figure}
-
-\begin{figure}[htb!]
-\centering
-\includegraphics[width=1.0\textwidth]{figures/profile_comparison.png}
-\caption{Memory used during multigrid hierarchy for a 500$\times$500 raster for explicit (top) and matrix-free (bottom) implementations. Laplacian memory is compared to workspace memory, including vectors and other data stored during the MGCG algorithm. The majority of memory is taken by the Laplacian. }
-\label{fig:hierarchy_memory}
 \end{figure}
 
 Figure \ref{fig:comparison} shows a side-by-side comparison of a rescaled Circuitscape current map produced from
@@ -435,20 +393,14 @@ As demonstrated in Figure \ref{fig:cs_runtime}, our approach results in an appro
 when compared with Circuitscape,
 from 3.5 GB to 500 MB for 2000$\times$2000 raster images,
 with comparable runtime.
-For each of the scenarios, our low-memory imeplementation required 12, 9, and 27 iterations respectively.
+For each of the scenarios, our 64-bit low-memory imeplementation required 12, 9, and 27 iterations respectively.
 Figure \ref{fig:grid_panel_scenarios}
-shows these scenarios, each of which is non-trivial. However, even for the map with highest contrast,
-run-time was acceptable for the browser context.
-
-As such, provided there is sufficient memory, these results show our implementation can out-perform
-circuitscape in a web-application context, even though the circuitscape solver is faster,
-especially if the solver does not dominate the time taken for an
-analysis round trip from browser to server and back.
+shows these scenarios, each of which is non-trivial.
 
 \begin{figure}[htb!]
 \centering
 \includegraphics[width=1.0\textwidth]{figures/cs_vs_wasm.png}
-\caption{Runtime and memory comparison between Circuitscape v6.1.0 and our low-memory implementation. For all three scenarios, there was an approximately 7-fold reduction in memory, from 3.5 GB to 500 MB. For the first two scenarios, runtimes were comparable.}
+\caption{Runtime and memory comparison between Circuitscape v6.1.0 and our low-memory implementation. For all three scenarios, there was an approximately 7-fold reduction in memory, from 3.5 GB to 500 MB, with comparable runtimes. For mixed-precision, memory was $10\times$ lower, although this would be expected to less compared to 32-bit Circuitscape, which did not converge for the given input scenarios.}
 \label{fig:cs_runtime}
 \end{figure}
 
@@ -464,26 +416,20 @@ analysis round trip from browser to server and back.
 
 \section{Discussion}
 
-We present a WASM/Rust connectivity library for interactive geospatial edge-computing by implementing the core Circuitscape connectivity model with
-a custom conjugate gradient solver and geometric multigrid preconditioning. This method can be integrated into geospatial web applications,
+We present a WASM/Rust connectivity library for interactive geospatial edge-computing by implementing a memory-efficient CGMG solver with similar
+runtimes to Circuitscape and lower memory.
+This method can be integrated into geospatial web applications,
 allowing connectivity modelling in the resource-limited browser WASM context.
 Our approach can also reduce the requried backend server resources, as well as downstream concerns such as data governance complexity.
 
 Different solvers have different performance on different input matrices. While this implementation gives reasonable performance for the
 tested data across several realistic scenarios, it is likely to vary with different rasters depending on the type of features they contain.
-In this paper, the scenarios with highest contrast resistance maps took several minutes and 154 iterations to converge, likely due to the high-contrast input raster.
 For certain resistance maps, operator-dependent restriction, such as Alcouffe's method \cite{alcouffe2000parallel} could be used.
 
 Limitations of the WASM environment are primarily constraints in memory, CPU, and binary size. Traditionally, scientific software relies on 
 highly optimised libraries such as BLAS \cite{blackford2002updated}. In principle, this is possible for WASM, but it is not straightforward.
 Projects like Pyodide \cite{pyodide2026} demonstrate the work required for compiling existing packages into WASM executables. 
 In addition, for front-end web applications, it is often important that data transfer is minimised to enable responsive pages.
-
-Some of the methods applicable in this paper, as image processing codes, could be suitable for GPU acceleration, such as through WebGPU. Dedicated GPU
-cards offer acceleration for highly parallel workloads. While dedicated GPU cards can be expensive and in short supply, consumer hardware often includes
-integrated GPU that can be exploited for acceleration provided they are given a suitable workload. In addition, it is possible to implement multithreaded applications
-using shared buffers and web workers, which could also be explored in future work.
-Future work could also explore alternative solver methods and optimisations for the browser context, such as using mixed-precision or SIMD instructions.
 
 \section{LLM disclaimer}
 

@@ -9,6 +9,7 @@ use sprs::CsMat;
 use std::collections::HashSet;
 
 pub mod current;
+pub mod mixed;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum GroundMode {
@@ -103,6 +104,39 @@ pub struct RasterOutput<F: Real = f64> {
 pub struct AnnotatedOutput<T: Serialize> {
     pub output: T,
     pub total_iters: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub(crate) fn residual_error(relative: f64, tol: f64) -> Option<String> {
+    if relative.is_finite() && relative <= tol { return None; }
+    Some(format!("solve did not meet tolerance: true relative residual {relative:.6e}, requested {tol:.6e}. Use f64 or mixed precision instead of pure f32; for f64/mixed, increase --max-iter or relax --tol."))
+}
+
+fn final_residual_error<F: Real>(op: &dyn crate::linalg::operator::Operator<F>, b: &[F], x: &[F], tol: F) -> Option<String> {
+    let mut residual = 0.0_f64;
+    let mut norm = 0.0_f64;
+    for i in 0..b.len() {
+        let mut ax = 0.0_f64;
+        op.for_each_entry(i, &mut |j, a| { ax += a.to_f64().unwrap() * x[j].to_f64().unwrap(); });
+        let b = b[i].to_f64().unwrap();
+        residual += (b - ax).powi(2);
+        norm += b * b;
+    }
+    let relative = if norm == 0.0 { residual.sqrt() } else { (residual / norm).sqrt() };
+    residual_error(relative, tol.to_f64().unwrap())
+}
+
+fn final_stencil_residual_error<F: Real>(op: &StencilOperator<'_, F>, b: &[F], x: &[F], tol: F) -> Option<String> {
+    let mut residual = 0.0_f64;
+    let mut norm = 0.0_f64;
+    for i in 0..b.len() {
+        let b = b[i].to_f64().unwrap();
+        residual += (b - op.row_f64(i, x).0).powi(2);
+        norm += b * b;
+    }
+    let relative = if norm == 0.0 { residual.sqrt() } else { (residual / norm).sqrt() };
+    residual_error(relative, tol.to_f64().unwrap())
 }
 
 /// Jacobi-preconditioned raster solve. Rebuilds the circuit for every call
@@ -127,6 +161,7 @@ pub fn solve_raster_sources_jacobi<F: Real>(
     memory::record_jacobi_diag_typed::<F>(s.len());
     let res = solver::cg_solve(&laplacian, &s, max_iter, tol);
 
+    let error = final_residual_error(&laplacian, &s, &res.v, tol);
     let out = build_raster_output(
         &res.v,
         resistance_data,
@@ -141,6 +176,7 @@ pub fn solve_raster_sources_jacobi<F: Real>(
     AnnotatedOutput {
         output: out,
         total_iters: res.iters,
+        error,
     }
 }
 
@@ -313,6 +349,7 @@ pub fn solve_raster_sources_mg_with_options<F: Real>(
 
     drop(phase_timer);
     mg.final_post_smooth(&s, &mut res.v, options.l0postnu, options.profile, res.iters);
+    let error = final_residual_error(mg.fine_operator(), &s, &res.v, tol);
     let phase_timer = timing::timer(None, "Current map/output construction");
     let out = build_raster_output(
         &res.v,
@@ -331,6 +368,7 @@ pub fn solve_raster_sources_mg_with_options<F: Real>(
     AnnotatedOutput {
         output: out,
         total_iters: res.iters,
+        error,
     }
 }
 
@@ -461,6 +499,7 @@ pub fn solve_raster_sources_mg_stencil_in_place_with_options<F: Real>(
 
     drop(phase_timer);
     mg.final_post_smooth(s, &mut res.v, options.l0postnu, options.profile, res.iters);
+    let error = final_stencil_residual_error(mg.fine_stencil(), s, &res.v, tol);
     let phase_timer = timing::timer(None, "Current map/output construction");
     let out = build_raster_output_identity(
         res.v,
@@ -478,6 +517,7 @@ pub fn solve_raster_sources_mg_stencil_in_place_with_options<F: Real>(
     AnnotatedOutput {
         output: out,
         total_iters: res.iters,
+        error,
     }
 }
 
