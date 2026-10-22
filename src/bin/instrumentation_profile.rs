@@ -142,6 +142,7 @@ fn run<F: Real>(resolution: usize, solver: String, ground: String) {
         (base.nrows, base.ncols),
         "ground grid dimensions differ"
     );
+    // Bundled inputs only go up to 1000×1000; upsample them for larger profiling runs.
     if resolution > source_resolution {
         for grid in [&mut base, &mut src, &mut gnd] {
             upsample_grid(grid, resolution);
