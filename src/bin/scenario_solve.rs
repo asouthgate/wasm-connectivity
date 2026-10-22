@@ -10,7 +10,8 @@ const USAGE: &str = "Usage: scenario-solve --resistance FILE --source FILE --gro
 
 Solve ASC rasters using low-memory CGMG with shunt grounding.
 --precision mixed uses f32 hierarchy/work vectors with f64 master voltages and reliable residual updates.
---explicit uses explicit matrices; both hierarchies use weighted Jacobi smoothing.
+--explicit stores matrices explicitly instead of using the low-memory hierarchy.
+Both hierarchies use weighted Jacobi smoothing on nonterminal levels.
 --l0postnu adds L0 sweeps once after CG (default 40).
 --l0omega directly overrides L0 damping; --coarseomega overrides L1 onward.
 Default damping: --l0omega 0.95 --coarseomega 0.4.

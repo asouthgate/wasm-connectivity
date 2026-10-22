@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from '@wasm-connect/lib';
 import { renderMap } from '../render';
-import MapView from '../components/MapView';
+import RasterView from '../components/RasterView';
 import { StatusBar } from '../components/StatusBar';
 import { loadExampleData } from '../data';
 
@@ -137,7 +137,7 @@ export default function Example() {
                 ['res', result.resistance_map, data.baseMeta.nodata],
                 ['cur', result.current_map, 0],
                 ['volt', result.voltage_map, 0],
-              ].map(([type, values, nodata]) => <MapView key={type} type={type} data={values}
+              ].map(([type, values, nodata]) => <RasterView key={type} type={type} data={values}
                 meta={{ nrows: result.nrows, ncols: result.ncols, nodata }}
                 quantileScale={scales[type] === 'quantile'} onToggleScale={scale => setScales({ ...scales, [type]: scale })} />)}
             </div>

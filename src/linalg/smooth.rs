@@ -60,8 +60,6 @@ impl<F: Real> Smoother<F> {
     }
 }
 
-/// One simultaneous weighted Jacobi sweep. The entire product uses the old e;
-/// only after that product is complete are any entries of e updated.
 pub(super) fn weighted_jacobi_smooth<F: Real>(
     op: &dyn Operator<F>,
     e: &mut [F],
