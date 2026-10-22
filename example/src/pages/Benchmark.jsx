@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect } from 'react';
-import { downsampleRaster } from '@wasm-connect/lib';
+import { downsampleRaster, upsampleRaster } from '@wasm-connect/lib';
 import { StatusBar } from '../components/StatusBar';
 import { downloadCSV } from '../stats';
 import { loadExampleData } from '../data';
 
-const RESOLUTIONS = [1000, 800, 600, 400, 200];
+const RESOLUTIONS = [2000, 1800, 1600, 1400, 1200, 1000, 800, 600, 400, 200];
 
 const DEFAULT_PARAMS = {
   roads:    { resistance: 5,  width: 3 },
@@ -12,12 +12,12 @@ const DEFAULT_PARAMS = {
   buildings:{ resistance: 500, width: 0 },
 };
 
-const RUNS = ['jacobi', 'gmg', 'gmg-lowmem'];
+const RUNS = ['gmg', 'gmg-lowmem', 'gmg-lowmem-f32'];
 
 const RUN_LABELS = {
-  jacobi: 'Jacobi CG',
-  gmg: 'GMG CG',
-  'gmg-lowmem': 'GMG CG (low-mem)',
+  gmg: 'GMG CG (f64)',
+  'gmg-lowmem': 'GMG CG (low-mem, f64)',
+  'gmg-lowmem-f32': 'GMG CG (low-mem, f32)',
 };
 
 export const BENCHMARK_HEADERS = [
@@ -70,13 +70,13 @@ export default function Benchmark() {
       setData(loaded);
       const { baseData, baseMeta } = loaded;
       const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
-      setStatus(`loaded Chudleigh 1000×1000: ${nc.toLocaleString()} conductive cells`);
-    }).catch(err => setStatus(`error: ${err.message}`));
+      setStatus(`Loaded Chudleigh 1000×1000`);
+    }).catch(err => setStatus(`Error: ${err.message}`));
   }, []);
 
   const start = useCallback(async () => {
     if (!baseData || running) return;
-    setRunning(true); setRuns([]); setStatus('benchmark running...');
+    setRunning(true); setRuns([]); setStatus('Benchmark running...');
 
     const nd = baseMeta.nodata || -9999;
     const paramsJson = JSON.stringify(DEFAULT_PARAMS);
@@ -88,11 +88,14 @@ export default function Benchmark() {
       let nrows = res, ncols = res;
       let xmin = baseMeta.xllcorner;
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
-      let cellsize = 1000 / res;
+      let cellsize = baseMeta.cellsize * baseMeta.ncols / res;
 
-      if (res !== 1000) {
+      if (res !== baseMeta.nrows || res !== baseMeta.ncols) {
         const ds = (r, nr, nc) => {
-          const json = JSON.parse(downsampleRaster(r, 1000, 1000, nd, nr, nc));
+          if (nr > baseMeta.nrows || nc > baseMeta.ncols) {
+            return upsampleRaster(r, baseMeta.nrows, baseMeta.ncols, nr, nc);
+          }
+          const json = JSON.parse(downsampleRaster(r, baseMeta.nrows, baseMeta.ncols, nd, nr, nc));
           return new Float64Array(json.data);
         };
         rsData = ds(baseData, res, res);
@@ -102,7 +105,7 @@ export default function Benchmark() {
 
       for (let r = 1; r <= reps; r++) {
         for (const runName of RUNS) {
-          setStatus(`running ${res}×${res}, rep ${r}/${reps}: ${runName}...`);
+          setStatus(`Running ${res}×${res}, rep ${r}/${reps}: ${runName}...`);
           try {
             const result = await callBenchWorker(`benchmark_${runName}`, [
               rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR, false,
@@ -118,7 +121,7 @@ export default function Benchmark() {
       }
     }
 
-    setStatus(`done — ${allResults.length} runs across ${RESOLUTIONS.length} resolutions`);
+    setStatus(`Run complete: ${allResults.length} runs across ${RESOLUTIONS.length} resolutions`);
     setRunning(false);
   }, [baseData, srcData, gndData, geojsonStr, baseMeta, reps, running]);
 
@@ -141,7 +144,6 @@ export default function Benchmark() {
 
       {hasData && (
         <div className="bench-info">
-          Chudleigh 1000×1000 · resolutions: {RESOLUTIONS.join(', ')} · {reps} rep{reps !== 1 ? 's' : ''} · 3 solvers per rep: Jacobi CG, GMG CG, GMG CG (low-mem)
         </div>
       )}
 
@@ -167,7 +169,7 @@ export default function Benchmark() {
               </tr>
             ))}
             {running && runs.length < totalRuns && (
-              <tr><td colSpan={8}>running...</td></tr>
+              <tr><td colSpan={8}>Running...</td></tr>
             )}
           </tbody>
         </table>

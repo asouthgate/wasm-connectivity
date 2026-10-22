@@ -1,33 +1,34 @@
-pub struct Grid {
-    pub data: Vec<f64>,
+use crate::linalg::real::{Real, scalar};
+pub struct Grid<F: Real = f64> {
+    pub data: Vec<F>,
     pub nrows: usize,
     pub ncols: usize,
 }
 
-impl Grid {
-    pub fn get(&self, row: usize, col: usize) -> f64 {
+impl<F: Real> Grid<F> {
+    pub fn get(&self, row: usize, col: usize) -> F {
         self.data[row * self.ncols + col]
     }
 
-    pub fn to_conductance(resistance_data: &[f64], nrows: usize, ncols: usize, nodata: f64) -> Self {
-        let data: Vec<f64> = resistance_data.iter()
+    pub fn to_conductance(resistance_data: &[F], nrows: usize, ncols: usize, nodata: F) -> Self {
+        let data: Vec<F> = resistance_data.iter()
             .map(|&r| {
-                if !r.is_finite() || r == nodata || r <= 0.0 {
-                    0.0
+                if !r.is_finite() || r == nodata || r <= scalar::<F>(0.0) {
+                    scalar::<F>(0.0)
                 } else {
-                    1.0 / r
+                    scalar::<F>(1.0) / r
                 }
             })
             .collect();
-        Grid { data, nrows, ncols }
+        Grid::<F> { data, nrows, ncols }
     }
 
     pub fn is_conductive(&self, row: usize, col: usize) -> bool {
-        self.get(row, col) > 0.0
+        self.get(row, col) > scalar::<F>(0.0)
     }
 }
 
-pub fn build_cell_to_node(conductance: &Grid) -> (Vec<i32>, usize) {
+pub fn build_cell_to_node<F: Real>(conductance: &Grid<F>) -> (Vec<i32>, usize) {
     let mut cell_to_node = vec![0i32; conductance.nrows * conductance.ncols];
     let mut node_id = 1i32;
     for row in 0..conductance.nrows {

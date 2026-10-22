@@ -10,11 +10,11 @@ pub const FILL_RESISTANCE: f64 = 1e9;
 
 /// Replace nodata / non-positive / non-finite resistance with
 /// [`FILL_RESISTANCE`] so every cell becomes a graph node.
-pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
+pub fn fill_nodata<F: crate::linalg::real::Real>(data: &[F], nodata: F) -> Vec<F> {
     data.iter()
         .map(|&v| {
-            if v == nodata || !v.is_finite() || v <= 0.0 {
-                FILL_RESISTANCE
+            if v == nodata || !v.is_finite() || v <= F::zero() {
+                F::from_f64(FILL_RESISTANCE).unwrap()
             } else {
                 v
             }
@@ -22,11 +22,49 @@ pub fn fill_nodata(data: &[f64], nodata: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Nearest-neighbour upsampling in row-major order. Values, including nodata,
+/// are copied unchanged; callers scale cell size to preserve the extent.
+pub fn upsample_raster<F: crate::linalg::real::Real>(
+    data: &[F], nrows: usize, ncols: usize, target_rows: usize, target_cols: usize,
+) -> Vec<F> {
+    assert!(nrows > 0 && ncols > 0, "source dimensions must be positive");
+    assert_eq!(data.len(), nrows * ncols, "source dimensions must match its data");
+    assert!(target_rows >= nrows && target_cols >= ncols, "upsampling cannot shrink a dimension");
+    let mut output = vec![F::zero(); target_rows * target_cols];
+    for row in 0..target_rows {
+        let source_row = row * nrows / target_rows;
+        for col in 0..target_cols {
+            let source_col = col * ncols / target_cols;
+            output[row * target_cols + col] = data[source_row * ncols + source_col];
+        }
+    }
+    output
+}
+
 #[derive(Serialize)]
 pub struct DownsampleOutput {
     pub data: Vec<f64>,
     pub nrows: usize,
     pub ncols: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nearest_upsampling_preserves_alignment_values_and_nodata() {
+        let input = [1.0, -9999.0, 0.0, f64::NAN];
+        let output = upsample_raster(&input, 2, 2, 4, 4);
+        for row in 0..4 {
+            for col in 0..4 {
+                assert_eq!(output[row * 4 + col].to_bits(), input[(row / 2) * 2 + col / 2].to_bits());
+            }
+        }
+        assert_eq!(upsample_raster(&[1.0, 2.0, 3.0, 4.0], 2, 2, 3, 3),
+            vec![1.0, 1.0, 2.0, 1.0, 1.0, 2.0, 3.0, 3.0, 4.0]);
+        assert_eq!(upsample_raster(&[1.0, 2.0], 1, 2, 1, 2), vec![1.0, 2.0]);
+    }
 }
 
 /// Downsample a raster using block averaging. Ignores nodata pixels in each block.

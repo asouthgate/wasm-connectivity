@@ -1,8 +1,13 @@
+use crate::linalg::real::{Real, scalar};
 use crate::linalg::cholesky;
 use crate::linalg::operator::{FineOperator, Operator};
 use crate::linalg::pcg::Preconditioner;
 use crate::linalg::transfer::Transfer;
 use crate::memory;
+use crate::linalg::{timing, profile};
+use crate::linalg::smooth::Smoother;
+#[cfg(test)]
+use crate::linalg::smooth::{weighted_jacobi_smooth, symmetric_gauss_seidel_smooth};
 #[cfg(feature = "instrumentation-profile")]
 use crate::memory::GalerkinScratch;
 use sprs::CsMat;
@@ -15,6 +20,21 @@ const SMALL_FINE_DIRECT_LIMIT: usize = 49;
 /// Native multigrid setup controls; browser calls use the defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct MgOptions {
+    /// Sweeps in each pre/post phase on level 0.
+    pub l0nu: usize,
+    /// Level-1 sweeps; None inherits l0nu.
+    pub l1nu: Option<usize>,
+    /// Sweeps in each pre/post phase on deeper nonterminal levels.
+    pub coarsenu: usize,
+    /// Optional direct damping overrides on level 0 and levels 1 onward.
+    pub l0omega: Option<f64>,
+    pub coarseomega: Option<f64>,
+    /// Print aggregate solve timings by level.
+    pub verbose: bool,
+    /// Trace per-iteration equation residuals in the native solve wrappers.
+    pub profile: bool,
+    /// Extra fine-level sweeps applied once after CG.
+    pub l0postnu: usize,
     /// Maximum hierarchy depth, including the fine level.
     pub max_levels: usize,
     /// Desired upper bound on unknowns at the direct Cholesky level.
@@ -28,6 +48,14 @@ pub struct MgOptions {
 impl Default for MgOptions {
     fn default() -> Self {
         Self {
+            l0nu: 2,
+            l1nu: Some(5),
+            coarsenu: 25,
+            l0omega: Some(0.95),
+            coarseomega: Some(0.4),
+            verbose: false,
+            profile: false,
+            l0postnu: 40,
             max_levels: 8,
             cholesky_size: None,
         }
@@ -35,11 +63,11 @@ impl Default for MgOptions {
 }
 
 /// One (coarse) level of the multigrid hierarchy.
-struct MgLevel {
-    laplacian: CoarseOperator,
+struct MgLevel<F: Real = f64> {
+    laplacian: CoarseOperator<F>,
     nrows: usize,
     ncols: usize,
-    cholesky_l: Option<Vec<f64>>,
+    cholesky_l: Option<Vec<F>>,
     /// Geometric transfer from this level to the finer level above.
     prolongation: Transfer,
 }
@@ -47,73 +75,50 @@ struct MgLevel {
 /// Per-level scratch vectors used by the V-cycle:
 /// `e` (error approximation), `d_prime` (residual of the error system),
 /// `d` (the level's right-hand side).
-struct LevelWorkspace {
-    e: Vec<f64>,
-    d_prime: Vec<f64>,
-    d: Vec<f64>,
-    smoother: Smoother,
+struct LevelWorkspace<F: Real = f64> {
+    nu: usize,
+    omega_override: Option<F>,
+    e: Vec<F>,
+    d_prime: Vec<F>,
+    d: Vec<F>,
+    smoother: Smoother<F>,
 }
 
-/// Coefficients are cached only for the diagonal-based smoother. Explicit MG
-/// retains its existing Gauss–Seidel update and damping.
-enum Smoother {
-    SymmetricGaussSeidel,
-    WeightedJacobi { diag_inv: Vec<f64>, omega: f64 },
+// The finest level borrows its RHS and correction directly from CG.
+struct CycleWorkspace<'a, F: Real = f64> {
+    nu: usize,
+    omega_override: Option<F>,
+    e: &'a mut [F],
+    d_prime: &'a mut [F],
+    d: &'a [F],
+    smoother: &'a Smoother<F>,
 }
 
-impl Smoother {
-    fn weighted_jacobi(op: &dyn Operator, requested_omega: f64) -> Self {
-        let mut diag_inv = vec![0.0; op.n()];
-        let mut upper_bound: f64 = 0.0;
-        for (row, inverse) in diag_inv.iter_mut().enumerate() {
-            let mut diagonal: f64 = 0.0;
-            let mut abs_sum: f64 = 0.0;
-            op.for_each_entry(row, &mut |col, value| {
-                abs_sum += value.abs();
-                if col == row {
-                    diagonal = value;
-                }
-            });
-            if diagonal.abs() > 1e-15 {
-                *inverse = 1.0 / diagonal.abs();
-                upper_bound = upper_bound.max(abs_sum * *inverse);
-            }
-        }
-        // Gershgorin bounds the eigenvalues of D^-1 L by the largest absolute
-        // row sum. Keep omega*lambda_max <= 1.8 < 2 for damped Jacobi.
-        let omega = requested_omega.min(1.8 / upper_bound.max(1.0));
-        Self::WeightedJacobi { diag_inv, omega }
-    }
-
-    fn smooth(
-        &self,
-        op: &dyn Operator,
-        e: &mut [f64],
-        d: &[f64],
-        scratch: &mut [f64],
-        gs_omega: f64,
-    ) {
-        match self {
-            Self::SymmetricGaussSeidel => symmetric_gauss_seidel_smooth(op, e, d, gs_omega),
-            Self::WeightedJacobi { diag_inv, omega } => {
-                weighted_jacobi_smooth(op, e, d, diag_inv, *omega, scratch)
-            }
+impl<F: Real> LevelWorkspace<F> {
+    fn as_cycle(&mut self) -> CycleWorkspace<'_, F> {
+        CycleWorkspace::<F> {
+            nu: self.nu,
+            omega_override: self.omega_override,
+            e: &mut self.e,
+            d_prime: &mut self.d_prime,
+            d: &self.d,
+            smoother: &self.smoother,
         }
     }
 }
 
 /// Persistent scratch for P^T L (P x). Both buffers have the fine operator's
 /// size and are reused across all level-1 matvecs and smoothing sweeps.
-struct GalerkinMatvecWorkspace {
-    prolonged: Vec<f64>,
-    applied: Vec<f64>,
+struct GalerkinMatvecWorkspace<F: Real = f64> {
+    prolonged: Vec<F>,
+    applied: Vec<F>,
 }
 
-impl GalerkinMatvecWorkspace {
+impl<F: Real> GalerkinMatvecWorkspace<F> {
     fn new(n: usize) -> Self {
         Self {
-            prolonged: vec![0.0; n],
-            applied: vec![0.0; n],
+            prolonged: vec![scalar::<F>(0.0); n],
+            applied: vec![scalar::<F>(0.0); n],
         }
     }
 }
@@ -125,33 +130,32 @@ impl GalerkinMatvecWorkspace {
 /// and applies level 1 as P^T L_0 (P x); level 2 is the first CSR. Explicit MG
 /// stores every Laplacian and uses symmetric Gauss–Seidel. Both paths use
 /// geometric transfers without entry arrays.
-pub struct MgPreconditioner<'a> {
-    fine: FineOperator<'a>,
+pub struct MgPreconditioner<'a, F: Real = f64> {
+    fine: FineOperator<'a, F>,
     // Retain operators for post-smoothing on ascent and reuse across PCG iterations.
-    coarse: Vec<MgLevel>,
-    fine_cholesky_l: Option<Vec<f64>>,
-    nu: usize,
-    omega: f64,
+    coarse: Vec<MgLevel<F>>,
+    fine_cholesky_l: Option<Vec<F>>,
+    omega: F,
     // Preconditioner::apply takes &self; RefCell permits scratch-buffer reuse.
     // Borrow once at the boundary, then recurse with ordinary mutable slices.
-    workspaces: RefCell<Vec<LevelWorkspace>>,
+    workspaces: RefCell<Vec<LevelWorkspace<F>>>,
 }
 
 /// Level 1 stores only its regularisation and structure count; deeper levels
 /// retain CSR matrices. The fine operator is borrowed only by temporary views,
 /// so the owning hierarchy never contains references into itself.
-enum CoarseOperator {
+enum CoarseOperator<F: Real = f64> {
     Galerkin {
-        reg_diag0: f64,
-        matvec_workspace: RefCell<GalerkinMatvecWorkspace>,
+        reg_diag0: F,
+        matvec_workspace: RefCell<GalerkinMatvecWorkspace<F>>,
         #[cfg(feature = "instrumentation-profile")]
         nnz: usize,
     },
-    Explicit(CsMat<f64>),
+    Explicit(CsMat<F>),
 }
 
-impl MgLevel {
-    fn operator<'b>(&'b self, fine: &'b FineOperator<'b>) -> LevelOperator<'b> {
+impl<F: Real> MgLevel<F> {
+    fn operator<'b>(&'b self, fine: &'b FineOperator<'b, F>) -> LevelOperator<'b, F> {
         match &self.laplacian {
             CoarseOperator::Explicit(matrix) => LevelOperator::Borrowed(matrix),
             CoarseOperator::Galerkin {
@@ -177,31 +181,31 @@ impl MgLevel {
 }
 
 /// A borrowed view of any hierarchy level.
-enum LevelOperator<'b> {
-    Borrowed(&'b dyn Operator),
-    Galerkin(GalerkinOperator<'b, FineOperator<'b>>),
+enum LevelOperator<'b, F: Real = f64> {
+    Borrowed(&'b dyn Operator<F>),
+    Galerkin(GalerkinOperator<'b, FineOperator<'b, F>, F>),
 }
 
-impl Operator for LevelOperator<'_> {
+impl<F: Real> Operator<F> for LevelOperator<'_, F> {
     fn n(&self) -> usize {
         match self {
             Self::Borrowed(op) => op.n(),
             Self::Galerkin(op) => op.n(),
         }
     }
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+    fn matvec(&self, x: &[F], y: &mut [F]) {
         match self {
             Self::Borrowed(op) => op.matvec(x, y),
             Self::Galerkin(op) => op.matvec(x, y),
         }
     }
-    fn diag_inv(&self) -> Vec<f64> {
+    fn diag_inv(&self) -> Vec<F> {
         match self {
             Self::Borrowed(op) => op.diag_inv(),
             Self::Galerkin(op) => op.diag_inv(),
         }
     }
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         match self {
             Self::Borrowed(op) => op.for_each_entry(row, f),
             Self::Galerkin(op) => op.for_each_entry(row, f),
@@ -214,30 +218,30 @@ impl Operator for LevelOperator<'_> {
 /// by one cell. The resulting coarse columns lie within one cell of the row.
 /// Keep presence separate from values: cancellation must not drop structural
 /// entries that the explicit symbolic Galerkin pass would retain.
-struct GalerkinRow {
-    values: [f64; 9],
+struct GalerkinRow<F: Real = f64> {
+    values: [F; 9],
     present: u32,
 }
 
-struct GalerkinOperator<'b, T: Operator + ?Sized> {
-    fine: &'b T,
+struct GalerkinOperator<'b, O: Operator<F> + ?Sized, F: Real = f64> {
+    fine: &'b O,
     transfer: Transfer,
-    reg_diag0: f64,
-    matvec_workspace: &'b RefCell<GalerkinMatvecWorkspace>,
+    reg_diag0: F,
+    matvec_workspace: &'b RefCell<GalerkinMatvecWorkspace<F>>,
 }
 
-impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
-    fn row(&self, row: usize) -> GalerkinRow {
-        let mut result = GalerkinRow {
-            values: [0.0; 9],
+impl<F: Real, O: Operator<F> + ?Sized> GalerkinOperator<'_, O, F> {
+    fn row(&self, row: usize) -> GalerkinRow::<F> {
+        let mut result = GalerkinRow::<F> {
+            values: [scalar::<F>(0.0); 9],
             present: 0,
         };
         let nc = self.transfer.coarse_ncols;
         let cr = (row / nc) as isize;
         let cc = (row % nc) as isize;
-        self.transfer.for_each_column(row, |a, p_ai| {
+        self.transfer.for_each_column::<F>(row, |a, p_ai| {
             self.fine.for_each_entry(a, &mut |b, l_ab| {
-                self.transfer.for_each_row_coordinate(b, |jr, jc, p_bj| {
+                self.transfer.for_each_row_coordinate::<F>(b, |jr, jc, p_bj| {
                     let dr = jr as isize - cr;
                     let dc = jc as isize - cc;
                     assert!(
@@ -256,7 +260,7 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
         result
     }
 
-    fn visit_row(&self, row: usize, entries: &GalerkinRow, f: &mut dyn FnMut(usize, f64)) {
+    fn visit_row(&self, row: usize, entries: &GalerkinRow<F>, f: &mut dyn FnMut(usize, F)) {
         let nc = self.transfer.coarse_ncols;
         let cr = (row / nc) as isize;
         let cc = (row % nc) as isize;
@@ -271,8 +275,8 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
 
     /// Match regularize_laplacian: norm of the aggregated, unregularised
     /// entries, followed by a correction at node 0. No rows are retained.
-    fn setup_metadata(&self) -> (f64, usize) {
-        let mut norm2 = 0.0;
+    fn setup_metadata(&self) -> (F, usize) {
+        let mut norm2 = scalar::<F>(0.0);
         let mut nnz = 0;
         for row in 0..self.n() {
             self.for_each_entry(row, &mut |_, val| {
@@ -281,60 +285,60 @@ impl<T: Operator + ?Sized> GalerkinOperator<'_, T> {
             });
         }
         let norm = norm2.sqrt();
-        let reg = if norm.is_finite() && norm > 0.0 {
-            1e-5 * norm
+        let reg = if norm.is_finite() && norm > scalar::<F>(0.0) {
+            scalar::<F>(1e-5) * norm
         } else {
-            0.0
+            scalar::<F>(0.0)
         };
         (reg, nnz)
     }
 }
 
-impl<T: Operator + ?Sized> Operator for GalerkinOperator<'_, T> {
+impl<F: Real, O: Operator<F> + ?Sized> Operator<F> for GalerkinOperator<'_, O, F> {
     fn n(&self) -> usize {
         self.transfer.coarse_n()
     }
 
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+    fn matvec(&self, x: &[F], y: &mut [F]) {
         let mut workspace = self.matvec_workspace.borrow_mut();
-        let GalerkinMatvecWorkspace { prolonged, applied } = &mut *workspace;
-        prolonged.fill(0.0);
+        let GalerkinMatvecWorkspace::<F> { prolonged, applied } = &mut *workspace;
+        prolonged.fill(scalar::<F>(0.0));
         self.transfer.prolongate(x, prolonged);
         self.fine.matvec(prolonged, applied);
         self.transfer.restrict(applied, y);
         y[0] += self.reg_diag0 * x[0];
     }
 
-    fn diag_inv(&self) -> Vec<f64> {
+    fn diag_inv(&self) -> Vec<F> {
         (0..self.n())
             .map(|row| {
                 let diag = self.row(row).values[4];
-                if diag.abs() > 1e-15 {
-                    1.0 / diag.abs()
+                if diag.abs() > scalar::<F>(1e-15) {
+                    scalar::<F>(1.0) / diag.abs()
                 } else {
-                    0.0
+                    scalar::<F>(0.0)
                 }
             })
             .collect()
     }
 
-    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, f64)) {
+    fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         self.visit_row(row, &self.row(row), f);
     }
 }
 
 /// Galerkin coarse operator: L_coarse = P^T L_fine P. Transfer entries are
 /// generated in both orientations; neither P nor L_fine P is materialised.
-fn galerkin_coarsen_operator(fine: &dyn Operator, p: Transfer) -> CsMat<f64> {
+fn galerkin_coarsen_operator<F: Real>(fine: &dyn Operator<F>, p: Transfer) -> CsMat::<F> {
     let coarse_n = p.coarse_n();
     // Symbolic pass: count distinct columns before allocating exact CSR slots.
     // This avoids hash maps and the potentially large intermediate L_fine P.
     let mut seen = vec![usize::MAX; coarse_n];
     let mut row_nnz = vec![0usize; coarse_n];
     for i in 0..coarse_n {
-        p.for_each_column(i, |a, _| {
+        p.for_each_column::<F>(i, |a, _| {
             fine.for_each_entry(a, &mut |b, _| {
-                p.for_each_row(b, |j, _| {
+                p.for_each_row::<F>(b, |j, _| {
                     if seen[j] != i {
                         seen[j] = i;
                         row_nnz[i] += 1;
@@ -354,11 +358,11 @@ fn galerkin_coarsen_operator(fine: &dyn Operator, p: Transfer) -> CsMat<f64> {
     let mut pos = vec![0usize; coarse_n];
     let mut row_count = vec![0usize; coarse_n];
     let mut cols = vec![0usize; nnz];
-    let mut vals = vec![0.0f64; nnz];
+    let mut vals = vec![scalar::<F>(0.0); nnz];
     for i in 0..coarse_n {
-        p.for_each_column(i, |a, p_ai| {
+        p.for_each_column::<F>(i, |a, p_ai| {
             fine.for_each_entry(a, &mut |b, l_ab| {
-                p.for_each_row(b, |j, p_bj| {
+                p.for_each_row::<F>(b, |j, p_bj| {
                     let slot = if seen[j] != i {
                         seen[j] = i;
                         let slot = indptr[i] + row_count[i];
@@ -377,19 +381,19 @@ fn galerkin_coarsen_operator(fine: &dyn Operator, p: Transfer) -> CsMat<f64> {
     CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
 }
 
-fn operator_to_dense(op: &dyn Operator) -> Vec<f64> {
+fn operator_to_dense<F: Real>(op: &dyn Operator<F>) -> Vec<F> {
     let n = op.n();
-    let mut dense = vec![0.0; n * n];
+    let mut dense = vec![scalar::<F>(0.0); n * n];
     for row in 0..n {
         op.for_each_entry(row, &mut |col, val| dense[row * n + col] = val);
     }
     dense
 }
 
-impl MgPreconditioner<'static> {
+impl<F: Real> MgPreconditioner<'static, F> {
     /// Build a multigrid hierarchy from a materialised fine-grid matrix.
     pub fn build_from_laplacian(
-        laplacian: CsMat<f64>,
+        laplacian: CsMat<F>,
         nrows: usize,
         ncols: usize,
         max_levels: usize,
@@ -398,12 +402,12 @@ impl MgPreconditioner<'static> {
     }
 }
 
-impl<'a> MgPreconditioner<'a> {
+impl<'a, F: Real> MgPreconditioner<'a, F> {
     /// Build a multigrid hierarchy from a fine-grid operator (materialised or
     /// matrix-free). A stencil fine grid also keeps level 1 matrix-free;
     /// subsequent levels are Galerkin-coarsened and materialised.
     pub fn build_from_operator(
-        fine: FineOperator<'a>,
+        fine: FineOperator<'a, F>,
         nrows: usize,
         ncols: usize,
         max_levels: usize,
@@ -422,13 +426,17 @@ impl<'a> MgPreconditioner<'a> {
     /// Build with an optional direct-solve grid size. Rejects zero dimensions,
     /// zero hierarchy depth and a zero Cholesky size.
     pub fn build_with_options(
-        fine: FineOperator<'a>,
+        fine: FineOperator<'a, F>,
         nrows: usize,
         ncols: usize,
         options: MgOptions,
     ) -> Self {
         assert!(nrows > 0 && ncols > 0, "MG requires nonempty dimensions");
         assert!(options.max_levels > 0, "MG requires at least one level");
+        for omega in [options.l0omega, options.coarseomega].into_iter().flatten() {
+            assert!(omega.is_finite() && omega > 0.0, "smoothing omega must be finite and positive");
+        }
+        assert!(options.l0nu > 0 && options.l1nu.unwrap_or(options.l0nu) > 0 && options.coarsenu > 0, "MG requires at least one smoothing sweep");
         assert!(
             options.cholesky_size != Some(0),
             "Cholesky size must be positive"
@@ -441,7 +449,11 @@ impl<'a> MgPreconditioner<'a> {
             nrows * ncols
         );
 
-        let mut coarse: Vec<MgLevel> = Vec::new();
+        timing::level(0, nrows, ncols, match &fine {
+            FineOperator::Explicit(_) => "explicit",
+            FineOperator::Stencil(_) => "stencil",
+        });
+        let mut coarse: Vec<MgLevel<F>> = Vec::new();
         let (mut nr, mut nc) = (nrows, ncols);
 
         while 1 + coarse.len() < options.max_levels {
@@ -474,7 +486,7 @@ impl<'a> MgPreconditioner<'a> {
                 let op = GalerkinOperator {
                     fine: &fine,
                     transfer: prolongation,
-                    reg_diag0: 0.0,
+                    reg_diag0: scalar::<F>(0.0),
                     matvec_workspace: &matvec_workspace,
                 };
                 let (reg_diag0, _nnz) = op.setup_metadata();
@@ -495,7 +507,7 @@ impl<'a> MgPreconditioner<'a> {
                 crate::circuit::laplacian::regularize_laplacian(&mut matrix);
                 CoarseOperator::Explicit(matrix)
             };
-            coarse.push(MgLevel {
+            coarse.push(MgLevel::<F> {
                 laplacian,
                 nrows: next_nr,
                 ncols: next_nc,
@@ -503,6 +515,11 @@ impl<'a> MgPreconditioner<'a> {
                 prolongation,
             });
 
+            timing::level(coarse.len(), next_nr, next_nc,
+                match &coarse.last().unwrap().laplacian {
+                    CoarseOperator::Explicit(_) => "explicit",
+                    CoarseOperator::Galerkin { .. } => "galerkin-stencil",
+                });
             nr = next_nr;
             nc = next_nc;
         }
@@ -512,17 +529,17 @@ impl<'a> MgPreconditioner<'a> {
         let mut fine_cholesky_l = None;
         if let Some(coarsest) = coarse.last_mut() {
             let cnodes = coarsest.nrows * coarsest.ncols;
-            memory::record_coarse_dense(cnodes);
+            memory::record_coarse_dense_typed::<F>(cnodes);
             let dense = operator_to_dense(&coarsest.operator(&fine));
             coarsest.cholesky_l = cholesky::cholesky_decompose(&dense, cnodes);
         } else if fine.n() <= options.cholesky_size.unwrap_or(SMALL_FINE_DIRECT_LIMIT) {
             let n = fine.n();
-            memory::record_coarse_dense(n);
+            memory::record_coarse_dense_typed::<F>(n);
             let dense = operator_to_dense(&fine);
             fine_cholesky_l = cholesky::cholesky_decompose(&dense, n);
         }
         memory::record_fine_operator(&fine);
-        memory::record_coarsest(
+        memory::record_coarsest_typed::<F>(
             nr * nc,
             options.cholesky_size,
             coarse
@@ -533,10 +550,10 @@ impl<'a> MgPreconditioner<'a> {
 
         #[cfg(feature = "instrumentation-profile")]
         {
-            memory::record_fine_level(
+            memory::record_fine_level_typed::<F>(
                 fine_cholesky_l
                     .as_ref()
-                    .map(|factor| memory::vec_f64_bytes(factor.len()))
+                    .map(|factor| memory::vec_scalar_bytes::<F>(factor.len()))
                     .unwrap_or(0),
             );
             for (k, lvl) in coarse.iter().enumerate() {
@@ -546,7 +563,7 @@ impl<'a> MgPreconditioner<'a> {
                         0,
                         "galerkin-stencil",
                         GalerkinScratch {
-                            row_accumulator_bytes: std::mem::size_of::<GalerkinRow>() as u64,
+                            row_accumulator_bytes: std::mem::size_of::<GalerkinRow<F>>() as u64,
                             ..GalerkinScratch::default()
                         },
                     ),
@@ -561,7 +578,7 @@ impl<'a> MgPreconditioner<'a> {
                             row_accumulator_bytes: if k == 1
                                 && matches!(&coarse[0].laplacian, CoarseOperator::Galerkin { .. })
                             {
-                                std::mem::size_of::<GalerkinRow>() as u64
+                                std::mem::size_of::<GalerkinRow<F>>() as u64
                             } else {
                                 0
                             },
@@ -572,9 +589,9 @@ impl<'a> MgPreconditioner<'a> {
                 let cholesky_bytes = lvl
                     .cholesky_l
                     .as_ref()
-                    .map(|l| memory::vec_f64_bytes(l.len()))
+                    .map(|l| memory::vec_scalar_bytes::<F>(l.len()))
                     .unwrap_or(0);
-                memory::record_level(
+                memory::record_level_typed::<F>(
                     k + 1,
                     nodes,
                     lvl.nnz(),
@@ -597,21 +614,26 @@ impl<'a> MgPreconditioner<'a> {
                 coarse[level - 1].operator(&fine)
             };
             let n = op.n();
-            let smoother = if low_memory && level < coarse.len() {
-                Smoother::weighted_jacobi(&op, 0.67)
+            let omega_override = if level == 0 { options.l0omega } else { options.coarseomega }.map(scalar::<F>);
+            let mut smoother = if low_memory && level < coarse.len() {
+                // Without an override, the spectral bound selects each level's weight.
+                Smoother::weighted_jacobi(&op, scalar::<F>(1.0))
             } else {
                 Smoother::SymmetricGaussSeidel
             };
+            if let (Some(value), Smoother::WeightedJacobi { omega, .. }) = (omega_override, &mut smoother) {
+                *omega = value;
+            }
             #[cfg(feature = "instrumentation-profile")]
             {
                 let (repr, diag_bytes, omega) = if level == coarse.len() {
                     ("none", 0, None)
                 } else {
                     match &smoother {
-                        Smoother::SymmetricGaussSeidel => ("symmetric-gauss-seidel", 0, Some(0.67)),
+                        Smoother::SymmetricGaussSeidel => ("symmetric-gauss-seidel", 0, Some(omega_override.unwrap_or(scalar::<F>(0.67)))),
                         Smoother::WeightedJacobi { diag_inv, omega } => (
                             "weighted-jacobi",
-                            memory::vec_f64_bytes(diag_inv.len()),
+                            memory::vec_scalar_bytes::<F>(diag_inv.len()),
                             Some(*omega),
                         ),
                     }
@@ -622,7 +644,7 @@ impl<'a> MgPreconditioner<'a> {
                             matvec_workspace, ..
                         } => {
                             let scratch = matvec_workspace.borrow();
-                            memory::vec_f64_bytes(scratch.prolonged.len() + scratch.applied.len())
+                            memory::vec_scalar_bytes::<F>(scratch.prolonged.len() + scratch.applied.len())
                         }
                         CoarseOperator::Explicit(_) => 0,
                     }
@@ -633,14 +655,26 @@ impl<'a> MgPreconditioner<'a> {
                     level,
                     repr,
                     diag_bytes,
-                    omega,
+                    omega.map(|v| v.to_f64().unwrap()),
                     matvec_bytes,
                 );
             }
-            workspaces.push(LevelWorkspace {
-                e: vec![0.0; n],
-                d_prime: vec![0.0; n],
-                d: vec![0.0; n],
+            let nu = if level == coarse.len() {
+                0
+            } else if level >= 2 {
+                options.coarsenu
+            } else if level == 1 {
+                options.l1nu.unwrap_or(options.l0nu)
+            } else {
+                options.l0nu
+            };
+            timing::sweeps(level, nu);
+            workspaces.push(LevelWorkspace::<F> {
+                nu,
+                omega_override,
+                e: if level == 0 { Vec::new() } else { vec![scalar::<F>(0.0); n] },
+                d_prime: vec![scalar::<F>(0.0); n],
+                d: if level == 0 { Vec::new() } else { vec![scalar::<F>(0.0); n] },
                 smoother,
             });
         }
@@ -649,18 +683,17 @@ impl<'a> MgPreconditioner<'a> {
             fine,
             coarse,
             fine_cholesky_l,
-            nu: 2,
-            omega: 0.67,
+            omega: scalar::<F>(0.67),
             workspaces: RefCell::new(workspaces),
         }
     }
 
     /// The fine-grid operator (level 0).
-    pub fn fine_operator(&self) -> &dyn Operator {
+    pub fn fine_operator(&self) -> &dyn Operator<F> {
         &self.fine
     }
 
-    fn level_operator(&self, level: usize) -> LevelOperator<'_> {
+    fn level_operator(&self, level: usize) -> LevelOperator<'_, F> {
         if level == 0 {
             LevelOperator::Borrowed(&self.fine)
         } else {
@@ -668,10 +701,19 @@ impl<'a> MgPreconditioner<'a> {
         }
     }
 
-    fn v_cycle(&self, workspaces: &mut [LevelWorkspace], level: usize) {
-        let (current, deeper) = workspaces.split_first_mut().unwrap();
+    fn v_cycle<const PROFILE: bool>(
+        &self, mut current: CycleWorkspace<'_, F>, deeper: &mut [LevelWorkspace<F>], level: usize,
+    ) {
         let op = self.level_operator(level);
-        current.e.fill(0.0);
+        current.e.fill(scalar::<F>(0.0));
+        if PROFILE {
+            let cached = match current.smoother {
+                Smoother::WeightedJacobi { diag_inv, omega } => Some((diag_inv.as_slice(), *omega)),
+                _ => None,
+            };
+            profile::smoother_info(level, &op, cached);
+            profile::level_sample(level, "entry", None, &op, current.d, current.e, true);
+        }
 
         if deeper.is_empty() {
             let factor = if level == 0 {
@@ -680,108 +722,136 @@ impl<'a> MgPreconditioner<'a> {
                 self.coarse[level - 1].cholesky_l.as_ref()
             };
             if let Some(factor) = factor {
-                let error = cholesky::cholesky_solve(factor, &current.d, current.e.len());
+                let _timer = timing::timer(Some(level), "Coarse direct solve");
+                let error = cholesky::cholesky_solve(factor, current.d, current.e.len());
                 current.e.copy_from_slice(&error);
             } else {
                 // Start from zero so the result does not depend on an earlier
                 // application when Cholesky is unavailable.
-                let result = crate::linalg::pcg::cg_solve(&op, &current.d, 50, 1e-3);
+                let _timer = timing::timer(Some(level), "Coarse fallback CG");
+                let result = crate::linalg::pcg::cg_solve(&op, current.d, 50, scalar::<F>(1e-3));
                 current.e.copy_from_slice(&result.v);
+            }
+            if PROFILE {
+                profile::level_sample(level, "terminal solve", None, &op, current.d, current.e, false);
             }
             return;
         }
 
-        for _ in 0..self.nu {
-            current.smoother.smooth(
-                &op,
-                &mut current.e,
-                &current.d,
-                &mut current.d_prime,
-                self.omega,
-            );
-        }
-        op.matvec(&current.e, &mut current.d_prime);
-        for (residual, &source) in current.d_prime.iter_mut().zip(&current.d) {
+        self.smooth_phase::<PROFILE>(&mut current, &op, level, false);
+        let phase_timer = timing::timer(Some(level), "Residual calculation");
+        op.matvec(current.e, current.d_prime);
+        for (residual, &source) in current.d_prime.iter_mut().zip(current.d) {
             *residual = source - *residual;
         }
 
+        drop(phase_timer);
         let transfer = self.coarse[level].prolongation;
+        let phase_timer = timing::timer(Some(level), "Restriction");
         transfer.restrict(&current.d_prime, &mut deeper[0].d);
-        self.v_cycle(deeper, level + 1);
-        transfer.prolongate(&deeper[0].e, &mut current.e);
+        drop(phase_timer);
+        let (next, rest) = deeper.split_first_mut().unwrap();
+        self.v_cycle::<PROFILE>(next.as_cycle(), rest, level + 1);
+        let phase_timer = timing::timer(Some(level), "Prolongation/correction");
+        transfer.prolongate(&deeper[0].e, current.e);
+        drop(phase_timer);
+        if PROFILE {
+            profile::level_sample(level, "coarse correction", None, &op, current.d, current.e, false);
+        }
+        self.smooth_phase::<PROFILE>(&mut current, &op, level, true);
+    }
 
-        for _ in 0..self.nu {
-            current.smoother.smooth(
-                &op,
-                &mut current.e,
-                &current.d,
-                &mut current.d_prime,
-                self.omega,
-            );
+    #[inline]
+    fn smooth_phase<const PROFILE: bool>(
+        &self, current: &mut CycleWorkspace<'_, F>, op: &dyn Operator<F>, level: usize, post: bool,
+    ) {
+        let name = if post { "Post-smoothing" } else { "Pre-smoothing" };
+        if PROFILE {
+            let mut elapsed = std::time::Duration::ZERO;
+            for sweep in 0..current.nu {
+                let start = std::time::Instant::now();
+                current.smoother.smooth(op, current.e, current.d,
+                    current.d_prime, current.omega_override.unwrap_or(self.omega));
+                elapsed += start.elapsed();
+                profile::level_sample(level, if post { "post-sweep" } else { "pre-sweep" },
+                    Some((sweep + 1, current.nu)), op, current.d, current.e, false);
+            }
+            timing::record_duration(level, name, elapsed);
+        } else {
+            let _timer = timing::timer(Some(level), name);
+            for _ in 0..current.nu {
+                current.smoother.smooth(op, current.e, current.d,
+                    current.d_prime, current.omega_override.unwrap_or(self.omega));
+            }
         }
     }
-}
 
-impl<'a> Preconditioner for MgPreconditioner<'a> {
-    fn apply(&self, r: &[f64], e0: &mut Vec<f64>) {
+    pub(crate) fn solve_cg(&self, rhs: &[F], max_iter: usize, tol: F, profile: bool)
+        -> crate::linalg::pcg::CgResult::<F>
+    {
+        if profile {
+            crate::linalg::pcg::cg_solve_precond_profiled(self.fine_operator(), rhs,
+                max_iter, tol, &ProfiledPreconditioner::<F>(self))
+        } else {
+            crate::linalg::pcg::cg_solve_precond(self.fine_operator(), rhs, max_iter, tol, self)
+        }
+    }
+
+    pub(crate) fn final_post_smooth(&self, rhs: &[F], x: &mut [F], count: usize,
+        profiled: bool, iteration: usize)
+    {
+        if count == 0 { return; }
+        if profiled {
+            self.final_post_smooth_impl::<true>(rhs, x, count, iteration);
+        } else {
+            self.final_post_smooth_impl::<false>(rhs, x, count, iteration);
+        }
+    }
+
+    fn final_post_smooth_impl<const PROFILE: bool>(&self, rhs: &[F], x: &mut [F],
+        count: usize, iteration: usize)
+    {
+        let op = self.fine_operator();
+        let mut workspaces = self.workspaces.borrow_mut();
+        let current = &mut workspaces[0];
+        if PROFILE {
+            profile::global_sample(iteration, "Before final smoothing", op, rhs, x);
+        }
+        for sweep in 1..=count {
+            let timer = timing::timer(Some(0), "Final post-smoothing");
+            current.smoother.smooth(op, x, rhs, &mut current.d_prime, current.omega_override.unwrap_or(self.omega));
+            drop(timer);
+            if PROFILE {
+                // Global samples retain the last CG residual as their baseline.
+                profile::global_sweep_sample(iteration, "Final post-sweep", Some((sweep, count)), op, rhs, x);
+            }
+        }
+    }
+
+    fn apply_impl<const PROFILE: bool>(&self, r: &[F], e0: &mut Vec<F>) {
         assert_eq!(r.len(), self.fine.n());
         let mut workspaces = self.workspaces.borrow_mut();
-        workspaces[0].d.copy_from_slice(r);
-        self.v_cycle(&mut workspaces, 0);
-        e0.resize(r.len(), 0.0);
-        e0.copy_from_slice(&workspaces[0].e);
+        e0.resize(r.len(), scalar::<F>(0.0));
+        let (fine, deeper) = workspaces.split_first_mut().unwrap();
+        let mut current = fine.as_cycle();
+        current.d = r;
+        current.e = e0;
+        self.v_cycle::<PROFILE>(current, deeper, 0);
+    }
+
+}
+
+impl<F: Real> Preconditioner<F> for MgPreconditioner<'_, F> {
+    fn apply(&self, r: &[F], e0: &mut Vec<F>) {
+        self.apply_impl::<false>(r, e0);
     }
 }
 
-/// One simultaneous weighted Jacobi sweep. The entire product uses the old e;
-/// only after that product is complete are any entries of e updated.
-fn weighted_jacobi_smooth(
-    op: &dyn Operator,
-    e: &mut [f64],
-    d: &[f64],
-    diag_inv: &[f64],
-    omega: f64,
-    scratch: &mut [f64],
-) {
-    op.matvec(e, scratch);
-    for i in 0..e.len() {
-        e[i] += omega * diag_inv[i] * (d[i] - scratch[i]);
-    }
-}
+struct ProfiledPreconditioner<'m, 'a, F: Real = f64>(&'m MgPreconditioner<'a, F>);
 
-fn symmetric_gauss_seidel_smooth(op: &dyn Operator, e: &mut [f64], d: &[f64], omega: f64) {
-    let n = d.len();
-    // Forward sweep
-    for row in 0..n {
-        let mut diag = 0.0;
-        let mut off_diag_sum = 0.0;
-        op.for_each_entry(row, &mut |col, val| {
-            if col == row {
-                diag = val;
-            } else {
-                off_diag_sum += val * e[col];
-            }
-        });
-        if diag.abs() > 1e-15 {
-            let new_e = (d[row] - off_diag_sum) / diag;
-            e[row] = (1.0 - omega) * e[row] + omega * new_e;
-        }
-    }
-    // Backward sweep
-    for row in (0..n).rev() {
-        let mut diag = 0.0;
-        let mut off_diag_sum = 0.0;
-        op.for_each_entry(row, &mut |col, val| {
-            if col == row {
-                diag = val;
-            } else {
-                off_diag_sum += val * e[col];
-            }
-        });
-        if diag.abs() > 1e-15 {
-            let new_e = (d[row] - off_diag_sum) / diag;
-            e[row] = (1.0 - omega) * e[row] + omega * new_e;
-        }
+impl<F: Real> Preconditioner<F> for ProfiledPreconditioner<'_, '_, F> {
+    fn apply(&self, r: &[F], e0: &mut Vec<F>) {
+        self.0.apply_impl::<true>(r, e0);
     }
 }
 
@@ -838,10 +908,13 @@ mod tests {
     // MG still selects Gauss–Seidel; only this numerical reference uses Jacobi.
     fn use_jacobi_reference(mg: &MgPreconditioner<'_>) {
         let smoothers: Vec<_> = (0..mg.coarse.len())
-            .map(|level| Smoother::weighted_jacobi(&mg.level_operator(level), 0.67))
+            .map(|level| Smoother::weighted_jacobi(&mg.level_operator(level), 1.0))
             .collect();
         let mut workspaces = mg.workspaces.borrow_mut();
-        for (workspace, smoother) in workspaces.iter_mut().zip(smoothers) {
+        for (workspace, mut smoother) in workspaces.iter_mut().zip(smoothers) {
+            if let (Some(value), Smoother::WeightedJacobi { omega, .. }) = (workspace.omega_override, &mut smoother) {
+                *omega = value;
+            }
             assert!(matches!(workspace.smoother, Smoother::SymmetricGaussSeidel));
             workspace.smoother = smoother;
         }
@@ -869,7 +942,7 @@ mod tests {
             transfer.coarse_n(),
         ));
         for col in 0..transfer.coarse_n() {
-            transfer.for_each_column(col, |row, val| triplets.add_triplet(row, col, val));
+            transfer.for_each_column::<f64>(col, |row, val| triplets.add_triplet(row, col, val));
         }
         triplets.to_csr()
     }
@@ -970,6 +1043,39 @@ mod tests {
         }
 
         CsMat::new_from_unsorted((coarse_n, coarse_n), indptr, cols, vals).unwrap()
+    }
+
+    #[test]
+    fn final_smoothing_is_exactly_the_requested_number_of_fine_sweeps() {
+        use crate::linalg::operator::{StencilOperator, GroundSpec};
+        for low_memory in [false, true] {
+            let n = 8 * 8;
+            let resistance = vec![1.0; n];
+            let fine = if low_memory {
+                FineOperator::Stencil(StencilOperator::new(8, 8, -9999.0,
+                    &resistance, GroundSpec::Shunt(vec![1.0; n])))
+            } else {
+                let (_, _, _, matrix) = crate::build_circuit_model(&vec![1.0; n], 8, 8, -9999.0);
+                FineOperator::Explicit(crate::circuit::laplacian::add_diagonal(&matrix, &vec![1.0; n]))
+            };
+            let mg = MgPreconditioner::build_with_options(fine, 8, 8, MgOptions::default());
+            let rhs = vec![1.0; n];
+            let mut x = vec![0.0; n];
+            mg.final_post_smooth(&rhs, &mut x, 0, false, 0);
+            assert_eq!(x, vec![0.0; n]);
+            let mut expected = x.clone();
+            let mut scratch = vec![0.0; n];
+            for _ in 0..5 {
+                mg.workspaces.borrow()[0].smoother.smooth(mg.fine_operator(),
+                    &mut expected, &rhs, &mut scratch, mg.workspaces.borrow()[0].omega_override.unwrap_or(mg.omega));
+            }
+            mg.final_post_smooth(&rhs, &mut x, 5, false, 0);
+            assert_eq!(x, expected);
+            let _scope = profile::Scope::new(true);
+            let mut traced = vec![0.0; n];
+            mg.final_post_smooth(&rhs, &mut traced, 5, true, 0);
+            assert_eq!(traced, expected);
+        }
     }
 
     #[test]
@@ -1092,8 +1198,102 @@ mod tests {
     }
 
     #[test]
+    fn manual_omega_is_used_directly_by_both_smoothers_and_final_sweeps() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let resistance = vec![1.0; 32 * 32];
+        for low_memory in [true, false] {
+            let fine = if low_memory {
+                FineOperator::Stencil(StencilOperator::new(32, 32, -9999.0, &resistance,
+                    GroundSpec::Shunt(vec![1.0; resistance.len()])))
+            } else {
+                let (_, _, _, matrix) = crate::build_circuit_model(&resistance, 32, 32, -9999.0);
+                FineOperator::Explicit(crate::circuit::laplacian::add_diagonal(&matrix,
+                    &vec![1.0; resistance.len()]))
+            };
+            let mg = MgPreconditioner::build_with_options(fine, 32, 32, MgOptions {
+                l0nu: 1, l1nu: None, coarsenu: 1, l0omega: Some(0.61), coarseomega: Some(0.83),
+                ..MgOptions::default()
+            });
+            for level in 0..mg.coarse.len() {
+                let op = mg.level_operator(level);
+                let omega = if level == 0 { 0.61 } else { 0.83 };
+                let mut workspaces = mg.workspaces.borrow_mut();
+                let current = &mut workspaces[level];
+                current.d.resize(op.n(), 1.0);
+                current.e.resize(op.n(), 0.0);
+                current.d.fill(1.0);
+                let mut expected = vec![0.0; op.n()];
+                if let Smoother::WeightedJacobi { diag_inv, omega: actual } = &current.smoother {
+                    assert_eq!(*actual, omega);
+                    weighted_jacobi_smooth(&op, &mut expected, &current.d, diag_inv,
+                        omega, &mut vec![0.0; op.n()]);
+                } else {
+                    symmetric_gauss_seidel_smooth(&op, &mut expected, &current.d, omega);
+                }
+                mg.smooth_phase::<false>(&mut current.as_cycle(), &op, level, true);
+                assert_eq!(current.e, expected);
+                if level == 0 {
+                    drop(workspaces);
+                    let mut x = vec![0.0; op.n()];
+                    mg.final_post_smooth(&vec![1.0; op.n()], &mut x, 1, false, 0);
+                    assert_eq!(x, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fine_and_coarse_schedule_covers_all_levels() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let resistance = vec![1.0; 128 * 128];
+        for (l0nu, l1nu, coarsenu) in [(3, None, 10), (2, None, 9), (2, Some(7), 9)] {
+            let fine = FineOperator::Stencil(StencilOperator::new(
+                128, 128, -9999.0, &resistance,
+                GroundSpec::Shunt(vec![1.0; resistance.len()]),
+            ));
+            let mg = MgPreconditioner::build_with_options(fine, 128, 128,
+                MgOptions { l0nu, l1nu, coarsenu, cholesky_size: Some(1), ..MgOptions::default() });
+            let counts: Vec<_> = mg.workspaces.borrow().iter().map(|w| w.nu).collect();
+            assert_eq!(counts, vec![l0nu, l1nu.unwrap_or(l0nu), coarsenu, coarsenu, coarsenu, coarsenu, coarsenu, 0]);
+        }
+    }
+
+    #[test]
+    fn fine_coarse_sweeps_preserve_preconditioner_symmetry() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let n = 32 * 32;
+        let resistance = vec![1.0; n];
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.2).cos()).collect();
+        for low_memory in [false, true] {
+            for (l0nu, coarsenu) in [(2, 2), (3, 10), (1, 8), (5, 12)] {
+                let fine = if low_memory {
+                    FineOperator::Stencil(StencilOperator::new(
+                        32, 32, -9999.0, &resistance, GroundSpec::Shunt(vec![1.0; n]),
+                    ))
+                } else {
+                    let (_, _, _, matrix) = crate::build_circuit_model(&resistance, 32, 32, -9999.0);
+                    FineOperator::Explicit(crate::circuit::laplacian::add_diagonal(&matrix, &vec![1.0; n]))
+                };
+                let mg = MgPreconditioner::build_with_options(fine, 32, 32,
+                    MgOptions { l0nu, l1nu: None, coarsenu, ..MgOptions::default() });
+                let counts: Vec<usize> = mg.workspaces.borrow().iter().map(|w| w.nu).collect();
+                assert_eq!(counts, vec![l0nu, l0nu, coarsenu, 0]);
+                let mut mx = Vec::new();
+                let mut my = Vec::new();
+                mg.apply(&x, &mut mx);
+                mg.apply(&y, &mut my);
+                let x_my: f64 = x.iter().zip(&my).map(|(a, b)| a * b).sum();
+                let y_mx: f64 = y.iter().zip(&mx).map(|(a, b)| a * b).sum();
+                assert!((x_my - y_mx).abs() < 1e-9 * x_my.abs().max(y_mx.abs()).max(1.0));
+                assert!(x.iter().zip(&mx).map(|(a, b)| a * b).sum::<f64>() > 0.0);
+            }
+        }
+    }
+
+    #[test]
     fn weighted_jacobi_updates_simultaneously_using_only_matvec() {
-        let mut entries = sprs::TriMat::new((3, 3));
+        let mut entries = sprs::TriMat::<f64>::new((3, 3));
         for i in 0..3 {
             entries.add_triplet(i, i, 2.0);
         }
@@ -1119,7 +1319,7 @@ mod tests {
 
     #[test]
     fn jacobi_damping_is_capped_for_large_normalized_eigenvalues() {
-        let mut entries = sprs::TriMat::new((4, 4));
+        let mut entries = sprs::TriMat::<f64>::new((4, 4));
         for i in 0..4 {
             for j in 0..4 {
                 entries.add_triplet(i, j, if i == j { 1.0 } else { 0.9 });
@@ -1131,11 +1331,86 @@ mod tests {
             panic!("expected Jacobi")
         };
         assert_eq!(diag_inv, &vec![1.0; 4]);
-        assert!((*omega - 1.8 / 3.7).abs() < 1e-14);
+        assert!((*omega - 1.95 / 3.7).abs() < 1e-14);
         let mut e = vec![1.0; 4];
         smoother.smooth(&matrix, &mut e, &[0.0; 4], &mut [0.0; 4], 0.67);
         for value in e {
-            assert!((value + 0.8).abs() < 1e-14);
+            assert!((value + 0.95).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn all_jacobi_levels_request_full_weight_and_damp_quiet_cells() {
+        use crate::linalg::operator::{GroundSpec, StencilOperator};
+        let resistance = vec![1e4; 32 * 32];
+        let op = StencilOperator::new(32, 32, -9999.0, &resistance,
+            GroundSpec::Shunt(vec![1.0; resistance.len()]));
+        let mg = MgPreconditioner::build_with_options(FineOperator::Stencil(op), 32, 32,
+            MgOptions { l0omega: None, coarseomega: None, ..MgOptions::default() });
+        let workspaces = mg.workspaces.borrow();
+        let Smoother::WeightedJacobi { omega, .. } = workspaces[0].smoother else {
+            panic!("expected fine Jacobi smoother")
+        };
+        assert_eq!(omega, 1.0);
+        let fine = mg.level_operator(0);
+        let mut error = vec![1.0; resistance.len()];
+        workspaces[0].smoother.smooth(&fine, &mut error, &vec![0.0; resistance.len()],
+            &mut vec![0.0; resistance.len()], 0.67);
+        // A constant error has no branch flux; the shunt dominates this
+        // interior equation, so full Jacobi should almost remove it in one sweep.
+        assert!(error[16 * 32 + 16] > 0.0 && error[16 * 32 + 16] < 0.001);
+        for level in 1..workspaces.len() - 1 {
+            let op = mg.level_operator(level);
+            let Smoother::WeightedJacobi { omega: expected, .. } = Smoother::weighted_jacobi(&op, 1.0) else {
+                unreachable!()
+            };
+            let Smoother::WeightedJacobi { omega: actual, .. } = workspaces[level].smoother else {
+                panic!("expected coarse Jacobi smoother")
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn jacobi_damping_uses_symmetric_scaling_for_unequal_diagonals() {
+        let mut entries = sprs::TriMat::<f64>::new((2, 2));
+        for (i, j, value) in [(0, 0, 1.0), (0, 1, 9.0), (1, 0, 9.0), (1, 1, 100.0)] {
+            entries.add_triplet(i, j, value);
+        }
+        let matrix = entries.to_csr::<usize>();
+        let smoother = Smoother::weighted_jacobi(&matrix, 0.67);
+        let Smoother::WeightedJacobi { omega, .. } = &smoother else {
+            panic!("expected Jacobi")
+        };
+        // The original bound is 10; the symmetric bound and largest
+        // eigenvalue are both 1.9, so the requested weight is safe.
+        assert_eq!(*omega, 0.67);
+        let mut e = vec![1.0, 0.1];
+        smoother.smooth(&matrix, &mut e, &[0.0; 2], &mut [0.0; 2], 0.67);
+        assert!((e[0] - (1.0 - 0.67 * 1.9)).abs() < 1e-14);
+        assert!((e[1] - 0.1 * (1.0 - 0.67 * 1.9)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn symmetric_jacobi_bound_still_caps_unequal_diagonal_systems() {
+        let scales = [1.0, 10.0, 100.0, 1000.0];
+        let mut entries = sprs::TriMat::<f64>::new((4, 4));
+        for i in 0..4 {
+            for j in 0..4 {
+                entries.add_triplet(i, j, scales[i] * scales[j]
+                    * if i == j { 1.0 } else { 0.9 });
+            }
+        }
+        let matrix = entries.to_csr::<usize>();
+        let smoother = Smoother::weighted_jacobi(&matrix, 0.67);
+        let Smoother::WeightedJacobi { omega, .. } = &smoother else {
+            panic!("expected Jacobi")
+        };
+        assert!((*omega - 1.95 / 3.7).abs() < 1e-14);
+        let mut e: Vec<f64> = scales.iter().map(|scale| 1.0 / scale).collect();
+        smoother.smooth(&matrix, &mut e, &[0.0; 4], &mut [0.0; 4], 0.67);
+        for (value, scale) in e.iter().zip(scales) {
+            assert!((value * scale + 0.95).abs() < 1e-14);
         }
     }
 
@@ -1208,6 +1483,14 @@ mod tests {
             let laplacian =
                 crate::circuit::laplacian::add_diagonal(&laplacian, &vec![1.0; nr * nc]);
             let options = MgOptions {
+                l0nu: 3,
+                l1nu: None,
+                coarsenu: 10,
+                l0omega: None,
+                coarseomega: None,
+                verbose: false,
+                profile: false,
+                l0postnu: 0,
                 max_levels: depth,
                 cholesky_size: target,
             };
@@ -1317,9 +1600,15 @@ mod tests {
                 }
             }
             let source: Vec<f64> = (0..nr * nc).map(|i| 1.0 + (i as f64).sin()).collect();
+            let original_source = source.clone();
             let (mut first, mut again, mut reference) = (Vec::new(), Vec::new(), Vec::new());
             stencil.apply(&source, &mut first);
+            let output_storage = first.as_ptr();
+            stencil.apply(&source, &mut first);
+            assert_eq!(first.as_ptr(), output_storage);
+            assert_eq!(source, original_source);
             stencil.apply(&vec![0.0; nr * nc], &mut again);
+            assert!(again.iter().all(|&value| value == 0.0));
             stencil.apply(&source, &mut again);
             use_jacobi_reference(&explicit);
             explicit.apply(&source, &mut reference);
@@ -1329,6 +1618,11 @@ mod tests {
             );
             for (&a, &b) in first.iter().zip(&reference) {
                 assert!((a - b).abs() < 1e-8);
+            }
+            for mg in [&explicit, &stencil] {
+                let workspaces = mg.workspaces.borrow();
+                assert_eq!(workspaces[0].e.capacity(), 0);
+                assert_eq!(workspaces[0].d.capacity(), 0);
             }
         }
     }

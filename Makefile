@@ -1,6 +1,8 @@
 .PHONY: build test serve clean
 
 build:
+	node scripts/scenarios/prepare.mjs
+	cargo build --release --features bin --bin scenario-solve
 	wasm-pack build --target web
 	cp pkg/wasm_connect.js lib/
 	cp pkg/wasm_connect_bg.wasm lib/

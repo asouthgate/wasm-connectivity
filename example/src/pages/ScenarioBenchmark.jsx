@@ -6,6 +6,7 @@ import { SCENARIOS } from '../scenarios';
 export default function ScenarioBenchmark() {
   const [previews, setPreviews] = useState({});
   const [results, setResults] = useState({});
+  const [precision, setPrecision] = useState('f64');
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState('Loading scenario previews...');
   const [error, setError] = useState(false);
@@ -23,7 +24,7 @@ export default function ScenarioBenchmark() {
     })).then(entries => {
       if (!mounted.current) return;
       setPreviews(Object.fromEntries(entries));
-      setStatus('Ready · 2000x2000 · low-memory MG · Shunt ground');
+      setStatus('2000x2000 - low-memory MG - Shunt ground');
     }).catch(err => {
       if (err.name === 'AbortError' || !mounted.current) return;
       setStatus(err.message); setError(true);
@@ -43,14 +44,14 @@ export default function ScenarioBenchmark() {
     try {
       for (const scenario of SCENARIOS) {
         if (!mounted.current) break;
-        setStatus(`Running ${scenario.name}...`);
+        setStatus(`Running ${scenario.name} (${precision})...`);
         const worker = new Worker(new URL('../workers/benchmark.js', import.meta.url), { type: 'module' });
         try {
           const result = await new Promise((resolve, reject) => {
             active.current = { cancel: () => { worker.terminate(); reject(new Error('Run cancelled')); } };
             worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.result);
             worker.onerror = event => reject(new Error(event.message || 'Worker failed'));
-            worker.postMessage({ id: 1, fn: 'benchmark_scenario', args: [scenario.id] });
+            worker.postMessage({ id: 1, fn: 'benchmark_scenario', args: [scenario.id, precision] });
           });
           if (mounted.current) setResults(previous => ({ ...previous, [scenario.id]: result }));
         } catch (err) {
@@ -65,7 +66,7 @@ export default function ScenarioBenchmark() {
       busy.current = false;
       if (mounted.current) {
         setRunning(false); setError(failed > 0);
-        setStatus(failed ? `Finished · ${failed} scenario${failed === 1 ? '' : 's'} failed` : 'Finished · 3 scenarios');
+        setStatus(failed ? `Finished · ${failed} scenario${failed === 1 ? '' : 's'} failed` : `Finished · 3 scenarios · ${precision}`);
       }
     }
   }
@@ -73,6 +74,14 @@ export default function ScenarioBenchmark() {
   return (
     <div>
       <div className="row">
+        <label>Precision
+          <select value={precision} disabled={running} onChange={e => {
+            setPrecision(e.target.value); setResults({}); setError(false);
+            setStatus(`2000x2000 · low-memory MG · Shunt ground · ${e.target.value}`);
+          }}>
+            <option value="f64">f64</option><option value="f32">f32</option>
+          </select>
+        </label>
         <button onClick={run} disabled={running || Object.keys(previews).length !== 3}>Run</button>
       </div>
       <StatusBar status={status} loading={running} error={error} />
@@ -82,11 +91,19 @@ export default function ScenarioBenchmark() {
         return (
           <section key={scenario.id} className="scenario">
             {preview && <div className="scenario-previews">
-              {['res', 'src', 'gnd'].map(type => <MapView key={type} type={type}
-                data={preview[type]} meta={preview.meta} preview maxSide={200} showHeader={false}
-                logScale={false} />)}
-              {result?.currentPreview ? <MapView type="cur" label="Log current"
-                data={result.currentPreview.data} meta={result.currentPreview} preview maxSide={200} showHeader={false} logScale /> :
+              {['res', 'src', 'gnd'].map(type => <div key={type} className="scenario-preview">
+                <MapView type={type}
+                  image={preview[type]} meta={preview.meta} preview maxSide={200} showHeader={false}
+                  quantileScale={scenario.id === 'point_lights' && type === 'res'} />
+                {scenario.id === 'point_lights' && type === 'res' &&
+                  <span className="scenario-preview-asterisk" title="Quantile-stretched resistance (500 classes)">*</span>}
+              </div>)}
+              {result?.currentMap ? <div className="scenario-preview">
+                <MapView type="cur" label="Current"
+                  data={result.currentMap.data} meta={result.currentMap} preview maxSide={200} showHeader={false}
+                  quantileScale />
+                <span className="scenario-preview-asterisk" title="Quantile-stretched current (500 classes)">*</span>
+              </div> :
                 <div className="map-view">
                   <div className="scenario-current-pending" />
                 </div>}
@@ -96,8 +113,8 @@ export default function ScenarioBenchmark() {
       })}
       <div className="scenario">
         <div className="bench-info">
-          Previews: 200x200 · columns: resistance, source, ground, log current.
-          Full-resolution log current maps: 2000x2000, in the same scenario order.
+          Previews: 200x200 · columns: resistance, source, ground, current.
+          Full-resolution current maps: 2000x2000, in the same scenario order. * Quantile stretch (500 classes).
         </div>
         {SCENARIOS.map((scenario, index) => {
           const result = results[scenario.id];
@@ -113,11 +130,13 @@ export default function ScenarioBenchmark() {
           </section>;
         })}
       </div>
-      {!running && SCENARIOS.map(scenario => {
+      {SCENARIOS.map(scenario => {
         const current = results[scenario.id]?.currentMap;
         return current && <section key={scenario.id} className="scenario">
-          <div className="scenario-current">
-            <MapView type="cur" label="Log current" data={current.data} meta={current} showHeader={false} logScale />
+          <div className="scenario-current scenario-preview">
+            <MapView type="cur" label="Current" data={current.data} meta={current} showHeader={false}
+              quantileScale />
+            <span className="scenario-preview-asterisk" title="Quantile-stretched current (500 classes)">*</span>
           </div>
         </section>;
       })}

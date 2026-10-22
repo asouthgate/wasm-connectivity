@@ -1,6 +1,7 @@
 //! Analytical instrumentation of the connectivity solver's named buffers.
 
 use serde::Serialize;
+use crate::linalg::real::Real;
 use sprs::CsMat;
 
 /// Byte width of a `usize`. Native (64-bit) is 8; `wasm32` is 4.
@@ -11,8 +12,12 @@ pub fn usize_size() -> u64 {
 
 /// Bytes of a `Vec<f64>` of length `n`.
 #[inline]
-pub fn vec_f64_bytes(n: usize) -> u64 {
-    n as u64 * 8
+pub fn vec_f64_bytes(n: usize) -> u64 { vec_scalar_bytes::<f64>(n) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn vec_scalar_bytes<F: Real>(n: usize) -> u64 {
+    n as u64 * std::mem::size_of::<F>() as u64
 }
 
 /// Bytes of a `Vec<i32>` of length `n`.
@@ -29,22 +34,30 @@ pub fn vec_usize_bytes(n: usize) -> u64 {
 
 /// Bytes of a sparse CSR matrix (`indptr` + `indices` + `data`).
 #[inline]
-pub fn csmat_bytes(a: &CsMat<f64>) -> u64 {
+pub fn csmat_bytes<F: Real>(a: &CsMat<F>) -> u64 {
     let u = usize_size();
-    (a.rows() as u64 + 1) * u + a.nnz() as u64 * u + a.nnz() as u64 * 8
+    (a.rows() as u64 + 1) * u + a.nnz() as u64 * u + a.nnz() as u64 * std::mem::size_of::<F>() as u64
 }
 
 /// Bytes of `n` triplets stored as three parallel vectors
 /// (`row: Vec<usize>`, `col: Vec<usize>`, `val: Vec<f64>`).
 #[inline]
-pub fn triplets_bytes(n: usize) -> u64 {
-    n as u64 * (2 * usize_size() + 8)
+pub fn triplets_bytes(n: usize) -> u64 { triplets_bytes_typed::<f64>(n) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn triplets_bytes_typed<F: Real>(n: usize) -> u64 {
+    n as u64 * (2 * usize_size() + std::mem::size_of::<F>() as u64)
 }
 
 /// Bytes of a dense `n x n` `f64` matrix.
 #[inline]
-pub fn dense_bytes(n: usize) -> u64 {
-    n as u64 * n as u64 * 8
+pub fn dense_bytes(n: usize) -> u64 { dense_bytes_typed::<f64>(n) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn dense_bytes_typed<F: Real>(n: usize) -> u64 {
+    n as u64 * n as u64 * std::mem::size_of::<F>() as u64
 }
 
 /// Temporary Galerkin-coarsening buffers used to build a coarse level
@@ -85,6 +98,9 @@ pub struct LevelMemory {
     pub operator_repr: String,
     /// Bytes of this level's Laplacian `L_l`.
     pub laplacian_bytes: u64,
+    pub matrix_values_bytes: u64,
+    pub matrix_indices_bytes: u64,
+    pub matrix_indptr_bytes: u64,
     /// Transfer entry-array bytes; zero for generated geometric transfers.
     pub prolongation_p_bytes: u64,
     /// Bytes of the dense Cholesky factor (coarsest level only).
@@ -104,6 +120,8 @@ pub struct LevelMemory {
     pub smoother_omega: Option<f64>,
     /// Persistent scratch used by a composed operator application.
     pub operator_matvec_scratch_bytes: u64,
+    pub operator_prolonged_bytes: u64,
+    pub operator_applied_bytes: u64,
     /// Freed Galerkin scratch used to build this level (empty for level 0).
     pub galerkin_scratch: GalerkinScratch,
 }
@@ -112,6 +130,16 @@ pub struct LevelMemory {
 /// matrix size; count it only once when calculating totals.
 #[derive(Serialize, Clone, Default, Debug)]
 pub struct InstrumentationProfile {
+    pub pointer_bytes: u64,
+    pub scalar_bytes: u64,
+    pub precision: String,
+    pub accounting_basis: String,
+    pub input_resistance_bytes: u64,
+    pub input_source_bytes: u64,
+    pub input_ground_bytes: u64,
+    pub rhs_reuses_source_input: bool,
+    pub phases: Vec<MemoryPhase>,
+    pub peak_named_payload_bytes: u64,
     /// Assembly buffers (not a concurrent peak)
     /// Conductance grid `C = 1/R` (per cell).
     pub conductance_grid_bytes: u64,
@@ -121,6 +149,9 @@ pub struct InstrumentationProfile {
     pub edge_triplets_bytes: u64,
     pub assembly_row_sums_bytes: u64,
     pub assembly_laplacian_triplets_bytes: u64,
+    pub assembly_matrix_nodes: usize,
+    pub assembly_matrix_nnz: usize,
+    pub assembly_matrix_bytes: u64,
     /// Filled resistance copy used by the explicit solve.
     pub filled_resistance_bytes: u64,
     /// Ground construction buffers in the explicit solve (setup category).
@@ -168,6 +199,200 @@ pub struct InstrumentationProfile {
     pub jacobi_diag_bytes: u64,
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct MemoryObject {
+    pub name: String,
+    pub category: String,
+    pub level: Option<usize>,
+    pub bytes: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MemoryAlias {
+    pub name: String,
+    pub allocation: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MemoryPhase {
+    pub name: String,
+    pub objects: Vec<MemoryObject>,
+    pub aliases: Vec<MemoryAlias>,
+    pub total_bytes: u64,
+}
+
+#[cfg(feature = "instrumentation-profile")]
+fn add_object(objects: &mut Vec<MemoryObject>, name: impl Into<String>, category: &str,
+    level: Option<usize>, bytes: u64)
+{
+    if bytes > 0 {
+        objects.push(MemoryObject { name: name.into(), category: category.into(), level, bytes });
+    }
+}
+
+#[cfg(feature = "instrumentation-profile")]
+impl InstrumentationProfile {
+    fn inputs(&self) -> Vec<MemoryObject> {
+        let mut objects = Vec::new();
+        for (name, bytes) in [("input.resistance", self.input_resistance_bytes),
+            ("input.source", self.input_source_bytes), ("input.ground", self.input_ground_bytes)]
+        {
+            add_object(&mut objects, name, "inputs", None, bytes);
+        }
+        objects
+    }
+
+    fn system(&self) -> Vec<MemoryObject> {
+        let mut objects = self.inputs();
+        if !self.rhs_reuses_source_input {
+            add_object(&mut objects, "system.rhs", "rhs", None, self.source_s_bytes);
+        }
+        add_object(&mut objects, "system.cell_to_node", "mapping", None, self.cell_to_node_map_bytes);
+        add_object(&mut objects, "system.ground", "grounds", None, self.ground_storage_bytes);
+        self.matrix(&mut objects, 0, self.laplacian_nodes, self.laplacian_nnz, self.laplacian_bytes);
+        objects
+    }
+
+    fn matrix(&self, objects: &mut Vec<MemoryObject>, level: usize, nodes: usize, nnz: usize, bytes: u64) {
+        if bytes == 0 { return; }
+        for (part, category, bytes) in [
+            ("values", "matrix_values", nnz as u64 * if self.scalar_bytes == 0 { 8 } else { self.scalar_bytes }),
+            ("indices", "matrix_indices", vec_usize_bytes(nnz)),
+            ("indptr", "matrix_indptr", vec_usize_bytes(nodes + 1)),
+        ] {
+            add_object(objects, format!("L{level}.matrix.{part}"), category, Some(level), bytes);
+        }
+    }
+
+    fn level_operator(&self, objects: &mut Vec<MemoryObject>, level: &LevelMemory) {
+        let i = level.level;
+        if i > 0 {
+            self.matrix(objects, i, level.nodes, level.nnz, level.laplacian_bytes);
+        }
+        add_object(objects, format!("L{i}.operator.prolonged"), "implicit_prolonged", Some(i), level.operator_prolonged_bytes);
+        add_object(objects, format!("L{i}.operator.applied"), "implicit_applied", Some(i), level.operator_applied_bytes);
+        add_object(objects, format!("L{i}.transfer"), "transfers", Some(i), level.prolongation_p_bytes);
+    }
+
+    fn level_workspace(&self, objects: &mut Vec<MemoryObject>, level: &LevelMemory) {
+        let i = level.level;
+        for (name, category, bytes) in [
+            ("e", "cycle_correction", level.workspace_e_bytes),
+            ("d", "cycle_rhs", level.workspace_d_bytes),
+            ("d_prime", "cycle_residual", level.workspace_d_prime_bytes),
+            ("diag_inv", "diagonals", level.smoother_diag_bytes),
+            ("cholesky", "factor", level.cholesky_factor_bytes),
+        ] {
+            add_object(objects, format!("L{i}.{name}"), category, Some(i), bytes);
+        }
+    }
+
+    fn phase(&mut self, name: impl Into<String>, objects: Vec<MemoryObject>, cg_aliases: bool) {
+        let name = name.into();
+        let mut aliases = Vec::new();
+        if self.rhs_reuses_source_input && name != "Inputs" && name != "Returned maps" {
+            aliases.push(MemoryAlias { name: "system.rhs".into(), allocation: "input.source".into() });
+        }
+        if self.operator_repr == "stencil" && self.ground_storage_bytes == 0
+            && self.input_ground_bytes > 0 && name != "Inputs" && name != "Returned maps"
+        {
+            aliases.push(MemoryAlias { name: "L0.ground".into(), allocation: "input.ground".into() });
+        }
+        if cg_aliases && !self.hierarchy.is_empty() {
+            aliases.push(MemoryAlias { name: "L0.e".into(), allocation: "cg.e0".into() });
+            aliases.push(MemoryAlias { name: "L0.d".into(), allocation: "cg.r".into() });
+        }
+        if name == "Output construction" && self.operator_repr == "stencil" {
+            aliases.push(MemoryAlias { name: "output.voltages".into(), allocation: "solution.voltage".into() });
+        }
+        let total_bytes = objects.iter().map(|object| object.bytes).sum();
+        self.phases.push(MemoryPhase { name, objects, aliases, total_bytes });
+    }
+
+    fn complete_accounting(&mut self) {
+        self.pointer_bytes = usize_size();
+        self.accounting_basis = "Analytical live named heap payloads for solver arguments and buffers; aliases count once. Excludes caller extras, allocator overhead/capacity, container headers, stack, sparse-library internal conversion buffers, rasterization and JSON serialization. Phase totals are not measured allocator peaks.".into();
+        self.phases.clear();
+        self.phase("Inputs", self.inputs(), false);
+        if self.operator_repr == "explicit" {
+            let mut assembly = self.inputs();
+            for (name, category, bytes) in [
+                ("assembly.filled_resistance", "setup", self.filled_resistance_bytes),
+                ("assembly.conductance", "setup", self.conductance_grid_bytes),
+                ("assembly.cell_to_node", "mapping", self.cell_to_node_map_bytes),
+                ("assembly.edges", "setup", self.edge_triplets_bytes),
+                ("assembly.row_sums", "setup", self.assembly_row_sums_bytes),
+                ("assembly.triplets", "setup", self.assembly_laplacian_triplets_bytes),
+            ] { add_object(&mut assembly, name, category, None, bytes); }
+            self.matrix(&mut assembly, 0, self.assembly_matrix_nodes,
+                self.assembly_matrix_nnz, self.assembly_matrix_bytes);
+            self.phase("Fine matrix assembly", assembly, false);
+            let mut grounding = self.system();
+            add_object(&mut grounding, "grounding.temporary", "setup", None, self.ground_setup_bytes);
+            self.phase("Ground preparation", grounding, false);
+        }
+        self.phase("System ready", self.system(), false);
+        let mut operators = self.system();
+        for level in self.hierarchy.clone() {
+            self.level_operator(&mut operators, &level);
+            if level.level == 0 { continue; }
+            let mut building = operators.clone();
+            let scratch = &level.galerkin_scratch;
+            for (name, bytes) in [
+                ("seen", scratch.symbolic_seen_bytes), ("row_nnz", scratch.symbolic_row_nnz_bytes),
+                ("pos", scratch.numeric_pos_bytes), ("row_count", scratch.numeric_row_count_bytes),
+                ("P_triplets", scratch.p_triplets_clone_bytes), ("P_csr", scratch.p_csr_bytes),
+                ("P_csc", scratch.p_csc_bytes),
+            ] { add_object(&mut building, format!("L{}.setup.{name}", level.level), "setup", Some(level.level), bytes); }
+            self.phase(format!("L{} operator setup", level.level), building, false);
+        }
+        if self.coarse_dense_bytes > 0 {
+            let mut factorizing = operators.clone();
+            add_object(&mut factorizing, "coarse.dense_matrix", "setup", None, self.coarse_dense_bytes);
+            add_object(&mut factorizing, "coarse.factor_candidate", "factor", None, self.coarse_dense_bytes);
+            self.phase("Coarse factorization", factorizing, false);
+        }
+        let mut retained = operators;
+        for level in &self.hierarchy { self.level_workspace(&mut retained, level); }
+        add_object(&mut retained, "jacobi.diag_inv", "diagonals", None, self.jacobi_diag_bytes);
+        self.phase(if self.hierarchy.is_empty() { "Jacobi ready" } else { "Hierarchy ready" }, retained.clone(), false);
+        let mut cg = retained.clone();
+        for (name, category, bytes) in [
+            ("cg.v", "cg_voltage", self.voltage_v_bytes),
+            ("cg.r", "cg_residual", self.residual_r_bytes),
+            ("cg.e0", "cg_preconditioned", self.preconditioned_residual_e0_bytes),
+            ("cg.p", "cg_direction", self.search_direction_p_bytes),
+            ("cg.Lp", "cg_matvec", self.matvec_lp_bytes),
+        ] { add_object(&mut cg, name, category, None, bytes); }
+        self.phase("CG vectors live", cg.clone(), true);
+        if self.cholesky_solve_scratch_bytes + self.coarse_fallback_scratch_bytes > 0 {
+            if self.cholesky_solve_scratch_bytes > 0 {
+                let each = self.cholesky_solve_scratch_bytes / 2;
+                add_object(&mut cg, "coarse.forward_solution", "coarse_solve", None, each);
+                add_object(&mut cg, "coarse.backward_solution", "coarse_solve", None, each);
+            }
+            add_object(&mut cg, "coarse.fallback_CG", "coarse_solve", None, self.coarse_fallback_scratch_bytes);
+            self.phase("V-cycle coarse solve", cg, true);
+        }
+        // The CG work vectors have been freed; only its returned voltage remains.
+        retained.retain(|object| object.name != "jacobi.diag_inv");
+        let mut final_smoothing = retained.clone();
+        add_object(&mut final_smoothing, "solution.voltage", "cg_voltage", None, self.voltage_v_bytes);
+        if !self.hierarchy.is_empty() { self.phase("Final smoothing", final_smoothing.clone(), false); }
+        let mut output = final_smoothing;
+        if self.operator_repr == "explicit" {
+            add_object(&mut output, "output.voltages", "outputs", None, self.voltage_v_bytes);
+        }
+        add_object(&mut output, "output.currents", "outputs", None, self.voltage_v_bytes);
+        self.phase("Output construction", output, false);
+        let mut returned = self.inputs();
+        add_object(&mut returned, "output.voltages", "outputs", None, self.voltage_v_bytes);
+        add_object(&mut returned, "output.currents", "outputs", None, self.voltage_v_bytes);
+        self.phase("Returned maps", returned, false);
+        self.peak_named_payload_bytes = self.phases.iter().map(|phase| phase.total_bytes).max().unwrap_or(0);
+    }
+}
+
 #[cfg(feature = "instrumentation-profile")]
 mod imp {
     use super::*;
@@ -195,7 +420,10 @@ mod imp {
     }
 
     pub fn take() -> Option<InstrumentationProfile> {
-        PROFILE.with(|slot| slot.borrow_mut().take())
+        PROFILE.with(|slot| slot.borrow_mut().take().map(|mut profile| {
+            profile.complete_accounting();
+            profile
+        }))
     }
 }
 
@@ -224,9 +452,13 @@ pub fn take_profile() -> Option<InstrumentationProfile> {
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_conductance_grid(n_cells: usize) {
+pub fn record_conductance_grid(n_cells: usize) { record_conductance_grid_typed::<f64>(n_cells) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_conductance_grid_typed<F: Real>(n_cells: usize) {
     #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.conductance_grid_bytes = vec_f64_bytes(n_cells));
+    imp::with_profile(|s| s.conductance_grid_bytes = vec_scalar_bytes::<F>(n_cells));
 }
 
 #[inline]
@@ -238,16 +470,20 @@ pub fn record_cell_to_node_map(n_cells: usize) {
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_edge_triplets(n_triplets: usize) {
+pub fn record_edge_triplets(n_triplets: usize) { record_edge_triplets_typed::<f64>(n_triplets) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_edge_triplets_typed<F: Real>(n_triplets: usize) {
     #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.edge_triplets_bytes = triplets_bytes(n_triplets));
+    imp::with_profile(|s| s.edge_triplets_bytes = triplets_bytes_typed::<F>(n_triplets));
 }
 
 // Fine Laplacian
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_fine_laplacian(laplacian: &CsMat<f64>) {
+pub fn record_fine_laplacian<F: Real>(laplacian: &CsMat<F>) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|s| {
         s.laplacian_nodes = laplacian.rows();
@@ -260,7 +496,7 @@ pub fn record_fine_laplacian(laplacian: &CsMat<f64>) {
 /// Record stencil structure without claiming stored matrix entries or bytes.
 #[inline]
 #[allow(unused_variables)]
-pub fn record_stencil_fine(operator: &crate::linalg::operator::StencilOperator<'_>) {
+pub fn record_stencil_fine<F: Real>(operator: &crate::linalg::operator::StencilOperator<'_, F>) {
     #[cfg(feature = "instrumentation-profile")]
     {
         use crate::linalg::operator::Operator;
@@ -280,7 +516,7 @@ pub fn record_stencil_fine(operator: &crate::linalg::operator::StencilOperator<'
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_fine_operator(operator: &crate::linalg::operator::FineOperator<'_>) {
+pub fn record_fine_operator<F: Real>(operator: &crate::linalg::operator::FineOperator<'_, F>) {
     #[cfg(feature = "instrumentation-profile")]
     match operator {
         crate::linalg::operator::FineOperator::Explicit(matrix) => record_fine_laplacian(matrix),
@@ -290,19 +526,38 @@ pub fn record_fine_operator(operator: &crate::linalg::operator::FineOperator<'_>
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_assembly_scratch(nodes: usize, entries: usize) {
+pub fn record_assembly_scratch(nodes: usize, entries: usize) { record_assembly_scratch_typed::<f64>(nodes, entries) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_assembly_scratch_typed<F: Real>(nodes: usize, entries: usize) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|profile| {
-        profile.assembly_row_sums_bytes = vec_f64_bytes(nodes);
-        profile.assembly_laplacian_triplets_bytes = triplets_bytes(entries);
+        profile.assembly_row_sums_bytes = vec_scalar_bytes::<F>(nodes);
+        profile.assembly_laplacian_triplets_bytes = triplets_bytes_typed::<F>(entries);
     });
 }
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_filled_resistance(cells: usize) {
+pub fn record_assembly_matrix<F: Real>(matrix: &CsMat<F>) {
     #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|profile| profile.filled_resistance_bytes = vec_f64_bytes(cells));
+    imp::with_profile(|profile| {
+        profile.assembly_matrix_nodes = matrix.rows();
+        profile.assembly_matrix_nnz = matrix.nnz();
+        profile.assembly_matrix_bytes = csmat_bytes(matrix);
+    });
+}
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_filled_resistance(cells: usize) { record_filled_resistance_typed::<f64>(cells) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_filled_resistance_typed<F: Real>(cells: usize) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| profile.filled_resistance_bytes = vec_scalar_bytes::<F>(cells));
 }
 
 #[inline]
@@ -310,6 +565,30 @@ pub fn record_filled_resistance(cells: usize) {
 pub fn record_ground_setup(bytes: u64) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|profile| profile.ground_setup_bytes = bytes);
+}
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_inputs(cells: usize, rhs_reuses_source_input: bool) { record_inputs_typed::<f64>(cells, rhs_reuses_source_input) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_inputs_typed<F: Real>(cells: usize, rhs_reuses_source_input: bool) {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| {
+        profile.scalar_bytes = std::mem::size_of::<F>() as u64;
+        profile.precision = if profile.scalar_bytes == 4 { "f32" } else { "f64" }.into();
+        profile.input_resistance_bytes = vec_scalar_bytes::<F>(cells);
+        profile.input_source_bytes = vec_scalar_bytes::<F>(cells);
+        profile.input_ground_bytes = vec_scalar_bytes::<F>(cells);
+        profile.rhs_reuses_source_input = rhs_reuses_source_input;
+    });
+}
+
+#[inline]
+pub fn record_source_copy() {
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|profile| profile.rhs_reuses_source_input = false);
 }
 
 // Hierarcy
@@ -324,16 +603,31 @@ pub fn record_level(
     prolongation_p_bytes: u64,
     cholesky_factor_bytes: u64,
     galerkin_scratch: GalerkinScratch,
+) { record_level_typed::<f64>(level, nodes, nnz, laplacian_bytes, prolongation_p_bytes, cholesky_factor_bytes, galerkin_scratch) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_level_typed<F: Real>(
+    level: usize,
+    nodes: usize,
+    nnz: usize,
+    laplacian_bytes: u64,
+    prolongation_p_bytes: u64,
+    cholesky_factor_bytes: u64,
+    galerkin_scratch: GalerkinScratch,
 ) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|s| {
-        let workspace = vec_f64_bytes(nodes);
+        let workspace = vec_scalar_bytes::<F>(nodes);
         s.hierarchy.push(LevelMemory {
             level,
             nodes,
             nnz,
             operator_repr: "explicit".into(),
             laplacian_bytes,
+            matrix_values_bytes: if laplacian_bytes > 0 { vec_scalar_bytes::<F>(nnz) } else { 0 },
+            matrix_indices_bytes: if laplacian_bytes > 0 { vec_usize_bytes(nnz) } else { 0 },
+            matrix_indptr_bytes: if laplacian_bytes > 0 { vec_usize_bytes(nodes + 1) } else { 0 },
             prolongation_p_bytes,
             cholesky_factor_bytes,
             workspace_e_bytes: workspace,
@@ -348,19 +642,27 @@ pub fn record_level(
 /// Include fine-grid scratch vectors even when its matrix is a stencil.
 #[inline]
 #[allow(unused_variables)]
-pub fn record_fine_level(cholesky_factor_bytes: u64) {
+pub fn record_fine_level(cholesky_factor_bytes: u64) { record_fine_level_typed::<f64>(cholesky_factor_bytes) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_fine_level_typed<F: Real>(cholesky_factor_bytes: u64) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|profile| {
-        let workspace = vec_f64_bytes(profile.laplacian_nodes);
+        let workspace = vec_scalar_bytes::<F>(profile.laplacian_nodes);
         profile.hierarchy.push(LevelMemory {
             level: 0,
             nodes: profile.laplacian_nodes,
             nnz: profile.laplacian_nnz,
             operator_repr: profile.operator_repr.clone(),
             laplacian_bytes: profile.laplacian_bytes,
+            matrix_values_bytes: if profile.laplacian_bytes > 0 { vec_scalar_bytes::<F>(profile.laplacian_nnz) } else { 0 },
+            matrix_indices_bytes: if profile.laplacian_bytes > 0 { vec_usize_bytes(profile.laplacian_nnz) } else { 0 },
+            matrix_indptr_bytes: if profile.laplacian_bytes > 0 { vec_usize_bytes(profile.laplacian_nodes + 1) } else { 0 },
             cholesky_factor_bytes,
-            workspace_e_bytes: workspace,
-            workspace_d_bytes: workspace,
+            // The finest correction and RHS borrow CG's existing vectors.
+            workspace_e_bytes: 0,
+            workspace_d_bytes: 0,
             workspace_d_prime_bytes: workspace,
             ..LevelMemory::default()
         });
@@ -405,6 +707,8 @@ pub fn set_level_smoother_and_operator_scratch(
             entry.smoother_diag_bytes = diag_bytes;
             entry.smoother_omega = omega;
             entry.operator_matvec_scratch_bytes = matvec_bytes;
+            entry.operator_prolonged_bytes = matvec_bytes / 2;
+            entry.operator_applied_bytes = matvec_bytes / 2;
         }
     });
 }
@@ -413,35 +717,47 @@ pub fn set_level_smoother_and_operator_scratch(
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_coarsest(nodes: usize, requested: Option<usize>, cholesky_available: bool) {
+pub fn record_coarsest(nodes: usize, requested: Option<usize>, cholesky_available: bool) { record_coarsest_typed::<f64>(nodes, requested, cholesky_available) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_coarsest_typed<F: Real>(nodes: usize, requested: Option<usize>, cholesky_available: bool) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|profile| {
         profile.coarsest_nodes = nodes;
         profile.requested_cholesky_size = requested;
         profile.cholesky_available = cholesky_available;
         if cholesky_available {
-            profile.cholesky_solve_scratch_bytes = 2 * vec_f64_bytes(nodes);
+            profile.cholesky_solve_scratch_bytes = 2 * vec_scalar_bytes::<F>(nodes);
         } else {
-            profile.coarse_fallback_scratch_bytes = 6 * vec_f64_bytes(nodes);
+            profile.coarse_fallback_scratch_bytes = 6 * vec_scalar_bytes::<F>(nodes);
         }
     });
 }
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_coarse_dense(n: usize) {
+pub fn record_coarse_dense(n: usize) { record_coarse_dense_typed::<f64>(n) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_coarse_dense_typed<F: Real>(n: usize) {
     #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.coarse_dense_bytes = dense_bytes(n));
+    imp::with_profile(|s| s.coarse_dense_bytes = dense_bytes_typed::<F>(n));
 }
 
 // CG vectors
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_cg_vectors(n: usize) {
+pub fn record_cg_vectors(n: usize) { record_cg_vectors_typed::<f64>(n) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_cg_vectors_typed<F: Real>(n: usize) {
     #[cfg(feature = "instrumentation-profile")]
     imp::with_profile(|s| {
-        let bytes = vec_f64_bytes(n);
+        let bytes = vec_scalar_bytes::<F>(n);
         s.voltage_v_bytes = bytes;
         s.residual_r_bytes = bytes;
         s.preconditioned_residual_e0_bytes = bytes;
@@ -453,9 +769,13 @@ pub fn record_cg_vectors(n: usize) {
 
 #[inline]
 #[allow(unused_variables)]
-pub fn record_jacobi_diag(n: usize) {
+pub fn record_jacobi_diag(n: usize) { record_jacobi_diag_typed::<f64>(n) }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn record_jacobi_diag_typed<F: Real>(n: usize) {
     #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.jacobi_diag_bytes = vec_f64_bytes(n));
+    imp::with_profile(|s| s.jacobi_diag_bytes = vec_scalar_bytes::<F>(n));
 }
 
 #[cfg(test)]
@@ -471,6 +791,56 @@ mod tests {
         t.add_triplet(0, 1, 1.0);
         t.add_triplet(1, 0, 1.0);
         t.to_csr()
+    }
+
+    #[cfg(feature = "instrumentation-profile")]
+    #[test]
+    fn phase_accounting_counts_shared_buffers_once_and_releases_cg_scratch() {
+        use crate::linalg::multigrid::MgOptions;
+        use crate::solve::{self, GroundMode};
+        let n = 32 * 32;
+        let resistance = vec![1.0; n];
+        let mut source = vec![0.0; n];
+        source[0] = 1.0;
+        let mut ground = vec![0.0; n];
+        ground[n - 1] = 1.0;
+        solve::solve_raster_sources_mg_stencil_in_place_with_options(
+            &resistance, 32, 32, -9999.0, &mut source, &ground,
+            1000, 1e-4, true, GroundMode::Shunt, MgOptions::default(),
+        );
+        let profile = take_profile().unwrap();
+        assert!(profile.rhs_reuses_source_input);
+        for phase in &profile.phases {
+            let names: std::collections::HashSet<_> = phase.objects.iter().map(|o| &o.name).collect();
+            assert_eq!(names.len(), phase.objects.len());
+            assert_eq!(phase.total_bytes, phase.objects.iter().map(|o| o.bytes).sum::<u64>());
+            for alias in &phase.aliases {
+                assert!(!names.contains(&alias.name));
+                assert!(names.contains(&alias.allocation));
+            }
+        }
+        let cg = profile.phases.iter().find(|p| p.name == "CG vectors live").unwrap();
+        assert!(!cg.objects.iter().any(|o| o.name == "system.rhs" || o.name == "L0.e" || o.name == "L0.d"));
+        assert_eq!(cg.objects.iter().filter(|o| o.name.starts_with("cg.")).map(|o| o.bytes).sum::<u64>(), 5 * vec_f64_bytes(n));
+        let final_phase = profile.phases.iter().find(|p| p.name == "Final smoothing").unwrap();
+        assert_eq!(cg.total_bytes - final_phase.total_bytes, 4 * vec_f64_bytes(n));
+        let returned = profile.phases.last().unwrap();
+        assert_eq!(returned.total_bytes, 5 * vec_f64_bytes(n));
+        for level in &profile.hierarchy {
+            assert_eq!(level.laplacian_bytes,
+                level.matrix_values_bytes + level.matrix_indices_bytes + level.matrix_indptr_bytes);
+            assert_eq!(level.operator_matvec_scratch_bytes,
+                level.operator_prolonged_bytes + level.operator_applied_bytes);
+        }
+        let shared_cg_bytes = cg.total_bytes;
+        solve::solve_raster_sources_mg_stencil_with_options(
+            &resistance, 32, 32, -9999.0, &source, &ground,
+            1000, 1e-4, true, GroundMode::Shunt, MgOptions::default(),
+        );
+        let copied = take_profile().unwrap();
+        assert!(!copied.rhs_reuses_source_input);
+        let copied_cg = copied.phases.iter().find(|p| p.name == "CG vectors live").unwrap();
+        assert_eq!(copied_cg.total_bytes - shared_cg_bytes, vec_f64_bytes(n));
     }
 
     #[test]
@@ -565,7 +935,9 @@ mod tests {
         assert_eq!(profile.ground_storage_bytes, 100);
         assert_eq!(profile.hierarchy[0].level, 0);
         assert_eq!(profile.hierarchy[0].laplacian_bytes, 0);
-        assert_eq!(profile.hierarchy[0].workspace_e_bytes, 800);
+        assert_eq!(profile.hierarchy[0].workspace_e_bytes, 0);
+        assert_eq!(profile.hierarchy[0].workspace_d_bytes, 0);
+        assert_eq!(profile.hierarchy[0].workspace_d_prime_bytes, 800);
     }
 
     #[cfg(feature = "instrumentation-profile")]

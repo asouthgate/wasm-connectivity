@@ -1,7 +1,7 @@
 export const SCENARIOS = [
   { id: 'dsm', name: 'Digital surface model', description: 'DSM < 20 sources -> DSM > 100 ground' },
-  { id: 'linear_res', name: 'Linear resistance', description: 'Resistance = 1/(1+R) · DSM > 110 source strengths -> hard surface > 1 ground', inputs: ['dsm', 'hard_surf'] },
-  { id: 'log_total_res', name: 'Log total resistance', description: 'Hard-surface source strengths -> DSM > 125 ground', inputs: ['hard_surf', 'dsm'] },
+  { id: 'linear_res', name: 'Linear resistance', description: 'Resistance = 1/(1 + L) - DSM > 110 source strengths - hard surface > 1 ground', inputs: ['dsm', 'hard_surf'] },
+  { id: 'point_lights', name: 'Point lights', description: 'Sources: hard surface > 0, strength = hard-surface value; ground: DSM > 125', inputs: ['hard_surf', 'dsm'] },
 ];
 
 export function scenarioResistance(id, data, nodata) {
@@ -36,7 +36,7 @@ export function scenarioMasks(id, resistance, nrows, ncols, nodata, rasters = {}
         const dsm = positiveValue(rasters.dsm, i);
         source[i] = dsm > 110 ? dsm : 0;
         ground[i] = +(positiveValue(rasters.hard_surf, i) > 1);
-      } else if (id === 'log_total_res') {
+      } else if (id === 'point_lights') {
         source[i] = positiveValue(rasters.hard_surf, i);
         ground[i] = +(positiveValue(rasters.dsm, i) > 125);
       } else {
