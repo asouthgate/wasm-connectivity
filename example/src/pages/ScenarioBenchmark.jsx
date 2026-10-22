@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import MapView from '../components/MapView';
+import RasterView from '../components/RasterView';
 import { StatusBar } from '../components/StatusBar';
 import { SCENARIOS } from '../scenarios';
 
@@ -79,7 +79,7 @@ export default function ScenarioBenchmark() {
             setPrecision(e.target.value); setResults({}); setError(false);
             setStatus(`2000x2000 · low-memory MG · Shunt ground · ${e.target.value}`);
           }}>
-            <option value="f64">f64</option><option value="f32">f32</option>
+            <option value="f64">f64</option><option value="f32">f32</option><option value="mixed">Mixed precision</option>
           </select>
         </label>
         <button onClick={run} disabled={running || Object.keys(previews).length !== 3}>Run</button>
@@ -92,14 +92,14 @@ export default function ScenarioBenchmark() {
           <section key={scenario.id} className="scenario">
             {preview && <div className="scenario-previews">
               {['res', 'src', 'gnd'].map(type => <div key={type} className="scenario-preview">
-                <MapView type={type}
+                <RasterView type={type}
                   image={preview[type]} meta={preview.meta} preview maxSide={200} showHeader={false}
                   quantileScale={scenario.id === 'point_lights' && type === 'res'} />
                 {scenario.id === 'point_lights' && type === 'res' &&
                   <span className="scenario-preview-asterisk" title="Quantile-stretched resistance (500 classes)">*</span>}
               </div>)}
               {result?.currentMap ? <div className="scenario-preview">
-                <MapView type="cur" label="Current"
+                <RasterView type="cur" label="Current"
                   data={result.currentMap.data} meta={result.currentMap} preview maxSide={200} showHeader={false}
                   quantileScale />
                 <span className="scenario-preview-asterisk" title="Quantile-stretched current (500 classes)">*</span>
@@ -134,7 +134,7 @@ export default function ScenarioBenchmark() {
         const current = results[scenario.id]?.currentMap;
         return current && <section key={scenario.id} className="scenario">
           <div className="scenario-current scenario-preview">
-            <MapView type="cur" label="Current" data={current.data} meta={current} showHeader={false}
+            <RasterView type="cur" label="Current" data={current.data} meta={current} showHeader={false}
               quantileScale />
             <span className="scenario-preview-asterisk" title="Quantile-stretched current (500 classes)">*</span>
           </div>

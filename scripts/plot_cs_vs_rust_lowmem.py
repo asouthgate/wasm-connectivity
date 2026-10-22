@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot elapsed runtime and peak RSS from the two scenario comparison traces."""
+"""Plot elapsed runtime and peak RSS from mixed, f64 low-memory and Circuitscape traces."""
 
 import argparse
 from collections import defaultdict
@@ -40,15 +40,17 @@ def parse_trace(path):
     return {scenario: np.array(samples) for scenario, samples in records.items()}
 
 
-def plot_comparison(cs, rust, output):
+def plot_comparison(mixed, rust, cs, output):
     fig, axes = plt.subplots(2, 1, figsize=(10, 9), sharex=True)
-    scenarios = [scenario for scenario in LABELS if scenario in cs or scenario in rust]
+    scenarios = [scenario for scenario in LABELS
+                 if scenario in mixed or scenario in rust or scenario in cs]
     x = np.arange(len(scenarios))
-    width = 0.35
+    width = 0.25
     for metric, (ax, ylabel) in enumerate(zip(axes, ("Runtime (s)", "Peak memory (MiB)"))):
         for offset, data, label, color in (
-            (-width / 2, cs, "Circuitscape 6.1.0", "#e66101"),
-            (width / 2, rust, "Low-memory MG", "#5e3c99"),
+            (-width, cs, "Circuitscape 6.1.0 (f64)", "#e66101"),
+            (0, rust, "Low-memory MG (f64)", "#5e3c99"),
+            (width, mixed, "Low-memory MG (mixed precision)", "#2c7fb8"),
         ):
             present = [i for i, scenario in enumerate(scenarios) if scenario in data]
             if not present:
@@ -70,18 +72,20 @@ def plot_comparison(cs, rust, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("cs_trace")
+    parser.add_argument("mixed_trace")
     parser.add_argument("rust_trace")
+    parser.add_argument("cs_trace")
     parser.add_argument("output", nargs="?", default="cs_vs_rust_lowmem.png")
     args = parser.parse_args()
     try:
+        mixed = parse_trace(args.mixed_trace)
         cs = parse_trace(args.cs_trace)
         rust = parse_trace(args.rust_trace)
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    if not cs and not rust:
+    if not mixed and not cs and not rust:
         parser.error("no completed successful runs found")
-    plot_comparison(cs, rust, args.output)
+    plot_comparison(mixed, rust, cs, args.output)
     print(f"Saved {args.output}")
 
 

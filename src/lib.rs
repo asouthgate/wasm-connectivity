@@ -157,6 +157,64 @@ pub fn solve_raster_sources_mg_stencil(
     use_dirichlet_ground: bool,
 ) -> String { solve_raster_sources_mg_stencil_impl(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
 
+// Compute currents and check convergence using the f64 master voltage first.
+// Only the browser output is rounded; reuse input buffers rather than allocate maps.
+fn compact_mixed_maps(
+    output: solve::RasterOutput<f64>, mut voltage: Vec<f32>, mut current: Vec<f32>,
+) -> solve::RasterOutput<f32> {
+    assert_eq!(voltage.len(), output.voltages.len());
+    assert_eq!(current.len(), output.current_map.len());
+    for (dest, &value) in voltage.iter_mut().zip(&output.voltages) { *dest = value as f32; }
+    for (dest, &value) in current.iter_mut().zip(&output.current_map) { *dest = value as f32; }
+    solve::RasterOutput {
+        voltages: voltage, current_map: current, nrows: output.nrows, ncols: output.ncols,
+    }
+}
+
+#[wasm_bindgen]
+pub fn solve_raster_sources_mg_mixed(
+    resistance_data: Vec<f32>, nrows: usize, ncols: usize, nodata: f32,
+    mut source_data: Vec<f32>, ground_data: Vec<f32>, max_iter: usize, tol: f64,
+    use_dirichlet_ground: bool,
+) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
+    let annotated = solve::mixed::solve_raster_sources_mg_mixed_with_options(
+        &resistance_data, nrows, ncols, nodata, &mut source_data, &ground_data,
+        max_iter, tol, true, ground_mode, linalg::multigrid::MgOptions::default(),
+    );
+    let annotated = solve::AnnotatedOutput {
+        output: compact_mixed_maps(annotated.output, source_data, ground_data),
+        total_iters: annotated.total_iters,
+        error: annotated.error,
+    };
+    drop(resistance_data);
+    json_response(&annotated)
+}
+
+#[wasm_bindgen]
+pub fn run_geospatial_pipeline_mg_mixed(
+    base_raster: Vec<f32>, nrows: usize, ncols: usize, nodata: f32,
+    geojson_str: String, layer_params_str: String, xmin: f64, ymax: f64, cellsize: f64,
+    mut source_data: Vec<f32>, ground_data: Vec<f32>, max_iter: usize, tol: f64,
+    use_dirichlet_ground: bool,
+) -> String {
+    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
+    let output = geospatial::run_geospatial_pipeline_mg_mixed(
+        &base_raster, nrows, ncols, nodata, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
+        &mut source_data, &ground_data, max_iter, tol, ground_mode,
+    );
+    let maps = compact_mixed_maps(solve::RasterOutput {
+        voltages: output.voltage_map, current_map: output.current_map, nrows, ncols,
+    }, source_data, ground_data);
+    let output = geospatial::GeospatialOutput {
+        resistance_map: output.resistance_map, current_map: maps.current_map,
+        voltage_map: maps.voltages, layer_masks: output.layer_masks,
+        nrows, ncols, warnings: output.warnings, total_iters: output.total_iters, error: output.error,
+    };
+    drop(base_raster);
+    json_response(&output)
+}
+
 #[wasm_bindgen]
 pub fn solve_raster_sources_mg_stencil_f32(
     resistance_data: Vec<f32>,
@@ -677,6 +735,32 @@ fn run_roost_finder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_browser_maps_reuse_f32_buffers_after_f64_current_calculation() {
+        let mut source = vec![1.0_f32, 0.0, 0.0];
+        let ground = vec![0.0_f32, 0.0, 1.0];
+        let voltage_ptr = source.as_ptr();
+        let current_ptr = ground.as_ptr();
+        let result = solve::mixed::solve_raster_sources_mg_mixed_with_options(
+            &[1e-6_f32; 3], 1, 3, -9999.0, &mut source, &ground, 1000, 1e-3,
+            false, solve::GroundMode::Shunt, linalg::multigrid::MgOptions::default(),
+        );
+        assert!(result.error.is_none());
+        let expected_voltage: Vec<f32> = result.output.voltages.iter().map(|&v| v as f32).collect();
+        let expected_current: Vec<f32> = result.output.current_map.iter().map(|&v| v as f32).collect();
+        let compact = compact_mixed_maps(result.output, source, ground);
+        assert_eq!(compact.voltages.as_ptr(), voltage_ptr);
+        assert_eq!(compact.current_map.as_ptr(), current_ptr);
+        assert_eq!(compact.voltages, expected_voltage);
+        assert_eq!(compact.current_map, expected_current);
+        for &current in &compact.current_map { assert!((current - 1.0).abs() < 1e-3); }
+        // Recomputing from rounded output voltages would lose the current accuracy.
+        let rounded_current = solve::current::compute_current_map_from_raster(
+            &[1e-6_f32; 3], &[0.0_f32, 0.0, 1.0], &compact.voltages, 1, 3, -9999.0, true,
+        );
+        assert!(rounded_current.iter().any(|&v| (v - 1.0).abs() > 0.01));
+    }
 
     #[test]
     fn lowmem_wasm_buffer_reuse_preserves_serialized_output() {

@@ -1,6 +1,6 @@
 use crate::linalg::real::{Real, scalar};
 use crate::linalg::cholesky;
-use crate::linalg::operator::{FineOperator, Operator};
+use crate::linalg::operator::{FineOperator, Operator, StencilOperator};
 use crate::linalg::pcg::Preconditioner;
 use crate::linalg::transfer::Transfer;
 use crate::memory;
@@ -128,7 +128,7 @@ impl<F: Real> GalerkinMatvecWorkspace<F> {
 /// Level 0 (the fine grid) is an [`Operator`]: either a materialised CSR
 /// matrix or a matrix-free stencil. The stencil path uses weighted Jacobi
 /// and applies level 1 as P^T L_0 (P x); level 2 is the first CSR. Explicit MG
-/// stores every Laplacian and uses symmetric Gauss–Seidel. Both paths use
+/// stores every Laplacian. Both paths use weighted Jacobi smoothing and
 /// geometric transfers without entry arrays.
 pub struct MgPreconditioner<'a, F: Real = f64> {
     fine: FineOperator<'a, F>,
@@ -605,7 +605,6 @@ impl<'a, F: Real> MgPreconditioner<'a, F> {
         }
 
         // Cache smoother data during setup; no allocations during a sweep.
-        let low_memory = matches!(&fine, FineOperator::Stencil(_));
         let mut workspaces = Vec::with_capacity(1 + coarse.len());
         for level in 0..=coarse.len() {
             let op = if level == 0 {
@@ -615,7 +614,7 @@ impl<'a, F: Real> MgPreconditioner<'a, F> {
             };
             let n = op.n();
             let omega_override = if level == 0 { options.l0omega } else { options.coarseomega }.map(scalar::<F>);
-            let mut smoother = if low_memory && level < coarse.len() {
+            let mut smoother = if level < coarse.len() {
                 // Without an override, the spectral bound selects each level's weight.
                 Smoother::weighted_jacobi(&op, scalar::<F>(1.0))
             } else {
@@ -691,6 +690,13 @@ impl<'a, F: Real> MgPreconditioner<'a, F> {
     /// The fine-grid operator (level 0).
     pub fn fine_operator(&self) -> &dyn Operator<F> {
         &self.fine
+    }
+
+    pub(crate) fn fine_stencil(&self) -> &StencilOperator<'a, F> {
+        match &self.fine {
+            FineOperator::Stencil(op) => op,
+            _ => unreachable!("mixed precision requires the low-memory stencil"),
+        }
     }
 
     fn level_operator(&self, level: usize) -> LevelOperator<'_, F> {
@@ -902,22 +908,6 @@ mod tests {
 
     fn level_operator<'x>(mg: &'x MgPreconditioner<'_>, level: usize) -> LevelOperator<'x> {
         mg.level_operator(level)
-    }
-
-    // Compare representations using the same smoother. Production explicit
-    // MG still selects Gauss–Seidel; only this numerical reference uses Jacobi.
-    fn use_jacobi_reference(mg: &MgPreconditioner<'_>) {
-        let smoothers: Vec<_> = (0..mg.coarse.len())
-            .map(|level| Smoother::weighted_jacobi(&mg.level_operator(level), 1.0))
-            .collect();
-        let mut workspaces = mg.workspaces.borrow_mut();
-        for (workspace, mut smoother) in workspaces.iter_mut().zip(smoothers) {
-            if let (Some(value), Smoother::WeightedJacobi { omega, .. }) = (workspace.omega_override, &mut smoother) {
-                *omega = value;
-            }
-            assert!(matches!(workspace.smoother, Smoother::SymmetricGaussSeidel));
-            workspace.smoother = smoother;
-        }
     }
 
     fn structural_nnz(op: &dyn Operator) -> usize {
@@ -1512,10 +1502,10 @@ mod tests {
                         if terminal {
                             "none"
                         } else {
-                            "symmetric-gauss-seidel"
+                            "weighted-jacobi"
                         }
                     );
-                    assert_eq!(level.smoother_diag_bytes, 0);
+                    assert_eq!(level.smoother_diag_bytes, if terminal { 0 } else { memory::vec_f64_bytes(level.nodes) });
                     assert_eq!(level.operator_matvec_scratch_bytes, 0);
                 }
                 for level in &profile.hierarchy[1..] {
@@ -1610,7 +1600,6 @@ mod tests {
             stencil.apply(&vec![0.0; nr * nc], &mut again);
             assert!(again.iter().all(|&value| value == 0.0));
             stencil.apply(&source, &mut again);
-            use_jacobi_reference(&explicit);
             explicit.apply(&source, &mut reference);
             assert_eq!(
                 first, again,
@@ -1669,7 +1658,6 @@ mod tests {
                 structural_nnz(&mg_s.level_operator(1)),
                 "{tag}: coarse level-1 nnz differs"
             );
-            use_jacobi_reference(mg_e);
             let mut ze = vec![0.0; n];
             let mut zs = vec![0.0; n];
             mg_e.apply(&x, &mut ze);

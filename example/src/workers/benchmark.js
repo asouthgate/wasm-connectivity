@@ -5,6 +5,7 @@ import {
   solve_raster_sources_jacobi,
   solve_raster_sources_mg,
   solve_raster_sources_mg_stencil,
+  solve_raster_sources_mg_mixed,
   solve_raster_sources_mg_stencil_f32,
   rasterize_geojson_f32,
   rasterize_geojson,
@@ -35,7 +36,7 @@ function freshInstance() {
 
 const MAX_ITER = 100_000;
 const TOL = 1e-4;
-const TOL_F32 = 1e-3;
+const TOL_MIXED = 1e-3;
 
 function solveJacobi(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
   return solve_raster_sources_jacobi(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
@@ -53,18 +54,21 @@ const SOLVERS = {
   jacobi: solveJacobi,
   gmg: solveGmg,
   'gmg-lowmem': solveGmgStencil,
-  'gmg-lowmem-f32': (res, nr, nc, nd, src, gnd, dirichlet) =>
-    solve_raster_sources_mg_stencil_f32(res, nr, nc, nd, src, gnd, MAX_ITER, TOL_F32, dirichlet),
+  'gmg-mixedp-lowmem': (res, nr, nc, nd, src, gnd, dirichlet) =>
+    solve_raster_sources_mg_mixed(res, nr, nc, nd, src, gnd, MAX_ITER, TOL_MIXED, dirichlet),
 };
 
 function runBenchmark(solveFn, precision, [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]) {
-  const ArrayType = precision === 'f32' ? Float32Array : Float64Array;
-  const rasterize = precision === 'f32' ? rasterize_geojson_f32 : rasterize_geojson;
+  const ArrayType = precision !== 'f64' ? Float32Array : Float64Array;
+  const rasterize = precision !== 'f64' ? rasterize_geojson_f32 : rasterize_geojson;
   const t0 = performance.now();
   const resJson = rasterize(new ArrayType(baseRaster), nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
   const t1 = performance.now();
   const prepMem = getWasmAllocatedMB();
   const parsed = JSON.parse(resJson);
+  // Keep the prepared raster in JS, but discard rasterization's WASM heap.
+  // Connectivity measures a fresh instance, including input transfer and output export.
+  freshInstance();
   const t2 = performance.now();
   const out = solveFn(new ArrayType(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, new ArrayType(srcData), new ArrayType(gndData), !!useDirichletGround);
   const t3 = performance.now();
@@ -96,11 +100,10 @@ self.onmessage = async (e) => {
   try {
     if (fn === 'benchmark_scenario') {
       const [scenarioId, precision = 'f64'] = args;
-      if (!['f32', 'f64'].includes(precision)) throw new Error('Unknown precision');
+      if (!['f32', 'mixed', 'f64'].includes(precision)) throw new Error('Unknown precision');
       const scenario = SCENARIOS.find(s => s.id === scenarioId);
       if (!scenario) throw new Error('Unknown scenario');
       await getCompiledModule();
-      freshInstance();
       const { data, meta } = await loadScenarioRaster(scenarioId);
       const inputs = {};
       for (const name of scenario.inputs || []) {
@@ -112,9 +115,12 @@ self.onmessage = async (e) => {
       }
       scenarioResistance(scenarioId, data, meta.nodata);
       const { source, ground } = scenarioMasks(scenarioId, data, meta.nrows, meta.ncols, meta.nodata, inputs);
+      freshInstance();
       const start = performance.now();
-      const ArrayType = precision === 'f32' ? Float32Array : Float64Array;
-      const solve = precision === 'f32' ? SOLVERS['gmg-lowmem-f32'] : solveGmgStencil;
+      const ArrayType = precision !== 'f64' ? Float32Array : Float64Array;
+      const solve = precision === 'mixed' ? SOLVERS['gmg-mixedp-lowmem'] : precision === 'f32'
+        ? (res, nr, nc, nd, src, gnd, dirichlet) => solve_raster_sources_mg_stencil_f32(res, nr, nc, nd, src, gnd, MAX_ITER, 1e-3, dirichlet)
+        : solveGmgStencil;
       const out = solve(new ArrayType(data), meta.nrows, meta.ncols, meta.nodata, new ArrayType(source), new ArrayType(ground), false);
       const connTimeMs = performance.now() - start;
       const connMemMb = getWasmAllocatedMB();
@@ -139,7 +145,7 @@ self.onmessage = async (e) => {
     if (solver) {
       await getCompiledModule();
       freshInstance();
-      const result = runBenchmark(solver, fn.endsWith('-f32') ? 'f32' : 'f64', args);
+      const result = runBenchmark(solver, fn.endsWith('mixedp-lowmem') ? 'mixed' : 'f64', args);
       self.postMessage({ id, result });
       return;
     }

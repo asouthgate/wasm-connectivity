@@ -752,6 +752,12 @@ pub fn record_coarse_dense_typed<F: Real>(n: usize) {
 #[allow(unused_variables)]
 pub fn record_cg_vectors(n: usize) { record_cg_vectors_typed::<f64>(n) }
 
+pub fn record_mixed_cg_vectors(n: usize) {
+    record_cg_vectors_typed::<f32>(n);
+    #[cfg(feature = "instrumentation-profile")]
+    imp::with_profile(|s| s.voltage_v_bytes = vec_scalar_bytes::<f64>(n));
+}
+
 #[inline]
 #[allow(unused_variables)]
 pub fn record_cg_vectors_typed<F: Real>(n: usize) {

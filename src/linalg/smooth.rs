@@ -1,8 +1,7 @@
 use crate::linalg::real::{Real, scalar};
 use crate::linalg::operator::Operator;
 
-/// Coefficients are cached only for the diagonal-based smoother. Explicit MG
-/// retains its existing Gauss–Seidel update and damping.
+/// Cache inverse diagonals and damping for weighted Jacobi smoothing.
 pub(super) enum Smoother<F: Real = f64> {
     SymmetricGaussSeidel,
     WeightedJacobi { diag_inv: Vec<F>, omega: F },
@@ -61,8 +60,6 @@ impl<F: Real> Smoother<F> {
     }
 }
 
-/// One simultaneous weighted Jacobi sweep. The entire product uses the old e;
-/// only after that product is complete are any entries of e updated.
 pub(super) fn weighted_jacobi_smooth<F: Real>(
     op: &dyn Operator<F>,
     e: &mut [F],

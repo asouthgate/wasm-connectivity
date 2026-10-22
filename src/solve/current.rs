@@ -28,25 +28,26 @@ use crate::linalg::real::{Real, scalar};
 ///
 /// # Returns
 /// Per-cell current map, length `nrows * ncols`.
-pub fn compute_current_map_from_raster<F: Real>(
-    resistance_data: &[F],
-    ground_data: &[F],
+pub fn compute_current_map_from_raster<F: Real, R: Real>(
+    resistance_data: &[R],
+    ground_data: &[R],
     voltages: &[F],
     nrows: usize,
     ncols: usize,
-    nodata: F,
+    nodata: R,
     shunt_ground: bool,
 ) -> Vec<F> {
     let n = nrows * ncols;
     let mut out = vec![scalar::<F>(0.0); n];
 
-    let is_conductive = |r: F| r.is_finite() && r > scalar::<F>(0.0) && r != nodata;
+    let is_conductive = |r: R| r.is_finite() && r > R::zero() && r != nodata;
 
     for ind in 0..n {
         let res = resistance_data[ind];
         if !is_conductive(res) {
             continue;
         }
+        let res = scalar::<F>(res.to_f64().unwrap());
         let v = voltages[ind];
         let mut pos = scalar::<F>(0.0);
         let mut neg = scalar::<F>(0.0);
@@ -55,7 +56,7 @@ pub fn compute_current_map_from_raster<F: Real>(
         if ind >= ncols {
             let nb = ind - ncols;
             if is_conductive(resistance_data[nb]) {
-                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + scalar::<F>(resistance_data[nb].to_f64().unwrap()));
                 if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
@@ -63,7 +64,7 @@ pub fn compute_current_map_from_raster<F: Real>(
         if ind < (nrows - 1) * ncols {
             let nb = ind + ncols;
             if is_conductive(resistance_data[nb]) {
-                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + scalar::<F>(resistance_data[nb].to_f64().unwrap()));
                 if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
@@ -71,7 +72,7 @@ pub fn compute_current_map_from_raster<F: Real>(
         if ind % ncols != 0 {
             let nb = ind - 1;
             if is_conductive(resistance_data[nb]) {
-                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + scalar::<F>(resistance_data[nb].to_f64().unwrap()));
                 if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
@@ -79,13 +80,13 @@ pub fn compute_current_map_from_raster<F: Real>(
         if (ind + 1) % ncols != 0 {
             let nb = ind + 1;
             if is_conductive(resistance_data[nb]) {
-                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + resistance_data[nb]);
+                let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + scalar::<F>(resistance_data[nb].to_f64().unwrap()));
                 if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
             }
         }
 
-        if shunt_ground && ground_data[ind] > scalar::<F>(0.0) {
-            let shunt = ground_data[ind] * v;
+        if shunt_ground && ground_data[ind].is_finite() && ground_data[ind] != nodata && ground_data[ind] > R::zero() {
+            let shunt = scalar::<F>(ground_data[ind].to_f64().unwrap()) * v;
             if shunt > scalar::<F>(0.0) { pos += shunt; } else { neg -= shunt; }
         }
 

@@ -178,6 +178,26 @@ pub(crate) fn global_sweep_sample<F: Real>(iteration: usize, phase: &'static str
     });
 }
 
+pub(crate) fn mixed_sample(iteration: usize, phase: &'static str, sweep: Option<(usize, usize)>,
+    op: &crate::linalg::operator::StencilOperator<'_, f32>, rhs: &[f32], x: &[f64]) {
+    let mut residual = 0.0;
+    let mut weighted = 0.0;
+    let mut norm = 0.0;
+    for i in 0..rhs.len() {
+        let (ax, diagonal) = op.row_f64(i, x);
+        let r = rhs[i] as f64 - ax;
+        residual += r * r;
+        weighted += r * r / diagonal;
+        norm += (rhs[i] as f64).powi(2);
+    }
+    TRACE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let trace = slot.as_mut().expect("profiling scope required");
+        trace.iteration = iteration;
+        trace.record(None, phase, sweep, residual.sqrt(), divide(residual.sqrt(), norm.sqrt()), weighted.sqrt(), false);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

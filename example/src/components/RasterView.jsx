@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
 import { renderMap, VIRIDIS_GRADIENT, PLASMA_GRADIENT, JET_GRADIENT } from '../render';
 
-export default function MapView({ type, data, meta, image, logScale, quantileScale = false, onToggleScale, preview = false, maxSide = 400, label, showHeader = true }) {
+export default function RasterView({ type, data, meta, image, logScale, quantileScale = false, onToggleScale, preview = false, maxSide = 400, label, showHeader = true }) {
   const canvasRef = useRef(null);
   const [range, setRange] = useState({ min: 0, max: 1 });
   const palette = (type === 'cur' || quantileScale) ? 'jet' : type === 'volt' ? 'plasma' : 'viridis';
@@ -39,9 +39,9 @@ export default function MapView({ type, data, meta, image, logScale, quantileSca
       {showHeader && <div className="map-header">
         <span>{label || labels[type] || type}{preview ? ' preview' : ''} {dim && dim}</span>
         {onToggleScale && (
-          <select aria-label={`${label || labels[type] || type} scale`} value={logScale ? 'log' : 'lin'}
+          <select aria-label={`${label || labels[type] || type} scale`} value={quantileScale ? 'quantile' : 'lin'}
             onChange={e => onToggleScale(e.target.value)}>
-            <option value="log">log</option>
+            <option value="quantile">quantile</option>
             <option value="lin">lin</option>
           </select>
         )}

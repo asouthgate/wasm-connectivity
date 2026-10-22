@@ -147,6 +147,31 @@ impl<'a, F: Real> StencilOperator<'a, F> {
         }
     }
 
+    /// Accurate equation row from the stored raster values, without f32 cancellation.
+    pub(crate) fn row_f64<X: Real>(&self, i: usize, x: &[X]) -> (f64, f64) {
+        if self.is_ground(i) { return (x[i].to_f64().unwrap(), 1.0); }
+        let vi = x[i].to_f64().unwrap();
+        let ri = effective_resistance(self.resistance[i], self.nodata).to_f64().unwrap();
+        let mut diagonal = self.shunt_conductance(i).to_f64().unwrap();
+        if i == 0 { diagonal += self.reg_diag0.to_f64().unwrap(); }
+        let mut value = diagonal * vi;
+        let r = i / self.ncols;
+        let c = i % self.ncols;
+        for j in [
+            (r > 0).then(|| i - self.ncols),
+            (r + 1 < self.nrows).then(|| i + self.ncols),
+            (c > 0).then(|| i - 1),
+            (c + 1 < self.ncols).then(|| i + 1),
+        ].into_iter().flatten() {
+            let rj = effective_resistance(self.resistance[j], self.nodata).to_f64().unwrap();
+            let conductance = 2.0 / (ri + rj);
+            let vj = if self.is_ground(j) { 0.0 } else { x[j].to_f64().unwrap() };
+            value += conductance * (vi - vj);
+            diagonal += conductance;
+        }
+        (value, diagonal)
+    }
+
     #[cfg(feature = "instrumentation-profile")]
     pub(crate) fn ground_storage_bytes(&self) -> u64 {
         match &self.ground {

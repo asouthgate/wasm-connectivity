@@ -337,16 +337,18 @@ pub struct LayerMask<F: Real = f64> {
 }
 
 #[derive(Serialize)]
-pub struct GeospatialOutput<F: Real = f64> {
+pub struct GeospatialOutput<F: Real = f64, V: Real = F> {
     pub resistance_map: Vec<F>,
-    pub current_map: Vec<F>,
-    pub voltage_map: Vec<F>,
+    pub current_map: Vec<V>,
+    pub voltage_map: Vec<V>,
     pub layer_masks: Vec<LayerMask<F>>,
     pub nrows: usize,
     pub ncols: usize,
     pub warnings: Vec<String>,
     /// Total PCG iterations across all component solves.
     pub total_iters: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub fn prepare_geospatial_layers<F: Real>(
@@ -474,6 +476,27 @@ fn run_geospatial_pipeline_mg_impl<F: Real>(
         ncols: annotated.output.ncols,
         warnings,
         total_iters: annotated.total_iters,
+        error: annotated.error,
+    }
+}
+
+pub fn run_geospatial_pipeline_mg_mixed(
+    base_raster: &[f32], nrows: usize, ncols: usize, nodata: f32,
+    geojson_str: &str, layer_params_str: &str, xmin: f64, ymax: f64, cellsize: f64,
+    source_data: &mut [f32], ground_data: &[f32], max_iter: usize, tol: f64,
+    ground_mode: crate::solve::GroundMode,
+) -> GeospatialOutput<f32, f64> {
+    let (resistance_data, layer_masks, warnings) = prepare_geospatial_layers(
+        base_raster, nrows, ncols, geojson_str, layer_params_str, xmin, ymax, cellsize,
+    );
+    let annotated = crate::solve::mixed::solve_raster_sources_mg_mixed_with_options(
+        &resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol,
+        true, ground_mode, crate::linalg::multigrid::MgOptions::default(),
+    );
+    GeospatialOutput {
+        resistance_map: resistance_data, layer_masks, warnings, nrows, ncols,
+        current_map: annotated.output.current_map, voltage_map: annotated.output.voltages,
+        total_iters: annotated.total_iters, error: annotated.error,
     }
 }
 
