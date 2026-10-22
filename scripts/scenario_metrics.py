@@ -14,7 +14,7 @@ INPUTS = Path(__file__).resolve().parent / "scenarios"
 
 def load(path):
     if not path.is_file():
-        raise ValueError(f"Missing {path}; run make build first")
+        raise ValueError(f"Missing {path}; run make bench first")
     with rasterio.Env(AAIGRID_DATATYPE="Float64"), rasterio.open(path) as src:
         return src.read(1, masked=True).astype(np.float64)
 

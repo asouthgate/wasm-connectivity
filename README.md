@@ -14,6 +14,13 @@ interactive connectivity modelling for biological systems, such as ecological ma
 make build
 ```
 
+To also build the scenario/benchmark extras (the `scenario-solve` binary and
+the prepared scenario rasters), run:
+
+```
+make bench
+```
+
 To build the optional profiling dependencies, see (or run) `scripts/profile-mem.sh`.
 
 ## Serve the example frontend
