@@ -6,7 +6,8 @@ CSV schema (emitted by example/src/pages/Benchmark.jsx):
 
 run is one of: jacobi, gmg, gmg-lowmem, gmg-mixedp-lowmem.
 Legacy two-solver CSVs also work.
-Per row: total_time_s = prep_time_s + conn_time_s.
+Time uses conn_time_s only, including input transfer and output export.
+Rasterization time (prep_time_s) is excluded.
 """
 import sys
 import csv
@@ -60,10 +61,8 @@ def plot(csv_path, out_path):
             if run not in RUNS:
                 continue
                 
-            prep_t = float(r.get('prep_time_s', 0) or 0)
             conn_t = float(r.get('conn_time_s', 0) or 0)
-            total_t = prep_t + conn_t
-            time_by_key[(res, run)].append(total_t)
+            time_by_key[(res, run)].append(conn_t)
             
             conn_m = float(r.get('conn_mem_mb', 0) or 0)
             mem_by_key[(res, run)].append(conn_m)
@@ -106,7 +105,7 @@ def plot(csv_path, out_path):
     res2str = lambda x: f"{x}x{x}"
 
     # Upper axes (time)
-    ax1.set_ylabel('Total time (s)')
+    ax1.set_ylabel('Time (s)')
     ax1.set_xticks(res_all)
     ax1.set_xticklabels([res2str(r) for r in res_all], rotation=45)
     ax1.grid(True, axis='y', alpha=0.3)

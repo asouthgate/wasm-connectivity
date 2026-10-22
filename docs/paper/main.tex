@@ -200,7 +200,7 @@ $\mathbf{p}_{0}$ is initialized to $\mathbf{r}_0$.
 As before, once the step direction is taken, the position is updated as
 
 \[
-\mathbf{v}_{k+1} = \mathbf{v}_k + \alpha_{k+1}\mathbf{p}_{k+1}.
+\mathbf{v}_{k+1} = \mathbf{v}_k + \alpha_{k}\mathbf{p}_{k}.
 \]
 
 In the case of CG, $\alpha$ and $\beta$ are \cite[Ch. 4.3]{leveque2007finite}:
@@ -225,7 +225,7 @@ To reduce the condition number and speed up convergence, we solve a transformed 
 \mathbf{M}^{-1}\mathbf{L}\mathbf{v} = \mathbf{M}^{-1}\mathbf{s},
 \] 
 
-where $\mathbf{M}^{-1}$ approximates $\mathbf{L}$. When $\mathbf{M}^{-1} = \mathbf{L}^{-1}$, the result is the identity matrix, with optimal condition number of $1$.
+where $\mathbf{M}^{-1}$ approximates $\mathbf{L}^{-1}$. When $\mathbf{M}^{-1} = \mathbf{L}^{-1}$, the result is the identity matrix, with optimal condition number of $1$.
 We cannot compute $\mathbf{M}^{-1}$ directly, since this is computationally infeasible for large matrices, and if we could, we could solve our original system directly.
 Instead, we choose an easily invertible $\mathbf{M}$ that approximates $\mathbf{L}$.
 
@@ -273,7 +273,7 @@ The first optimisation we make is to take a hybrid approach to matrix storage.
 The largest data structure during run-time is the fine Laplacian, with off diagonal entries
 
 \[
-L_{ij} = -(C_i + C_j) / 2,
+L_{ij}=-C_{ij}=-\frac{2}{R_i+R_j},
 \]
 
 and diagonal entries
@@ -307,7 +307,8 @@ For pre- and post- weighted Jacobi smoothing, we utilise separate parameters for
 iterations $\eta$ and weighting parameter $\omega$, since smoothing the level-0 and level-1 implicit
 matrices is more costly than smoothing the explicit coarse laplacians.
 
-Secondly, we introduce a mixed precision option, where 32-bit floats are used except for a 64-bit voltage vector. 
+We additionally implemented a mixed-precision implementation using 64-bit intermediates and a 64-bit voltage
+vector to improve convergence while minimising memory usage.
 This results in memory use similar to a 32-bit implementation, but with better convergence.
 
 \subsection{Example datasets and resistance map calculation}
@@ -319,7 +320,7 @@ the UK Ordnance Survey open data \cite{os_data}.
 Digital surface model (DSM) and digital terrain model (DTM) LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
 
 For the test resistance map, we use constant resistance parameters for rasterised vector features:
-5 for roads (3 pixel buffer), 500 for buildings, 0.5 for rivers (4 pixel buffer).
+5 for roads (3 meter buffer), 500 for buildings, 0.5 for rivers (4 meter buffer).
 For raster landscape feature resistance, we took the feature height as resistance and multiplied by 100. 
 These parameters were arbitrary and chosen to introduce variation into the test resistance map inputted into current calculation.
 In practice, these parameters can be set freely.
@@ -336,7 +337,8 @@ Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be ru
  \url{https://github.com/asouthgate/wasm-connectivity}. 
 
 For comparison of our low-memory approach with Circuitscape v6.1.0, we used three scenarios from three realistic resistance maps, spanning 
-maps rich in both low- and high-frequency variation. We used a final residual tolerance of $1\times10^{-4}$ for both applications.
+maps rich in both low- and high-frequency variation. We used a final residual tolerance of $1\times10^{-4}$ for both 64-bit implementations 
+and $1\times10^{-3}$ for our mixed-precision implementation.
 For the three scenarios, parameters for features such as roads and point lights were taken from \cite{finch2020modelling}.
 These scenarios are shown in \ref{fig:grid_panel_scenarios}.
 
