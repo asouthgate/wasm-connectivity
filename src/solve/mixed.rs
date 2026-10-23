@@ -21,14 +21,30 @@ pub fn solve_raster_sources_mg_mixed_with_options(
     source: &mut [f32], ground: &[f32], max_iter: usize, tol: f64,
     remove_average: bool, ground_mode: GroundMode, options: MgOptions,
 ) -> AnnotatedOutput<RasterOutput<f64>> {
+    solve_mixed(resistance, nrows, ncols, nodata, source, ground, max_iter, tol, remove_average, ground_mode, options, false)
+}
+
+pub fn solve_circuitscape_mixed(
+    resistance: &[f32], nrows: usize, ncols: usize, nodata: f32,
+    source: &mut [f32], ground: &[f32], max_iter: usize, tol: f64,
+    ground_mode: GroundMode, options: MgOptions,
+) -> AnnotatedOutput<RasterOutput<f64>> {
+    solve_mixed(resistance, nrows, ncols, nodata, source, ground, max_iter, tol, true, ground_mode, options, true)
+}
+
+fn solve_mixed(
+    resistance: &[f32], nrows: usize, ncols: usize, nodata: f32,
+    source: &mut [f32], ground: &[f32], max_iter: usize, tol: f64,
+    remove_average: bool, ground_mode: GroundMode, options: MgOptions, circuitscape: bool,
+) -> AnnotatedOutput<RasterOutput<f64>> {
     let _profile = profile::Scope::new(options.profile);
     let timing_scope = timing::Scope::new(options.verbose);
     let preparation = timing::timer(None, "System preparation");
     let n = nrows * ncols;
     assert_eq!(source.len(), n);
     assert_eq!(ground.len(), n);
-    for value in source.iter_mut() {
-        if !valid_positive_value(*value, nodata) { *value = 0.0; }
+    for (i, value) in source.iter_mut().enumerate() {
+        if !valid_positive_value(*value, nodata) || (circuitscape && !valid_positive_value(resistance[i], nodata)) { *value = 0.0; }
     }
     let grounded = ground.iter().any(|&g| valid_positive_value(g, nodata));
     let spec = match ground_mode {
@@ -45,7 +61,11 @@ pub fn solve_raster_sources_mg_mixed_with_options(
     crate::memory::reset();
     crate::memory::record_inputs_typed::<f32>(n, true);
     crate::memory::record_mixed_cg_vectors(n);
-    let fine = StencilOperator::new(nrows, ncols, nodata, resistance, spec);
+    let fine = if circuitscape {
+        StencilOperator::circuitscape(nrows, ncols, nodata, resistance, spec)
+    } else {
+        StencilOperator::new(nrows, ncols, nodata, resistance, spec)
+    };
     drop(preparation);
     let hierarchy = timing::timer(None, "Hierarchy construction");
     let mg = MgPreconditioner::build_with_options(FineOperator::Stencil(fine), nrows, ncols, options);
@@ -114,11 +134,67 @@ pub fn solve_raster_sources_mg_mixed_with_options(
     let error = super::residual_error(relative, tol);
     drop((mg, r, z, p, product));
     let output_timer = timing::timer(None, "Current map/output construction");
-    let current_map = super::current::compute_current_map_from_raster(
-        resistance, ground, &x, nrows, ncols, nodata, ground_mode == GroundMode::Shunt,
+    let current_map = super::current::compute_current_map_with_neighbours(
+        resistance, ground, &x, nrows, ncols, nodata, ground_mode == GroundMode::Shunt, circuitscape,
     );
     let output = RasterOutput { voltages: x, current_map, nrows, ncols };
     drop(output_timer);
     timing_scope.print();
     AnnotatedOutput { output, total_iters: iterations, error }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circuitscape_connects_diagonal_cells_across_nodata() {
+        let resistance = [10.0, f32::NAN, f32::NAN, 20.0];
+        let mut source = [1.0, 5.0, 5.0, 0.0];
+        let ground = [0.0, 0.0, 0.0, 1.0];
+        let result = solve_circuitscape_mixed(
+            &resistance, 2, 2, -9999.0, &mut source, &ground, 1000, 1e-7,
+            GroundMode::Shunt, MgOptions::default(),
+        );
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert!((result.output.voltages[0] - (1.0 + 15.0 * std::f64::consts::SQRT_2)).abs() < 1e-5);
+        assert!((result.output.voltages[3] - 1.0).abs() < 1e-6);
+        assert!((result.output.current_map[0] - 1.0).abs() < 1e-6);
+        assert!((result.output.current_map[3] - 1.0).abs() < 1e-6);
+        assert_eq!(result.output.current_map[1], 0.0);
+        assert_eq!(result.output.current_map[2], 0.0);
+        assert_eq!(source, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn circuitscape_nodata_padding_cannot_create_boundary_shortcuts() {
+        let mut results = Vec::new();
+        for padding in [0, 3] {
+            let n = 6 + 2 * padding;
+            let mut resistance = vec![f32::NAN; n * n];
+            let mut source = vec![0.0; n * n];
+            let mut ground = vec![0.0; n * n];
+            for r in 0..6 {
+                for c in 0..6 {
+                    let i = (r + padding) * n + c + padding;
+                    resistance[i] = if c == 2 && r < 5 { 1e8 } else { 10.0 + (r * c) as f32 };
+                    if c == 0 { source[i] = 1.0; }
+                }
+            }
+            ground[(2 + padding) * n + 5 + padding] = 1.0;
+            let result = solve_circuitscape_mixed(
+                &resistance, n, n, -9999.0, &mut source, &ground, 10000, 1e-7,
+                GroundMode::Shunt, MgOptions::default(),
+            );
+            assert!(result.error.is_none(), "{:?}", result.error);
+            let mut currents = Vec::new();
+            for r in 0..6 { for c in 0..6 {
+                currents.push(result.output.current_map[(r + padding) * n + c + padding]);
+            }}
+            results.push(currents);
+        }
+        for (a, b) in results[0].iter().zip(&results[1]) {
+            assert!((a - b).abs() < 1e-5, "{a} != {b}");
+        }
+    }
 }
