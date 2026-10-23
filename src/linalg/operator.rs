@@ -83,7 +83,6 @@ pub struct StencilOperator<'a, F: Real = f64> {
     nodata: F,
     resistance: &'a [F],
     ground: GroundSpec<'a, F>,
-    circuitscape: bool,
     /// For ground-free systems, `1e-5 * ||L||` added to node 0, matching
     /// [`crate::circuit::laplacian::regularize_laplacian`].
     reg_diag0: F,
@@ -144,73 +143,18 @@ impl<'a, F: Real> StencilOperator<'a, F> {
             nodata,
             resistance,
             ground,
-            circuitscape: false,
             reg_diag0,
-        }
-    }
-
-    /// Circuitscape's eight-neighbour raster graph, with no edges to nodata.
-    /// Unused raster cells are isolated diagonal rows so multigrid can retain
-    /// its rectangular indexing without introducing paths outside the habitat.
-    pub fn circuitscape(
-        nrows: usize, ncols: usize, nodata: F, resistance: &'a [F], ground: GroundSpec<'a, F>,
-    ) -> Self {
-        let mut op = Self::new(nrows, ncols, nodata, resistance, ground);
-        op.circuitscape = true;
-        op
-    }
-
-    #[inline]
-    fn is_nodata(&self, i: usize) -> bool {
-        let r = self.resistance[i];
-        !r.is_finite() || r <= F::zero() || r == self.nodata
-    }
-
-    #[inline]
-    fn pinned_diagonal(&self, i: usize) -> F {
-        // The unused unknown stays at zero. Keep its arbitrary diagonal near
-        // habitat conductances rather than overwhelming Galerkin coarse rows.
-        if self.circuitscape && self.is_nodata(i) { scalar::<F>(1e-9) } else { scalar::<F>(1.0) }
-    }
-
-    #[inline]
-    fn circuitscape_edges(&self, i: usize, mut f: impl FnMut(usize, f64)) {
-        let row = i / self.ncols;
-        let col = i % self.ncols;
-        let ri = self.resistance[i].to_f64().unwrap();
-        for dr in -1_isize..=1 {
-            for dc in -1_isize..=1 {
-                if dr == 0 && dc == 0 { continue; }
-                let r = row as isize + dr;
-                let c = col as isize + dc;
-                if r < 0 || c < 0 || r >= self.nrows as isize || c >= self.ncols as isize { continue; }
-                let j = r as usize * self.ncols + c as usize;
-                if self.is_nodata(j) { continue; }
-                let distance = if dr != 0 && dc != 0 { std::f64::consts::SQRT_2 } else { 1.0 };
-                f(j, 2.0 / ((ri + self.resistance[j].to_f64().unwrap()) * distance));
-            }
         }
     }
 
     /// Accurate equation row from the stored raster values, without f32 cancellation.
     pub(crate) fn row_f64<X: Real>(&self, i: usize, x: &[X]) -> (f64, f64) {
-        if self.is_ground(i) {
-            let diagonal = self.pinned_diagonal(i).to_f64().unwrap();
-            return (diagonal * x[i].to_f64().unwrap(), diagonal);
-        }
+        if self.is_ground(i) { return (x[i].to_f64().unwrap(), 1.0); }
         let vi = x[i].to_f64().unwrap();
         let ri = effective_resistance(self.resistance[i], self.nodata).to_f64().unwrap();
         let mut diagonal = self.shunt_conductance(i).to_f64().unwrap();
         if i == 0 { diagonal += self.reg_diag0.to_f64().unwrap(); }
         let mut value = diagonal * vi;
-        if self.circuitscape {
-            self.circuitscape_edges(i, |j, conductance| {
-                let vj = if self.is_ground(j) { 0.0 } else { x[j].to_f64().unwrap() };
-                value += conductance * (vi - vj);
-                diagonal += conductance;
-            });
-            return (value, diagonal);
-        }
         let r = i / self.ncols;
         let c = i % self.ncols;
         for j in [
@@ -240,7 +184,6 @@ impl<'a, F: Real> StencilOperator<'a, F> {
 
     #[inline]
     fn is_ground(&self, idx: usize) -> bool {
-        if self.circuitscape && self.is_nodata(idx) { return true; }
         match &self.ground {
             GroundSpec::Dirichlet(g) => g[idx],
             _ => false,
@@ -271,7 +214,7 @@ impl<'a, F: Real> StencilOperator<'a, F> {
     fn diagonal(&self, idx: usize) -> F {
         if self.is_ground(idx) {
             // Dirichlet: identity row.
-            return self.pinned_diagonal(idx);
+            return scalar::<F>(1.0);
         }
         let mut d = self.sum_neighbour_conductance(idx);
         d += self.shunt_conductance(idx);
@@ -284,11 +227,6 @@ impl<'a, F: Real> StencilOperator<'a, F> {
     /// Sum of conductances to the (up to four) orthogonal neighbours.
     #[inline]
     fn sum_neighbour_conductance(&self, idx: usize) -> F {
-        if self.circuitscape {
-            let mut sum = F::zero();
-            self.circuitscape_edges(idx, |_, g| sum += scalar::<F>(g));
-            return sum;
-        }
         let ncols = self.ncols;
         let r = idx / ncols;
         let c = idx % ncols;
@@ -315,14 +253,6 @@ impl<'a, F: Real> Operator<F> for StencilOperator<'a, F> {
     }
 
     fn matvec(&self, x: &[F], y: &mut [F]) {
-        if self.circuitscape {
-            for idx in 0..self.n() {
-                let mut value = F::zero();
-                self.for_each_entry(idx, &mut |j, a| value += a * x[j]);
-                y[idx] = value;
-            }
-            return;
-        }
         let ncols = self.ncols;
         let n = self.n();
         for idx in 0..n {
@@ -395,19 +325,7 @@ impl<'a, F: Real> Operator<F> for StencilOperator<'a, F> {
 
     fn for_each_entry(&self, row: usize, f: &mut dyn FnMut(usize, F)) {
         if self.is_ground(row) {
-            f(row, self.pinned_diagonal(row));
-            return;
-        }
-
-        if self.circuitscape {
-            let mut diagonal = self.shunt_conductance(row);
-            if row == 0 { diagonal += self.reg_diag0; }
-            self.circuitscape_edges(row, |j, g| {
-                let g = scalar::<F>(g);
-                diagonal += g;
-                if !self.is_ground(j) { f(j, -g); }
-            });
-            f(row, diagonal);
+            f(row, scalar::<F>(1.0));
             return;
         }
 

@@ -172,25 +172,6 @@ fn compact_mixed_maps(
 }
 
 #[wasm_bindgen]
-pub fn solve_raster_circuitscape_mixed(
-    resistance_data: Vec<f32>, nrows: usize, ncols: usize, nodata: f32,
-    mut source_data: Vec<f32>, ground_data: Vec<f32>, max_iter: usize, tol: f64,
-    use_dirichlet_ground: bool,
-) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
-    let annotated = solve::mixed::solve_circuitscape_mixed(
-        &resistance_data, nrows, ncols, nodata, &mut source_data, &ground_data,
-        max_iter, tol, ground_mode, linalg::multigrid::MgOptions::default(),
-    );
-    let annotated = solve::AnnotatedOutput {
-        output: compact_mixed_maps(annotated.output, source_data, ground_data),
-        total_iters: annotated.total_iters,
-        error: annotated.error,
-    };
-    json_response(&annotated)
-}
-
-#[wasm_bindgen]
 pub fn solve_raster_sources_mg_mixed(
     resistance_data: Vec<f32>, nrows: usize, ncols: usize, nodata: f32,
     mut source_data: Vec<f32>, ground_data: Vec<f32>, max_iter: usize, tol: f64,

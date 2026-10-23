@@ -37,13 +37,6 @@ pub fn compute_current_map_from_raster<F: Real, R: Real>(
     nodata: R,
     shunt_ground: bool,
 ) -> Vec<F> {
-    compute_current_map_with_neighbours(resistance_data, ground_data, voltages, nrows, ncols, nodata, shunt_ground, false)
-}
-
-pub(super) fn compute_current_map_with_neighbours<F: Real, R: Real>(
-    resistance_data: &[R], ground_data: &[R], voltages: &[F],
-    nrows: usize, ncols: usize, nodata: R, shunt_ground: bool, eight_neighbours: bool,
-) -> Vec<F> {
     let n = nrows * ncols;
     let mut out = vec![scalar::<F>(0.0); n];
 
@@ -89,23 +82,6 @@ pub(super) fn compute_current_map_with_neighbours<F: Real, R: Real>(
             if is_conductive(resistance_data[nb]) {
                 let branch = scalar::<F>(2.0) * (v - voltages[nb]) / (res + scalar::<F>(resistance_data[nb].to_f64().unwrap()));
                 if branch > scalar::<F>(0.0) { pos += branch; } else { neg -= branch; }
-            }
-        }
-
-        if eight_neighbours {
-            let row = ind / ncols;
-            let col = ind % ncols;
-            for dr in [-1_isize, 1] {
-                for dc in [-1_isize, 1] {
-                    let r = row as isize + dr;
-                    let c = col as isize + dc;
-                    if r < 0 || c < 0 || r >= nrows as isize || c >= ncols as isize { continue; }
-                    let nb = r as usize * ncols + c as usize;
-                    if !is_conductive(resistance_data[nb]) { continue; }
-                    let branch = scalar::<F>(2.0 / std::f64::consts::SQRT_2) * (v - voltages[nb])
-                        / (res + scalar::<F>(resistance_data[nb].to_f64().unwrap()));
-                    if branch > F::zero() { pos += branch; } else { neg -= branch; }
-                }
             }
         }
 
