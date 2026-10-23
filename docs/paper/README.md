@@ -8,7 +8,7 @@ python3 -m pip install numpy matplotlib rasterio
 Build the required example files:
 
 ```bash
-make build
+make bench
 ```
 
 Report scenario metrics:

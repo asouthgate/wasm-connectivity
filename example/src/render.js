@@ -25,7 +25,7 @@ function jetChannel(t, stops) {
   const [t0, v0] = stops[i], [t1, v1] = stops[i + 1];
   return Math.floor(255 * Math.max(0, Math.min(1, v0 + (v1 - v0) * (t - t0) / (t1 - t0))));
 }
-const JET_COLORS = Array.from({ length: N_CLASSES }, (_, i) => {
+export const JET_COLORS = Array.from({ length: N_CLASSES }, (_, i) => {
   const t = i / (N_CLASSES - 1);
   return [JET_RED, JET_GREEN, JET_BLUE].map(stops => jetChannel(t, stops));
 });
