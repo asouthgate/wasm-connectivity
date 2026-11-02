@@ -33,12 +33,12 @@
 \begin{abstract}
 Circuit theory has been successfully applied to ecological connectivity modelling, 
 notably via the Circuitscape \cite{mcrae2007circuit} software, 
-which is typically run locally on a laptop or on a dedicated server. 
+which is typically run locally on a laptop, or on a dedicated server. 
 However, for scientific web applications or automated pipelines,
- backend infrastructure or serverless environments are often required,
-which can be costly and require advanced data governance. 
+ backend infrastructure or serverless environments are often required.
+These systems can be costly, complex to operate, and increase complexity for privacy and data governance.
 Recent developments in WebAssembly (Wasm) now also allow fast \Cpp{} or 
-Rust code to be run directly in a sandboxed browser environment for edge computing. 
+Rust code to be run directly in a sandboxed browser environment. 
 However, these are also contexts in which memory is limited.
 We present a Rust/WebAssembly toolset with a geospatial data pipeline and efficient,
 memory-optimised implementation of connectivity analysis. 
@@ -104,14 +104,14 @@ We use the methodology introduced by \cite{mcrae2006isolation} to describe conne
 I = CV.
 \end{equation}
 
-Secondly, for a given node (pixel), the conservation equation (Kirchhoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) means that movement in to a pixel is equal to movement out of the pixel. This does treat the modelled species as a conserved quantity and the simplest approach ignores e.g. death. Taking $S_i$ as a source at node $i$ (a point at which the organism emerges, such as a roost), with neighboring pixels $j \in N(i)$:
+Secondly, for a given node (pixel), the conservation equation (Kirchhoff's equation, see \cite[Ch. 2]{alexander2007fundamentals}) means that movement in to a pixel is equal to movement out of the pixel. This does treat the modelled species as a conserved quantity and the simplest approach ignores factors such as death. Taking $S_i$ as a source at node $i$ (a point at which the organism emerges, such as a roost), with neighboring pixels $j \in N(i)$:
 
 \begin{equation}
 \label{eq:conservation}
 I_i = \sum_{j \in N(i)} C_{ij}V_{ij} - S_i = 0.
 \end{equation}
 
-Given these two equations, only voltage differences, $V_{ij}$, are unknown. Voltage, as a potential, can be assumed to be a scalar quantity for a single node up to some constant, which leads to a system of equations:
+Given \eqref{eq:ohm} and \eqref{eq:conservation}, only voltage differences, $V_{ij}$, are unknown. Voltage, as a potential, can be assumed to be a scalar quantity for a single node up to some constant, which leads to a system of equations:
 
 \begin{equation}
 \label{eq:balance1}
@@ -128,23 +128,21 @@ Equations \eqref{eq:balance1} and \eqref{eq:balance2} can be written in the form
 \label{eq:system}
 \Big(\mathbf{D_C}- \mathbf{M}\Big)\mathbf{v} = \mathbf{L}\mathbf{v} = \mathbf{s},
 \end{equation}
-
 where the matrix $\mathbf{L}$ is the graph Laplacian on $N$. Equation \eqref{eq:system} is an example of a discrete Poisson problem \cite[Ch. 4]{leveque2007finite}. 
 
-For ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in calculation. For Robin-type boundary conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are shunts to ground (see the similar approach used in \cite{vasilyeva2026multiscale}). In this system, we have:
+For a ground (sink) node $j$, zero voltage Dirichlet boundary conditions can be enforced during solving by setting the corresponding voltage $\mathbf{v}_j$ to zero and skipping the corresponding rows in the calculation. For Robin-type conditions for ground, instead of a subset of pixels representing ground itself, the specified pixels are connected to an external ground (see the similar approach used in \cite{vasilyeva2026multiscale}). In this system, we use the modified Laplacian $\mathbf{L}_{shunt}$. On the diagonal, for a given pixel at index $i$, we add the shunt conductance $a_i$, representing conductance from that pixel to the external ground. In this system, the voltage is not zero as in the Dirichlet case, and the external ground voltage is $g_i$. The modified Laplacian has diagonals
 
 \begin{equation}
 \label{eq:shunt}
 L_{{shunt},ii} = L_{ii} + a_i,
 \end{equation}
-
-and
+and the modified vector $\mathbf{b}_{shunt}$ has entries
 
 \[
-b_{{shunt},i} = b_i + a_i \cdot g_i,
+b_{{shunt},i} = b_i + a_i \cdot g_i.
 \]
 
-Notice from the units of each side that $a_i$ is a conductance and $a_i \cdot g_i$ a current, so $g_i$ is a voltage.
+Notice from the units of each side that $a_i$ is a conductance, $a_i \cdot g_i$ a current, $g_i$ a voltage, and $a_i(g_i-v_i)$ the current through the shunt.
 
 \subsection{Modes}
 
@@ -154,7 +152,7 @@ Each approach has different assumptions and interpretation. We implement an equi
 
 \subsection{Solver}
 
-In Circuitscape, conjugate gradient with algebraic multigrid (`cg+amg') or a Cholesky solver is used via optimised libraries that are not designed for the Wasm context. In order to keep the Wasm binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
+In Circuitscape, conjugate gradient with algebraic multigrid or a Cholesky solver is used via optimised libraries that are not designed for the Wasm context. In order to keep the Wasm binary small, we implement a conjugate gradient (CG) solver and compare several preconditioners (see below).
 
 A good description of the CG method can be found in \cite{shewchuk1994introduction} or \cite[Ch. 4]{leveque2007finite}. Since we implement it manually for Wasm, a brief explanation follows. We solve the system
 
@@ -178,7 +176,7 @@ For an iterative solver, at iteration $k$, the residual $\mathbf{r}_k$ is comput
 \mathbf{v}_{k+1} = \mathbf{v}_{k} + \alpha_k \mathbf{r}_k.
 \]
 
-Taking the gradient and choosing an optimal step size $\alpha_k$ gets to the bottom of the hill for a slice along the direction $\mathbf{r}_k$. Using this approach, the next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. In steepest descent, to get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that
+Since $f$ is a quadratic function, it is convex given a symmetric $\mathbf{L}$ \cite[Ch. 3.1.4]{vandenberghe2004convex}. Taking the gradient and choosing an optimal step size $\alpha_k$ achieves the global minimum for a slice of $f(\mathbf{v})$, in the direction $\mathbf{r}_k$. Using this approach, the next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. In steepest descent, to get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that
 
 \[
 \alpha_{k} = \frac{\mathbf{r}_{k}^T \mathbf{r}_k}{\mathbf{r}_k^T \mathbf{L}\mathbf{r}_k}.
@@ -194,7 +192,6 @@ For CG, the conjugate direction $\mathbf{p}_{k+1}$ is taken to be
 \[
 \mathbf{p}_{k+1} = \mathbf{r}_{k+1} + \mathbf{\beta}_{k+1}\mathbf{p}_k.
 \]
-
 This is similar to steepest descent but has an additional term depending on the previous direction.
 $\mathbf{p}_{0}$ is initialized to $\mathbf{r}_0$.
 As before, once the step direction is taken, the position is updated as
@@ -217,7 +214,9 @@ In the case of CG, $\alpha$ and $\beta$ are \cite[Ch. 4.3]{leveque2007finite}:
 \subsubsection{Preconditioning} 
 
 As described in \cite[Ch. 4.3.4]{leveque2007finite}, convergence rate depends on condition number. For nonsingular symmetric matrices,
-the $\kappa_2$ condition number is $\kappa_2(\mathbf{L}) = ||\mathbf{L}||_2||\mathbf{L}^{-1}||_2 = \max_j |\lambda_j| / \min_j |\lambda_j|$, for eigenvalues $\lambda_j$.
+the $\kappa_2$ condition number is $\kappa_2(\mathbf{L}) = ||\mathbf{L}||_2||\mathbf{L}^{-1}||_2$,
+where $||\mathbf{L}||_2$ is the $2$-norm (see \cite[Ch A.3.2]{leveque2007finite}). 
+For symmetric positive-definite matrices with eigenvalues $\lambda_j$, $\kappa_2(\mathbf{L}) = \max_j |\lambda_j| / \min_j |\lambda_j|$.
 For ill-conditioned matrices, where $\kappa_2 \gg 1$, steepest descent is slow.
 To reduce the condition number and speed up convergence, we solve a transformed system
 
