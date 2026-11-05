@@ -46,9 +46,8 @@ def prepare_data(directory):
                if not (directory / row["current_map"]).is_file()]
     if missing:
         raise ValueError(f"{len(missing)} current maps missing; wait for sampling to finish")
-    low, high = int(np.argmin(coefficients)), int(np.argmax(coefficients))
-    targets = np.linspace(np.log10(coefficients[low]), np.log10(coefficients[high]), 3)
-    indices = [int(np.argmin(np.abs(np.log10(coefficients) - target))) for target in targets]
+    order = np.argsort(coefficients, kind="stable")
+    indices = [int(order[0]), int(order[len(order) // 2]), int(order[-1])]
     if len(set(indices)) != 3:
         raise ValueError("Samples do not provide three distinct representatives across the log range")
     selected = {}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot minimum, log-midpoint, maximum, and current-rank standard deviation."""
+"""Plot minimum, median, maximum, and current-rank standard deviation."""
 
 import argparse
 from pathlib import Path
@@ -28,10 +28,12 @@ def main():
         sample_count = int(cached["sample_count"])
     print(f"Loaded plotting data from {args.cache}", flush=True)
 
-    targets = np.linspace(np.log10(coefficients.min()), np.log10(coefficients.max()), 3)
-    representatives = [int(np.argmin(np.abs(np.log10(coefficients) - target))) for target in targets]
+    order = np.argsort(coefficients, kind="stable")
+    representatives = [int(order[0]), int(order[len(order) // 2]), int(order[-1])]
     if any(index not in selected for index in representatives):
-        parser.error("Cache lacks the log-midpoint map; rerun postprocess_light_samples.py to rebuild it")
+        parser.error("Cache lacks the median map; rerun postprocess_light_samples.py to rebuild it")
+    for letter, index in zip("abc", representatives):
+        print(f"({letter}) Light resistance maximum: {coefficients[index]:.12g}", flush=True)
     norm = Normalize(0, 100)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(2, 2, figsize=(10, 10), layout="compressed")

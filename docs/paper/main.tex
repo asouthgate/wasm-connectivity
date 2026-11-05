@@ -333,6 +333,12 @@ and $1\times10^{-3}$ for our mixed-precision implementation.
 For the three scenarios, parameters for features such as roads and point lights were taken from \cite{finch2020modelling}.
 These scenarios are shown in \ref{fig:grid_panel_scenarios}.
 
+Reduced memory consumption raises the potential for greater parallelism with fewer compute resources. 
+To demonstrate an application of this, we applied our method to assessment of sensitivity of current maps to changes in underlying resistance map parameterisation. 
+The third scenario of the Brixham dataset was used. In this analysis, 100 random current maps were solved. Each current map used
+the same resistance parameters as previously, except for the light maximum resistance value, which was randomly sampled in log-space
+between $10^3$ and $10^8$. 
+
 Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
 Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be run locally and accessed via the code repository
  \url{https://github.com/asouthgate/wasm-connectivity}.
@@ -405,6 +411,39 @@ and resistance parameterisations, we expect similar run-times across geographic 
 \caption{Three scenarios used for 2000$\times$2000 rasters tests. Each column represents resistance, source, ground, and computed current maps. The point-light resistance (bottom left) and current maps (right column) are quantile colormapped (white asterisk) for improved visualisation. The scenarios include varying features. The third contains resistance values spanning several orders of magnitude, with sharp discontinuities across the landscape.}
 \label{fig:grid_panel_scenarios}
 \end{figure}
+
+Reduced memory opens up the possibility for greater parallelism and further use cases. 
+We demonstrated this by undertaking an assessment of current sensitivity to resistance map parameterisation.
+The Brixham point-light scenario was used again for this analysis. 
+Although optimal parameters for the resistance maps used for this were derived from \cite{finch2020modelling},
+we wanted to additionally assess sensitivity to parameter values. In this parameterisation, 
+maximum light resistance exceeds all other resistances sources by several orders of magnitude, at $10^8$.
+We ran 100 concurrent analyses with randomly sampled maximum light resistance between $10^3$ and $10^8$. 
+Figure \ref{fig:current_parallel} shows the minimum ($1\times10^3$), median ($9.3\times10^5$), and maximum ($9.6\times10^7$) 
+values sampled. Across these resistance values, several key boundaries only become visible at the
+higher values (c). In Figure \ref{fig:current_parallel} (d), these boundaries also correspond to
+regions which high standard deviation across the samples. 
+Some qualitative features are relatively stable across resistance values. For example, lines corresponding to 
+hedgerows appear in all three current maps with varying intensity. However, in (d), features in red are not 
+consistent across the maps, which largely correspond to regions of very low current around lamp features.
+This analysis demonstrates that it is not 
+simply sufficient to have high resistance values, and that, for example, $10^8$ produces
+a qualitatively different map from $10^6$. This analysis completed in 17 minutes on a laptop, which
+would not be feasible if each analysis took several gigabytes of memory.
+
+\begin{figure}[htb!]
+\centering
+\makebox[\textwidth][c]{%
+  \includegraphics[width=1.3\textwidth]{figures/current-standard-deviation.png}%
+}
+\caption{Point-light scenario with sampled point-light maximum resistance values between $10^3$ and $10^8$. 
+Panels (a), (b), and (c) show single-sample current maps with sampled minimum ($1.0\times10^3$), median ($9.3\times10^5$), and
+maximum ($9.6\times10^7$). As can be seen in these panels, a qualitative difference is observed between
+the median and maximum, implying that a resistance of $9.5\times10^5$ is insufficient to capture the barriers
+that form with a resistance of $9.6\times10^7$. (d) shows standard deviation of quantile values across samples.}
+\label{fig:current_parallel}
+\end{figure}
+
 
 
 \section{Discussion}
