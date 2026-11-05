@@ -44,11 +44,13 @@ We present a Rust/WebAssembly toolset with a geospatial data pipeline and effici
 memory-optimised implementation of connectivity analysis. 
 This approach may be useful for geospatial modelling software where raster sizes and 
 memory are constrained, such as in the browser context. 
+We also demonstrate that lower memory improves opportunity for parallelism,
+such as in the context of algorithms that require sampling, enabling 
+previously constrained analyses.
 Our approach has the potential to reduce backend operational complexity, resource requirements, 
 and overall cost.
 \end{abstract}
 
-\hl{In addition, using our low-memory solver allowed sufficient parallelism on a small laptop to allow evaluation of current variation under sampled resistance parameters for a published dataset}
 
 \section{Introduction}
 
@@ -454,6 +456,13 @@ runtimes to Circuitscape with lower memory.
 This method can be integrated into geospatial web applications,
 allowing connectivity modelling in the resource-limited browser Wasm context.
 Our approach can also reduce the required backend server resources, as well as downstream concerns such as data governance complexity.
+
+Another promising opportunity of our approach is that of increase parallelism. Algorithms that require repeatedly computing current maps from
+sampled resistance maps, such as for characterising uncertainty, may be more feasible. We used 16 threads to compute
+100 current maps in 17 minutes on a laptop. 
+This could widen the connectivity analyses possible on local resources, and as shown in our results, previous methods requiring
+multiple gigabytes per analysis would likely have taken several $\times$ longer given constrained memory. In principle, using
+16 threads, thousands of samples could be computed on a laptop over the course of hours.
 
 Different solvers have different performance on different input matrices. While this implementation gives reasonable performance for the
 tested data across several realistic scenarios, it is likely to vary with different rasters depending on the type of features they contain.
