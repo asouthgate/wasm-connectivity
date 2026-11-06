@@ -34,17 +34,19 @@
 Circuit theory has been successfully applied to ecological connectivity modelling, 
 notably via the Circuitscape \cite{mcrae2007circuit} software, 
 which is typically run locally on a laptop, or on a dedicated server. 
-However, for scientific web applications or automated pipelines,
- backend infrastructure or serverless environments are often required.
-These systems can be costly, complex to operate, and increase complexity for privacy and data governance.
+However, for some applications, such web apps, automated pipelines,
+or high-throughput parallel analyses,
+ backend infrastructure is often required.
+These systems can be costly, complex to operate, and introduce privacy and data governance concerns.
 Recent developments in WebAssembly (Wasm) now also allow fast \Cpp{} or 
 Rust code to be run directly in a sandboxed browser environment. 
 However, these are also contexts in which memory is limited.
-We present a Rust/WebAssembly toolset with a geospatial data pipeline and efficient,
+In order to make connectivity analysis feasible under memory constraints,
+we developed a Rust/WebAssembly toolset with a geospatial data pipeline and efficient,
 memory-optimised implementation of connectivity analysis. 
 This approach may be useful for geospatial modelling software where raster sizes and 
 memory are constrained, such as in the browser context. 
-We also demonstrate that lower memory improves opportunity for parallelism,
+We also demonstrate that lower memory presents opportunities for parallelism,
 such as in the context of algorithms that require sampling, enabling 
 previously constrained analyses.
 Our approach has the potential to reduce backend operational complexity, resource requirements, 
@@ -72,10 +74,7 @@ In modern web applications,
 a front-end browser application is often paired with a backend server which performs more computationally expensive jobs. 
 When scientific code is deployed into production web applications for practical use by customers (e.g. analysts),
 a backend is required. However, for many applications, maintaining this infrastructure is costly. 
-
-Edge computing means making use of computing close to the `edge' of the cloud, 
-which is either close to the user's computer, or the user's computer itself. 
-One of the advantages of offloading computation browser-side is simplified data governance,
+One alternative is to offload computations browser-side. This can also be advantageous for data governance,
 as storage of personal data can be avoided if
 computation occurs directly in the user's browser.
 
@@ -252,7 +251,7 @@ of the $l$th system.
 Once this system is solved, interpolation is used to return to the fine grid,
 which works for low-frequency features with high-frequency features already having been smoothed out.
 Finally, smoothing is performed again to eliminate interpolation artifacts.
-If this process is applied recursively, one outer loop is known as a `V-cycle' \cite[Ch. 4.6]{leveque2007finite, alcouffe2000parallel};
+If this process is applied recursively, one outer loop is known as a `V-cycle' \cite[Ch. 4.6]{leveque2007finite, alcouffe2001parallel};
 at the lowest resolution, the system is solved directly. 
 
 Overall, one cycle performs the application of matrix $\mathbf{M}^{-1}$.
@@ -323,6 +322,7 @@ These regions include building, road, and river features. Vector data was obtain
 the UK Ordnance Survey open data \cite{os_data}.
 Digital surface model (DSM) and digital terrain model (DTM) LIDAR data was obtained from the UK Environment Agency \cite{ea_lidar_composite_2022}.
 
+We used an additive model for landscape resistance as described in \cite{finch2020modelling}.
 For the Chudleigh resistance map, we use constant resistance parameters for rasterised vector features:
 5 for roads (3 meter buffer), 500 for buildings, 0.5 for rivers (4 meter buffer).
 For raster landscape feature resistance, we took the feature height as resistance and multiplied by 100. 
@@ -338,8 +338,8 @@ These scenarios are shown in \ref{fig:grid_panel_scenarios}.
 Reduced memory consumption raises the potential for greater parallelism with fewer compute resources. 
 To demonstrate an application of this, we applied our method to assessment of sensitivity of current maps to changes in underlying resistance map parameterisation. 
 The third scenario of the Brixham dataset was used. In this analysis, 100 random current maps were solved. Each current map used
-the same resistance parameters as previously, except for the light maximum resistance value, which was randomly sampled in log-space
-between $10^3$ and $10^8$. 
+the same resistance parameters as previously, except for the light maximum resistance value, which was randomly sampled as $10^U$ with uniformly sampled $U \in [3, 8]$,
+in order to sample across orders of magnitude.
 
 Benchmarking was undertaken on a laptop with an AMD Ryzen 7 5700U, 16G of RAM, Linux 6.8.0-51-generic, and using Google Chrome 150.0.7871.46.
 Benchmarking code was wrapped in a ReactJS \cite{reactjs} applet which can be run locally and accessed via the code repository
@@ -369,7 +369,7 @@ of $<10^{-5}$).
 \makebox[\textwidth][c]{%
     \includegraphics[width=1.2\textwidth]{figures/benchmarking.png}%
 }
-\caption{Time and memory comparison across resolutions for each mode. Bars represent sample range, with the mean as solid lines. The number of iterations at each resolution were 12, 12, 11, and 13 for explicit and low-mem versions, and 12, 12, 10 and 9 for low-mem mixed-precision.}
+\caption{Time and memory comparison across resolutions for each mode. Bars represent sample range, with the mean as lines. The number of iterations at each resolution were 12, 12, 11, and 13 for explicit and low-mem versions, and 12, 12, 10 and 9 for low-mem mixed-precision.}
 \label{fig:benchmarking}
 \end{figure}
 
@@ -379,23 +379,24 @@ of $<10^{-5}$).
 \hfill
 \includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_shunt.png}
 \caption{Side-by-side comparison showing log rescaled current maps produced by Circuitscape (left) and our low-memory Rust solver (right), to show consistency. 
-Current maps were rescaled to the range $[1, 100]$, and are shown with log colorbar. Max absolute difference $<10^{-5}$ rescaled units.}
+Current maps were rescaled to the range $[1, 100]$. Max absolute difference $<10^{-5}$ rescaled units.}
 \label{fig:comparison}
 \end{figure}
 
 Since performance can vary depending on input raster,
 we additionally assessed performance across a range of scenarios using the Brixham dataset.
-As demonstrated in Figure \ref{fig:cs_runtime}, our approach results in an approximately 7-fold reduction in memory
+As demonstrated in Figure \ref{fig:cs_runtime}, our approach in 64-bit mode results in an approximately 7-fold reduction in memory
 when compared with Circuitscape,
 from 3.5 GB to 500 MB for 2000$\times$2000 raster images,
-with comparable runtime.
+with comparable runtime. Our mixed-precision mode used under 300 MB, while
+32-bit modes for both Circuitscape and out implementation failed to converge.
 For each of the scenarios, our 64-bit low-memory implementation required 12, 9, and 27 iterations respectively.
 Figure \ref{fig:grid_panel_scenarios}
 shows these scenarios, each of which is non-trivial.
 Each scenario is derived from DSM, DTM, and open vector data covering a test region.
 The third scenario (bottom row) features several orders of magnitude change in resistance values
 and discontinuous features corresponding to roads and point lights. Despite these features,
-mean run-time was under 70 seconds. Although number of iterations may increase for other regions
+mean run-time was under 70 seconds. Although the number of iterations may increase for other regions
 and resistance parameterisations, we expect similar run-times across geographic regions.
 
 \begin{figure}[htb!]
@@ -423,7 +424,7 @@ maximum light resistance exceeds all other resistances sources by several orders
 We ran 100 concurrent analyses with randomly sampled maximum light resistance between $10^3$ and $10^8$. 
 Figure \ref{fig:current_parallel} shows the minimum ($1\times10^3$), median ($9.3\times10^5$), and maximum ($9.6\times10^7$) 
 values sampled. Across these resistance values, several key boundaries only become visible at the
-higher values (c). In Figure \ref{fig:current_parallel} (d), these boundaries also correspond to
+higher values (c). In (d), these boundaries also correspond to
 regions which high standard deviation across the samples. 
 Some qualitative features are relatively stable across resistance values. For example, lines corresponding to 
 hedgerows appear in all three current maps with varying intensity. However, in (d), features in red are not 
@@ -461,12 +462,12 @@ Another promising opportunity of our approach is that of increase parallelism. A
 sampled resistance maps, such as for characterising uncertainty, may be more feasible. We used 16 threads to compute
 100 current maps in 17 minutes on a laptop. 
 This could widen the connectivity analyses possible on local resources, and as shown in our results, previous methods requiring
-multiple gigabytes per analysis would likely have taken several $\times$ longer given constrained memory. In principle, using
+multiple gigabytes per analysis would likely have taken several times longer given constrained memory. In principle, using
 16 threads, thousands of samples could be computed on a laptop over the course of hours.
 
 Different solvers have different performance on different input matrices. While this implementation gives reasonable performance for the
 tested data across several realistic scenarios, it is likely to vary with different rasters depending on the type of features they contain.
-For certain resistance maps, operator-dependent restriction, such as Alcouffe's method \cite{alcouffe2000parallel} could be used.
+For certain resistance maps, operator-dependent restriction, such as Alcouffe's method \cite{alcouffe2001parallel} could be used.
 
 Limitations of the Wasm environment are primarily constraints in memory, CPU, and binary size. Traditionally, scientific software relies on 
 highly optimised libraries such as BLAS \cite{blackford2002updated}. In principle, this is possible for Wasm, but it is not straightforward.
@@ -475,11 +476,11 @@ In addition, for front-end web applications, it is often important that data tra
 
 \section{LLM disclaimer}
 
-This paper was written by hand without LLM generation. Code and research was developed with LLM assistance.
+This paper was written by hand, without LLM generation. Code and research was developed with LLM assistance.
 
 \section{Contributions}
 
-Alex Southgate: conceptualization; problem formulation; solver and geospatial pipeline implementation; paper writing; testing. Joanna Redihough: conceptualization, especially
+Alex Southgate: conceptualization; problem formulation; solver and geospatial pipeline implementation; low-memory optimisations; paper writing; testing. Joanna Redihough: conceptualization, especially
 with respect to utility of frontend integration; front-end code; paper editing.
 Thomas E. Woolley: paper editing; conceptualization of improvements to benchmarking.
 
