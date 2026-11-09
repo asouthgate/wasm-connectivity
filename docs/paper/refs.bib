@@ -1,8 +1,22 @@
-@techreport{alcouffe2000parallel,
-  title={A Parallel Multigrid Method for Neutronics Applications},
-  author={Alcouffe, Raymond E},
-  year={2000},
-  institution={Los Alamos National Laboratory}
+
+
+@inproceedings{alcouffe2001parallel,
+  author    = {Raymond E. Alcouffe},
+  title     = {A Parallel Multigrid Method for Inversion
+               of the Diffusion Operator in Neutronics
+               Applications},
+  booktitle = {Proceedings of the ANS International Meeting
+               on Mathematical Methods for Nuclear Applications},
+  year      = {2001},
+  month     = {September},
+  address   = {Salt Lake City, Utah, USA}
+}
+
+@book{vandenberghe2004convex,
+  title={Convex optimization},
+  author={Vandenberghe, Lieven and Boyd, Stephen},
+  year={2004},
+  publisher={Cambridge university press, Cambridge}
 }
 
 @book{shekhar2007encyclopedia,
@@ -75,16 +89,16 @@
   year         = {2024},
   publisher    = {GitHub},
   journal      = {GitHub repository},
-  howpublished = {\url{https://github.com/avkoehl/pycda}}
+  howpublished = {\url{https://github.com/avkoehl/pycda}},
+  note         = {Accessed on 2026-11-06}
 }
 
-@manual{esri2026arcgis,
-  author       = {{Environmental Systems Research Institute (ESRI)}},
-  title        = {ArcGIS Pro: Spatial Analyst Extension (Version 3.x)},
-  year         = {2026},
-  organization = {ESRI},
-  address      = {Redlands, CA},
-  url          = {https://pro.arcgis.com}
+@misc{esri2026arcgis,
+  author       = {{Esri}},
+  title        = {What is the {ArcGIS Spatial Analyst} extension?},
+  publisher    = {Esri},
+  howpublished = {\url{https://doc.esri.com/en/arcgis-pro/latest/help/analysis/spatial-analyst/basics/what-is-the-spatial-analyst-extension.html}},
+  note         = {Accessed on 2026-11-06}
 }
 
 @article{alcouffe1981multi,
@@ -99,10 +113,15 @@
 }
 
 @inproceedings{tatebe1993multigrid,
-  title={The multigrid preconditioned conjugate gradient method},
-  author={Tatebe, Osamu},
-  booktitle={NASA. Langley Research Center, The Sixth Copper Mountain Conference on Multigrid Methods, Part 2},
-  year={1993}
+  author       = {Osamu Tatebe},
+  title        = {The Multigrid Preconditioned Conjugate Gradient Method},
+  booktitle    = {Proceedings of the Sixth Copper Mountain
+                  Conference on Multigrid Methods},
+  year         = {1993},
+  pages        = {621--634},
+  publisher    = {NASA},
+  note         = {Part 2},
+  howpublished = {\url{https://ntrs.nasa.gov/citations/19940017009}}
 }
 
 @article{dendy1982black,
@@ -128,19 +147,18 @@
 }
 
 @misc{webr2026,
-  author       = {Stagg, George and {R Core Team}},
   title        = {WebR: R compiled for WebAssembly},
   year         = {2026},
   howpublished = {\url{https://github.com/r-wasm/webr}},
-  note         = {Version 0.4.x, Computer software}
+  note         = {Accessed on 2026-11-06}
 }
 
-@misc{itkwasm2026,
-  author       = {{Insight Software Consortium}},
-  title        = {ITK-Wasm: High-performance spatial analysis in the browser},
-  year         = {2026},
-  howpublished = {\url{https://github.com/InsightSoftwareConsortium/itk-wasm}},
-  note         = {Computer software}
+@article{itkwasm2026,
+  title={ITK-Wasm: Universal spatial analysis and visualization},
+  author={McCormick, M and Elliott, P },
+  journal={Proceedings of the 23rd Python in Science Conference (SciPy 2024)},
+  pages={256-279},
+  year={2024}
 }
 
 @inproceedings{guarneri2024web,
@@ -175,11 +193,10 @@
 }
 
 @misc{pyodide2026,
-  author       = {{Pyodide Development Team}},
-  title        = {Pyodide: A Python distribution for the WebAssembly ecosystem},
+  title        = {Pyodide},
   year         = {2026},
   howpublished = {\url{https://github.com/pyodide/pyodide}},
-  note         = {Version 0.26.x, Computer software}
+  note         = {Accessed on 2026-11-06}
 }
 
 @article{hall2021circuitscape,
@@ -193,22 +210,26 @@
   publisher={MDPI}
 }
 
+
 @misc{ea_lidar_composite_2022,
   author       = {{Environment Agency}},
-  title        = {{LiDAR Composite Digital Terrain Model (DTM)} - 1m spatial resolution},
+  title        = {{LiDAR Composite Digital Terrain Model
+                  (DTM)}},
   year         = {2022},
-  howpublished = {Available from the Defra Data Services Platform},
-  url          = {https://environment.data.gov.uk/},
-  note         = {Accessed: 2026-07-05}
+  publisher    = {Environment Agency},
+  howpublished = {Defra Data Services Platform,
+                  \url{https://environment.data.gov.uk/}},
+  note         = {Accessed on 2026-07-05}
 }
 
 @misc{os_data,
   author       = {{Ordnance Survey}},
-  title        = {{OS Open Roads}, {OS Open Rivers}, and {OS OpenMap - Local} vector datasets},
-  year         = {2026},
-  howpublished = {Available from the OS Data Hub},
-  url          = {https://osdatahub.os.uk/},
-  note         = {Accessed: 2026-07-05}
+  title        = {{OS Open Roads}, {OS Open Rivers}, and
+                  {OS OpenMap Local}: Geospatial Vector Datasets},
+  publisher    = {Ordnance Survey},
+  howpublished = {OS OpenData,
+                  \url{https://www.ordnancesurvey.co.uk/products/open-data}},
+  note         = {Accessed on 2026-07-05}
 }
 
 @article{wathen2015preconditioning,
@@ -272,14 +293,15 @@
 
 @misc{shewchuk1994introduction,
   title={An introduction to the conjugate gradient method without the agonizing pain},
-  author={Shewchuk, Jonathan Richard and others},
+  author={Shewchuk, Jonathan Richard},
   year={1994},
   publisher={Carnegie-Mellon University. Department of Computer Science Pittsburgh}
 }
 
 @book{alexander2007fundamentals,
   title={Fundamentals of electric circuits},
-  author={Alexander, Charles K and Sadiku, Matthew NO and Sadiku, Matthew},
+  author={Alexander, Charles K and Sadiku, Matthew N O},
+  edition={3},
   year={2007},
   publisher={McGraw-Hill Higher Education Boston, MA, USA}
 }
@@ -376,40 +398,49 @@
   pages={231999},
   year={2024}
 }
+
 @article{blackford2002updated,
-  title={An updated set of basic linear algebra subprograms (BLAS)},
-  author={Blackford, L Susan and Petitet, Antoine and Pozo, Roldan and Remington, Karin and Whaley, R Clint and Demmel, James and Dongarra, Jack and Duff, Iain and Hammarling, Sven and Henry, Greg and others},
-  journal={ACM Transactions on Mathematical Software},
-  volume={28},
-  number={2},
-  pages={135--151},
-  year={2002}
+  author  = {L. Susan Blackford and James Demmel and Jack Dongarra and Iain Duff and Sven Hammarling and Greg Henry and Michael Heroux and
+             Linda Kaufman and Andrew Lumsdaine and Antoine Petitet and Roldan Pozo and Karin Remington and R. Clint Whaley},
+  title   = {An Updated Set of Basic Linear Algebra
+             Subprograms ({BLAS})},
+  journal = {ACM Transactions on Mathematical Software},
+  year    = {2002},
+  volume  = {28},
+  number  = {2},
+  pages   = {135--151}
 }
-@manual{reactjs,
-  title        = {React: {A} {J}ava{S}cript library for building user interfaces},
+
+@misc{reactjs,
   author       = {{Meta Platforms, Inc.}},
+  title        = {{React}: A JavaScript Library for
+                  Building User Interfaces},
   year         = {2024},
-  note         = {Version 18.3.1},
-  url          = {https://react.dev/},
-  urldate      = {2026-07-08}
+  publisher    = {Meta Platforms, Inc.},
+  howpublished = {Version 18.3.1,
+                  \url{https://github.com/react/react/releases/tag/v18.3.1}},
+  note         = {Released on 2024-04-26}
 }
 
-@manual{wasm_pack_2024,
-  title        = {wasm-pack: {A} tool for building and packaging {Rust}-generated {WebAssembly}},
+@misc{wasm_pack_2024,
   author       = {{Rust WebAssembly Working Group}},
+  title        = {{wasm-pack}: A Tool for Building and
+                  Packaging Rust-Generated WebAssembly},
   year         = {2024},
-  note         = {Version 0.13.1},
-  url          = {https://rustwasm.github.io/wasm-pack/},
-  urldate      = {2026-07-08}
+  howpublished = {Version 0.13.1,
+                  \url{https://github.com/wasm-bindgen/wasm-pack/releases/tag/v0.13.1}},
+  note         = {Released on 2024-10-29}
 }
 
-@manual{wasm_bindgen_2024,
-  title        = {wasm-bindgen: {Facilitating} high-level interactions between {Wasm} modules and {JavaScript}},
+@misc{wasm_bindgen_2024,
   author       = {{Rust WebAssembly Working Group}},
-  year         = {2024},
-  note         = {Version 0.2.126},
-  url          = {https://rustwasm.github.io/wasm-bindgen/},
-  urldate      = {2026-07-08}
+  title        = {{wasm-bindgen}: Facilitating High-Level
+                  Interactions Between WebAssembly Modules
+                  and JavaScript},
+  year         = {2026},
+  howpublished = {Version 0.2.126,
+                  \url{https://github.com/wasm-bindgen/wasm-bindgen/releases/tag/0.2.126}},
+  note         = {Released on 2026-06-24}
 }
 
 @inproceedings{haas2017bringing,
@@ -425,8 +456,10 @@
 }
 
 @book{saad2003iterative,
-  title={Iterative methods for sparse linear systems},
-  author={Saad, Yousef},
-  year={2003},
-  publisher={SIAM}
+  author    = {Yousef Saad},
+  title     = {Iterative Methods for Sparse Linear Systems},
+  edition   = {2},
+  year      = {2003},
+  publisher = {Society for Industrial and Applied Mathematics},
+  address   = {Philadelphia, PA}
 }
