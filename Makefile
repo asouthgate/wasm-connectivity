@@ -14,6 +14,10 @@ bench:
 
 test:
 	cargo test
+	$(MAKE) build
+	node tests/resistance_worker.mjs
+	npm ci --prefix example
+	npm run build --prefix example
 
 serve: build
 	cd example && npm install && npm run dev

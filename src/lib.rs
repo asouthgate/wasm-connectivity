@@ -1,4 +1,65 @@
-//! -description here-
+//! Raster-based ecological connectivity analysis for native Rust and WebAssembly.
+//!
+//! Current and voltage maps are computed from resistance, source, and ground
+//! rasters using preconditioned conjugate gradients. Solver variants include
+//! geometric multigrid, a low-memory stencil implementation, and mixed precision.
+//!
+//! # Workflow
+//!
+//! Rasterization, resistance modelling, and current solving are separate steps:
+//!
+//! 1. [`geospatial::rasterize_values`] converts GeoJSON features into raster
+//!    values.
+//! 2. [`resistance::pipeline`] computes resistance from aligned input rasters
+//!    and lamp data.
+//! 3. [`solve`] computes current and voltage maps from the resulting resistance
+//!    raster and the caller's source and ground rasters.
+//!
+//! Callers with an existing resistance raster can go directly to the solver.
+//! Ground behaviour is selected through [`solve::GroundMode`]. See
+//! [`raster::fill_nodata`] for the solver's treatment of invalid resistance cells.
+//!
+//! # Native Rust
+//!
+//! Use the module APIs for Rust inputs and structured results. For example:
+//!
+//! ```
+//! use wasm_connect::solve::{solve_raster_sources_mg_stencil, GroundMode};
+//!
+//! let (nrows, ncols) = (32, 32);
+//! let resistance = vec![1.0_f64; nrows * ncols];
+//! let mut source = vec![0.0; nrows * ncols];
+//! let mut ground = vec![0.0; nrows * ncols];
+//! source[0] = 1.0;
+//! ground[nrows * ncols - 1] = 1.0;
+//!
+//! let result = solve_raster_sources_mg_stencil(
+//!     &resistance, nrows, ncols, -9999.0, &source, &ground,
+//!     100_000, 1e-4, true, GroundMode::Shunt,
+//! );
+//! assert!(result.error.is_none(), "{:?}", result.error);
+//! assert_eq!(result.output.current_map.len(), nrows * ncols);
+//! assert_eq!(result.output.voltages.len(), nrows * ncols);
+//! ```
+//!
+//! # JavaScript and WebAssembly
+//!
+//! The functions at the crate root provide the `wasm-bindgen` interface.
+//! Solver exports return JSON-encoded results; rasterization exports return
+//! numeric arrays. Resistance exports return [`BrowserResistanceOutput`], whose
+//! rasters are consumed as `f32` arrays through
+//! [`BrowserResistanceOutput::take_raster`].
+//!
+//! The JavaScript wrappers in `lib/` manage worker calls and Wasm initialization
+//! for rasterization, resistance computation, and current solving. See
+//! `lib/README.md` for integration examples and `lib/index.d.ts` for their types.
+//! Direct JavaScript calls such as raster resizing require `await load()` first.
+//!
+//! # Additional functionality and features
+//!
+//! [`roost`] provides acoustic-detector-based roost estimation. The `bin` Cargo
+//! feature enables native command-line tools and raster file I/O dependencies;
+//! `instrumentation-profile` enables solver memory instrumentation.
 
 use crate::linalg::real::Real;
 pub mod circuit;

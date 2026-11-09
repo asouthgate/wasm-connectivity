@@ -70,7 +70,7 @@ python3 benchmarks/scripts/plot_instrumentation_profile.py profile-lowmem.json
 
 ## Rust
 
--description here-
+To build the Rust crate directly with Cargo:
 
 ```sh
 cargo build
@@ -78,22 +78,15 @@ cargo test
 cargo doc --no-deps --open
 ```
 
-## Checks
+## Tests
 
--description here-
+To run the tests:
 
 ```sh
-cargo test
-make build
-node tests/resistance_worker.mjs
-cd example
-npm ci
-npm run build
+make test
 ```
 
 ## Documentation
-
--description here-
 
 - [Benchmarks](benchmarks/README.md)
 - [JavaScript API](lib/README.md)
@@ -104,7 +97,7 @@ npm run build
 
 ## Cargo features
 
--description here-
+The Rust crate here has a few feature flags. 
 
-- `bin`: -description here-
-- `instrumentation-profile`: -description here-
+- `bin`: compiles the project CLI executables. 
+- `instrumentation-profile`: compiles the instrumentation profiling script for development and benchmarking.
