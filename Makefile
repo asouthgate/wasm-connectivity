@@ -9,7 +9,7 @@ build:
 	@grep -q 'export function get_memory' lib/wasm_connect.js || cat lib/patch.js >> lib/wasm_connect.js
 
 bench:
-	node scripts/scenarios/prepare.mjs
+	node benchmarks/scenarios/prepare.mjs
 	cargo build --release --features bin --bin scenario-solve
 
 test:
