@@ -5,7 +5,7 @@ import { SCENARIOS, scenarioResistance, scenarioMasks } from '../../example/src/
 
 const root = new URL('../../', import.meta.url);
 const input = new URL('example/public/geodata/scenarios/', root);
-const output = new URL('scripts/scenarios/', root);
+const output = new URL('benchmarks/scenarios/', root);
 
 async function load(name) {
   const raster = parseAsc(await readFile(new URL(`${name}.asc`, input), 'utf8'));

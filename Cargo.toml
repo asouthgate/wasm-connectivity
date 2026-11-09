@@ -2,6 +2,9 @@
 name = "wasm-connect"
 version = "0.1.1"
 edition = "2021"
+description = "Low-mem ecological connectivity analysis for Rust and WebAssembly"
+license-file = "COPYING.md"
+include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/COPYING.md"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

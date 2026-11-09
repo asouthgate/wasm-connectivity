@@ -12,7 +12,7 @@ import numpy as np
 import rasterio
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 OTHER_LAYERS = ("road_res", "river_res", "landscape_res", "linear_res", "generic_res")
 
 
@@ -45,7 +45,7 @@ def write_asc(path, values, grid):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--layers", type=Path, default=ROOT / "2000x2000-lit")
-    parser.add_argument("--scenario", type=Path, default=ROOT / "scripts/scenarios/point_lights")
+    parser.add_argument("--scenario", type=Path, default=ROOT / "benchmarks/scenarios/point_lights")
     parser.add_argument("--solver", type=Path, default=ROOT / "target/release/scenario-solve")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--samples", type=int, default=100)
