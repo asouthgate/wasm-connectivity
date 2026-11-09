@@ -159,3 +159,38 @@ test('rasterizer rejects missing values and invalid grids and remains usable', a
   const empty = await rasterizeGeojsonAsync({ type: 'FeatureCollection', features: [] }, grid);
   assert.deepEqual(empty, new Float64Array(64));
 });
+
+
+test('solver-only public wrapper matches the current solve without geospatial inputs', async () => {
+  const { solveCurrentAsync, runGeospatialPipelineMgStencilAsync } = await import('../lib/index.js');
+  const nrows = 32;
+  const ncols = 32;
+  const resistance = new Float64Array(nrows * ncols).fill(1);
+  const source = new Float64Array(nrows * ncols);
+  const ground = new Float64Array(nrows * ncols);
+  source[0] = 1;
+  ground[ground.length - 1] = 1;
+  for (const precision of ['f64', 'f32', 'mixed']) {
+    for (const useDirichletGround of [false, true]) {
+      const options = { precision, useDirichletGround, maxIter: 100000 };
+      const result = await solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground, options);
+      assert.ok(!result.error, result.error);
+      assert.equal(result.output.nrows, nrows);
+      assert.equal(result.output.ncols, ncols);
+      assert.ok(result.output.current_map.every(Number.isFinite));
+      const geospatial = JSON.parse(await runGeospatialPipelineMgStencilAsync(
+        resistance, nrows, ncols, -9999, 0, nrows, 1, source, ground, options,
+      ));
+      assert.deepEqual(result.output.current_map, geospatial.current_map);
+      assert.deepEqual(result.output.voltages, geospatial.voltage_map);
+      assert.equal(result.total_iters, geospatial.total_iters);
+    }
+  }
+  const defaultResult = await solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground);
+  assert.ok(!defaultResult.error, defaultResult.error);
+  assert.equal(source[0], 1);
+  assert.equal(source[1], 0);
+  assert.equal(ground[ground.length - 1], 1);
+  await assert.rejects(solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground,
+    { precision: 'invalid' }), /precision/);
+});

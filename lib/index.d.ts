@@ -4,6 +4,29 @@ export type Precision = "f32" | "f64" | "mixed";
 export function load(): Promise<void>;
 export { downsample_raster as downsampleRaster, upsample_raster as upsampleRaster } from "./wasm_connect.js";
 
+export interface CurrentSolverOptions {
+  maxIter?: number;
+  tol?: number;
+  useDirichletGround?: boolean;
+  precision?: Precision;
+}
+
+export interface CurrentSolveResult {
+  output: {
+    voltages: number[];
+    current_map: number[];
+    nrows: number;
+    ncols: number;
+  };
+  total_iters: number;
+  error?: string;
+}
+
+export function solveCurrentAsync(
+  resistance: RasterInput, nrows: number, ncols: number, nodata: number,
+  source: RasterInput, ground: RasterInput, options?: CurrentSolverOptions,
+): Promise<CurrentSolveResult>;
+
 export interface GeospatialOptions {
   geojson?: Record<string, unknown>;
   layerParams?: Record<string, { resistance: number; width?: number }>;
