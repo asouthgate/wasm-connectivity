@@ -1,11 +1,10 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::encoder::{colortype, TiffEncoder};
-use wasm_connect::geospatial::{rasterize_features, GeoTransform, LayerParams};
+use wasm_connect::geospatial::{rasterize_values, GeoTransform};
 use wasm_connect::resistance::pipeline::{run_resistance_pipeline, ResistanceParams};
 use wasm_connect::resistance::landscape::{compute_base_rank, get_landscape_resistance_lcm};
 
@@ -123,34 +122,15 @@ fn emit_json_log(level: &str, msg: &str) {
     println!("{}", serde_json::to_string(&log).unwrap_or_default());
 }
 
-fn rasterize_geojson_to_binary(
-    geojson_str: &str,
-    layer_name: &str,
-    nrows: usize,
-    ncols: usize,
-    transform: &GeoTransform,
-) -> Vec<f64> {
-    let base = vec![0.0f64; nrows * ncols];
-    let mut warnings = Vec::new();
-    let mut params_map = HashMap::new();
-    params_map.insert(
-        layer_name.to_string(),
-        LayerParams {
-            resistance: 1.0,
-            width: 0.0,
-        },
-    );
-
-    let (result, _masks) = rasterize_features(geojson_str, &params_map, &base, nrows, ncols, transform, &mut warnings);
-    let non_zero = result.iter().filter(|&&v| v > 0.0 && v.is_finite()).count();
-    emit_json_log("INFO", &format!(
-        "rasterized {} ({} bytes) -> {} non-zero cells",
-        layer_name, geojson_str.len(), non_zero
-    ));
-    for w in &warnings {
-        emit_json_log("WARN", &format!("rasterize {}: {}", layer_name, w));
-    }
-    result
+fn rasterize_geojson_values(
+    geojson_str: &str, layer_name: &str,
+    nrows: usize, ncols: usize, transform: &GeoTransform,
+) -> io::Result<Vec<f64>> {
+    let values: Vec<f64> = rasterize_values(geojson_str, nrows, ncols, transform, 0.0)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let non_zero = values.iter().filter(|&&v| v != 0.0 && v.is_finite()).count();
+    emit_json_log("INFO", &format!("rasterized {} -> {} non-zero cells", layer_name, non_zero));
+    Ok(values)
 }
 
 fn create_circles_raster(
@@ -215,22 +195,22 @@ fn parse_grid_config(work_dir: &Path, resolution: f64, roost_easting: f64, roost
     }
 }
 
-fn read_building_mask_from_disk(work_dir: &Path, nrows: usize, ncols: usize, transform: &GeoTransform) -> Vec<f64> {
+fn read_building_mask_from_disk(work_dir: &Path, nrows: usize, ncols: usize, transform: &GeoTransform) -> io::Result<Vec<f64>> {
     let geojson_path = work_dir.join("buildings.geojson");
     if geojson_path.exists() {
         match fs::read_to_string(&geojson_path) {
-            Ok(gj) => return rasterize_geojson_to_binary(&gj, "buildings", nrows, ncols, transform),
+            Ok(gj) => return rasterize_geojson_values(&gj, "buildings", nrows, ncols, transform),
             Err(e) => emit_json_log("WARN", &format!("Failed to read buildings.geojson: {}", e)),
         }
     }
     let path = work_dir.join("buildings.tif");
     if path.exists() {
         match read_tiff_f32(&path) {
-            Ok((data, _, _)) => return data,
+            Ok((data, _, _)) => return Ok(data),
             Err(e) => emit_json_log("WARN", &format!("Failed to read buildings.tif: {}", e)),
         }
     }
-    vec![0.0; nrows * ncols]
+    Ok(vec![0.0; nrows * ncols])
 }
 
 fn run_landscape(work_dir: &Path) -> io::Result<()> {
@@ -256,7 +236,7 @@ fn run_landscape(work_dir: &Path) -> io::Result<()> {
     emit_json_log("INFO", &format!("Grid: {}x{}, pixw={}, xmin={}", ncols, nrows, pixw, xmin));
 
     let transform = GeoTransform { xmin, ymax, cellsize: pixw };
-    let building_mask = read_building_mask_from_disk(work_dir, nrows, ncols, &transform);
+    let building_mask = read_building_mask_from_disk(work_dir, nrows, ncols, &transform)?;
 
     let (lcm, _, _) = read_tiff_f32(&work_dir.join("lcm.tif"))?;
     let (_dtm, nrows_dtm, ncols_dtm) = read_tiff_f32(&work_dir.join("dtm.tif"))?;
@@ -437,7 +417,7 @@ fn run() -> io::Result<()> {
     let road_binary = match read_optional_geojson(&work_dir, "roads.geojson")? {
         Some(gj) => {
             emit_json_log("INFO", &format!("Found roads.geojson ({} bytes), rasterizing...", gj.len()));
-            rasterize_geojson_to_binary(&gj, "roads", nrows, ncols, &transform)
+            rasterize_geojson_values(&gj, "roads", nrows, ncols, &transform)?
         }
         None => read_optional_tiff(&work_dir, "road_binary.tif")?
             .map(|(d, _, _)| d)
@@ -450,7 +430,7 @@ fn run() -> io::Result<()> {
     let river_binary = match read_optional_geojson(&work_dir, "rivers.geojson")? {
         Some(gj) => {
             emit_json_log("INFO", &format!("Found rivers.geojson ({} bytes), rasterizing...", gj.len()));
-            rasterize_geojson_to_binary(&gj, "rivers", nrows, ncols, &transform)
+            rasterize_geojson_values(&gj, "rivers", nrows, ncols, &transform)?
         }
         None => read_optional_tiff(&work_dir, "river_binary.tif")?
             .map(|(d, _, _)| d)
@@ -460,38 +440,11 @@ fn run() -> io::Result<()> {
             }),
     };
 
-    let building_mask = read_building_mask_from_disk(&work_dir, nrows, ncols, &transform);
+    let building_mask = read_building_mask_from_disk(&work_dir, nrows, ncols, &transform)?;
 
     let generic_res = match read_optional_geojson(&work_dir, "generic_resistance.geojson")? {
         Some(gj) => {
-            let base = vec![0.0f64; nrows * ncols];
-            let mut warnings = Vec::new();
-            let mut params_map = HashMap::new();
-            params_map.insert(
-                "generic_resistance".to_string(),
-                LayerParams {
-                    resistance: 100.0,
-                    width: 0.0,
-                },
-            );
-            let (result, _) = rasterize_features(
-                &gj,
-                &params_map,
-                &base,
-                nrows,
-                ncols,
-                &transform,
-                &mut warnings,
-            );
-            let nz = result.iter().filter(|&&v| v > 0.0 && v.is_finite()).count();
-            emit_json_log("INFO", &format!(
-                "rasterized generic_resistance ({} bytes) -> {} non-zero cells",
-                gj.len(), nz
-            ));
-            for w in &warnings {
-                emit_json_log("WARN", &format!("rasterize generic_resistance: {}", w));
-            }
-            result
+            rasterize_geojson_values(&gj, "generic_resistance", nrows, ncols, &transform)?
         }
         None => read_optional_tiff(&work_dir, "generic_resistance.tif")?
             .map(|(d, _, _)| d)
@@ -633,5 +586,26 @@ fn main() {
     if let Err(e) = run() {
         emit_json_log("ERROR", &format!("{}", e));
         std::process::exit(1);
+    }
+}
+
+
+#[cfg(test)]
+mod rasterization_tests {
+    use super::*;
+
+    #[test]
+    fn building_ingestion_uses_each_features_value() {
+        let features = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"value":5},"geometry":{
+                "type":"Polygon","coordinates":[[[0,0],[2,0],[2,2],[0,2],[0,0]]]}},
+            {"type":"Feature","properties":{"value":12},"geometry":{
+                "type":"Polygon","coordinates":[[[2,2],[4,2],[4,4],[2,4],[2,2]]]}}
+        ]}"#;
+        let transform = GeoTransform { xmin: 0.0, ymax: 4.0, cellsize: 1.0 };
+        let raster = rasterize_geojson_values(features, "buildings", 4, 4, &transform).unwrap();
+        assert_eq!(raster[12], 5.0);
+        assert_eq!(raster[3], 12.0);
+        assert_eq!(raster[0], 0.0);
     }
 }

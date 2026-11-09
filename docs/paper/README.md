@@ -1,30 +1,15 @@
-Install extra dependencies:
+# Paper
 
-```bash
-julia --startup-file=no -e 'using Pkg; Pkg.add(Pkg.PackageSpec(name="Circuitscape", version="6.1.0"))'
-python3 -m pip install numpy matplotlib rasterio
-```
+-description here-
 
-Build the required example files:
+## Build
 
-```bash
-make bench
-```
+-description here-
 
-Report scenario metrics:
-
-```bash
-python3 scripts/scenario_metrics.py
-```
-
-Run the benchmarking comparison script:
-
-```bash
-bash scripts/run-cs-comparison.sh
-```
-
-Generate the plots:
-
-```bash
-python3 scripts/plot_cs_vs_rust_lowmem.py cs-julia-bench.out rust-lowmem-bench.out
+```sh
+cd docs/paper
+pdflatex main.tex
+bibtex main
+pdflatex main.tex
+pdflatex main.tex
 ```

@@ -1,3 +1,5 @@
+//! -description here-
+
 use crate::linalg::real::Real;
 pub mod circuit;
 pub mod geospatial;
@@ -428,63 +430,24 @@ pub fn upsample_raster(
     raster::upsample_raster(&data, nrows, ncols, target_rows, target_cols)
 }
 
-#[derive(Serialize)]
-struct RasterizeOutput<F: Real = f64> {
-    resistance_map: Vec<F>,
-    layer_masks: Vec<geospatial::LayerMask<F>>,
-    nrows: usize,
-    ncols: usize,
-    warnings: Vec<String>,
+/// Rasterize GeoJSON `properties.value` fields. Returns row-major values;
+/// uncovered cells are zero and overlaps take the maximum feature value.
+#[wasm_bindgen]
+pub fn rasterize_geojson(
+    geojson_str: String, nrows: usize, ncols: usize,
+    xmin: f64, ymax: f64, cellsize: f64, buffer: f64,
+) -> Result<Vec<f64>, String> {
+    geospatial::rasterize_values(&geojson_str, nrows, ncols,
+        &geospatial::GeoTransform { xmin, ymax, cellsize }, buffer)
 }
 
 #[wasm_bindgen]
-pub fn rasterize_geojson(
-    base_raster: Vec<f64>,
-    nrows: usize,
-    ncols: usize,
-    _nodata: f64,
-    geojson_str: String,
-    layer_params_str: String,
-    xmin: f64,
-    ymax: f64,
-    cellsize: f64,
-) -> String { rasterize_geojson_impl(base_raster, nrows, ncols, _nodata, geojson_str, layer_params_str, xmin, ymax, cellsize) }
-
-#[wasm_bindgen]
 pub fn rasterize_geojson_f32(
-    base_raster: Vec<f32>,
-    nrows: usize,
-    ncols: usize,
-    _nodata: f32,
-    geojson_str: String,
-    layer_params_str: String,
-    xmin: f64,
-    ymax: f64,
-    cellsize: f64,
-) -> String { rasterize_geojson_impl(base_raster, nrows, ncols, _nodata, geojson_str, layer_params_str, xmin, ymax, cellsize) }
-
-fn rasterize_geojson_impl<F: Real>(
-    base_raster: Vec<F>,
-    nrows: usize,
-    ncols: usize,
-    _nodata: F,
-    geojson_str: String,
-    layer_params_str: String,
-    xmin: f64,
-    ymax: f64,
-    cellsize: f64,
-) -> String {
-    let (resistance_data, layer_masks, warnings) = geospatial::prepare_geospatial_layers(
-        &base_raster, nrows, ncols, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
-    );
-    let output = RasterizeOutput {
-        resistance_map: resistance_data,
-        layer_masks,
-        nrows,
-        ncols,
-        warnings,
-    };
-    json_response(&output)
+    geojson_str: String, nrows: usize, ncols: usize,
+    xmin: f64, ymax: f64, cellsize: f64, buffer: f64,
+) -> Result<Vec<f32>, String> {
+    geospatial::rasterize_values(&geojson_str, nrows, ncols,
+        &geospatial::GeoTransform { xmin, ymax, cellsize }, buffer)
 }
 
 #[wasm_bindgen]

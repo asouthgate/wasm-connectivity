@@ -1,3 +1,5 @@
+# wasm-connect
+
 This software provides an implementation of connectivity analysis suitable for use in Wasm/browser
 context, using a geometric multigrid conjugate gradient solver. This can enable certain kinds of 
 interactive connectivity modelling for biological systems, such as ecological mapping.
@@ -21,7 +23,7 @@ the prepared scenario rasters), run:
 make bench
 ```
 
-To build the optional profiling dependencies, see (or run) `scripts/profile-mem.sh`.
+To build the optional profiling dependencies, see (or run) `benchmarks/scripts/profile-mem.sh`.
 
 ## Serve the example frontend
 
@@ -33,7 +35,7 @@ This frontend contains utilities for benchmarking the code in the browser.
 To plot benchmarking results downloaded from the browser, run:
 
 ```sh
-python3 scripts/plot_benchmark.py benchmark.csv
+python3 benchmarks/scripts/plot_benchmark.py benchmark.csv
 ```
 
 ## Profiling
@@ -49,7 +51,7 @@ For example, to run without the `lowmem` flag, run:
 ```sh
 cargo run --profile release-prof --features bin,instrumentation-profile \
   --bin instrumentation-profile -- 500 --solver mg --ground shunt > profile.json
-python3 scripts/plot_instrumentation_profile.py profile.json
+python3 benchmarks/scripts/plot_instrumentation_profile.py profile.json
 ```
 
 Then run with `--solver mg-lowmem` for the `lowmem` version:
@@ -57,11 +59,52 @@ Then run with `--solver mg-lowmem` for the `lowmem` version:
 ```sh
 cargo run --profile release-prof --features bin,instrumentation-profile \
   --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt > profile-lowmem.json
-python3 scripts/plot_instrumentation_profile.py profile-lowmem.json
+python3 benchmarks/scripts/plot_instrumentation_profile.py profile-lowmem.json
 ```
 
 To visualise these results run:
 
 ```
-python3 scripts/plot_instrumentation_profile.py profile-lowmem.json
+python3 benchmarks/scripts/plot_instrumentation_profile.py profile-lowmem.json
 ```
+
+## Rust
+
+-description here-
+
+```sh
+cargo build
+cargo test
+cargo doc --no-deps --open
+```
+
+## Checks
+
+-description here-
+
+```sh
+cargo test
+make build
+node tests/resistance_worker.mjs
+cd example
+npm ci
+npm run build
+```
+
+## Documentation
+
+-description here-
+
+- [Benchmarks](benchmarks/README.md)
+- [JavaScript API](lib/README.md)
+- [Example](example/README.md)
+- [Paper](docs/paper/README.md)
+- [Architecture](docs/architecture.md)
+- [License](COPYING.md)
+
+## Cargo features
+
+-description here-
+
+- `bin`: -description here-
+- `instrumentation-profile`: -description here-
