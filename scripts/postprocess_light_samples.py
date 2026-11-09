@@ -65,6 +65,7 @@ def prepare_data(directory):
             raise ValueError(f"Valid-cell mask differs in {row['current_map']}")
         # Rank each run independently before accumulating population moments.
         values = quantile_scale(values)(values).filled(np.nan)
+        # Incremental updatest to the avg current map
         delta = values[mask] - mean[mask]
         mean[mask] += delta / count
         m2[mask] += delta * (values[mask] - mean[mask])
