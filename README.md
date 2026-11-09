@@ -1,3 +1,5 @@
+# wasm-connect
+
 This software provides an implementation of connectivity analysis suitable for use in Wasm/browser
 context, using a geometric multigrid conjugate gradient solver. This can enable certain kinds of 
 interactive connectivity modelling for biological systems, such as ecological mapping.
@@ -21,7 +23,7 @@ the prepared scenario rasters), run:
 make bench
 ```
 
-To build the optional profiling dependencies, see (or run) `scripts/profile-mem.sh`.
+To build the optional profiling dependencies, see (or run) `benchmarks/scripts/profile-mem.sh`.
 
 ## Serve the example frontend
 
@@ -29,39 +31,36 @@ To build the optional profiling dependencies, see (or run) `scripts/profile-mem.
 make serve
 ```
 
-This frontend contains utilities for benchmarking the code in the browser.
-To plot benchmarking results downloaded from the browser, run:
+## Rust
+
+To build the Rust crate directly with Cargo:
 
 ```sh
-python3 scripts/plot_benchmark.py benchmark.csv
+cargo build
+cargo test
+cargo doc --no-deps --open
 ```
 
-## Profiling
+## Tests
 
-Additional command-line utilities can be used to profile the main algorithm.
-The optional `instrumentation-profile` feature records analytical payload sizes
-for specific solver buffers for optimisation purposes. 
-Then use the plotter for visualisation.
-
-For example, to run without the `lowmem` flag, run:
-
+To run the tests:
 
 ```sh
-cargo run --profile release-prof --features bin,instrumentation-profile \
-  --bin instrumentation-profile -- 500 --solver mg --ground shunt > profile.json
-python3 scripts/plot_instrumentation_profile.py profile.json
+make test
 ```
 
-Then run with `--solver mg-lowmem` for the `lowmem` version:
+## Documentation
 
-```sh
-cargo run --profile release-prof --features bin,instrumentation-profile \
-  --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt > profile-lowmem.json
-python3 scripts/plot_instrumentation_profile.py profile-lowmem.json
-```
+- [Benchmarks](benchmarks/README.md)
+- [JavaScript API](lib/README.md)
+- [Example](example/README.md)
+- [Paper](docs/paper/README.md)
+- [Architecture](docs/architecture.md)
+- [License](COPYING.md)
 
-To visualise these results run:
+## Cargo features
 
-```
-python3 scripts/plot_instrumentation_profile.py profile-lowmem.json
-```
+The Rust crate here has a few feature flags. 
+
+- `bin`: compiles the project CLI executables. 
+- `instrumentation-profile`: compiles the instrumentation profiling script for development and benchmarking.

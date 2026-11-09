@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from '@wasm-connect/lib';
+import { rasterizeGeojsonAsync, runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from '@wasm-connect/lib';
 import { renderMap } from '../render';
 import RasterView from '../components/RasterView';
 import { StatusBar } from '../components/StatusBar';
@@ -57,17 +57,37 @@ export default function Example() {
       const nd = baseMeta.nodata ?? -9999;
       const scaledBase = baseData.map(v => v !== nd ? v * terrainRes : v);
       const layers = {
-        roads: { resistance: roadRes, width: roadWidth },
-        rivers: { resistance: riverRes, width: riverWidth },
-        buildings: { resistance: buildRes, width: 0 },
+        roads: { value: roadRes, buffer: roadWidth },
+        rivers: { value: riverRes, buffer: riverWidth },
+        buildings: { value: buildRes, buffer: 0 },
       };
       const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
+      const collection = JSON.parse(geojsonStr);
+      for (const [layer, { value, buffer }] of Object.entries(layers)) {
+        const features = {
+          type: 'FeatureCollection',
+          features: collection.features
+            .filter(feature => feature.properties.layer === layer)
+            .map(feature => ({
+              type: 'Feature',
+              geometry: feature.geometry,
+              properties: { value },
+            })),
+        };
+        const values = await rasterizeGeojsonAsync(features, {
+          nrows: baseMeta.nrows, ncols: baseMeta.ncols,
+          xmin: baseMeta.xllcorner, ymax, cellsize: baseMeta.cellsize, buffer,
+        });
+        for (let i = 0; i < scaledBase.length; i++) {
+          if (values[i] !== 0 && values[i] > scaledBase[i]) scaledBase[i] = values[i];
+        }
+      }
       const solve = (lowMem || precision === 'mixed') ? runGeospatialPipelineMgStencilAsync : runGeospatialPipelineMgAsync;
       const r = JSON.parse(await solve(
         scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
-        geojsonStr, JSON.stringify(layers), baseMeta.xllcorner, ymax, baseMeta.cellsize,
+        baseMeta.xllcorner, ymax, baseMeta.cellsize,
         srcData, gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols),
-        100_000, undefined, dirichlet, precision,
+        { maxIter: 100_000, useDirichletGround: dirichlet, precision },
       ));
       if (r.error) throw new Error(r.error);
       setResult(r);

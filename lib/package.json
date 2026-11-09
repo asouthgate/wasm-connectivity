@@ -5,10 +5,16 @@
   "files": [
     "wasm_connect_bg.wasm",
     "wasm_connect.js",
-    "wasm_connect.d.ts"
+    "wasm_connect.d.ts",
+    "index.js",
+    "wasm.js",
+    "worker.js",
+    "parseAsc.js",
+    "wasm_connect_bg.wasm.d.ts",
+    "index.d.ts"
   ],
   "main": "index.js",
-  "types": "wasm_connect.d.ts",
+  "types": "index.d.ts",
   "sideEffects": [
     "./snippets/*"
   ]

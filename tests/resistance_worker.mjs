@@ -41,7 +41,7 @@ globalThis.Worker = class {
   }
 };
 after(async () => { await Promise.all(instances.map(worker => worker.thread.terminate())); });
-const { runResistancePipelineBrowserAsync, runResistancePipelineBrowserWithLightmapAsync } =
+const { rasterizeGeojsonAsync, runResistancePipelineBrowserAsync, runResistancePipelineBrowserWithLightmapAsync } =
   await import('../lib/wasm.js');
 const params = {
   road_buffer: 200, road_resmax: 10, road_xmax: 5, river_buffer: 10, river_resmax: 2000, river_xmax: 4,
@@ -112,4 +112,85 @@ test('parameter errors reject the request and a later valid request still succee
   await assert.rejects(runResistancePipelineBrowserAsync(...inputs(), '{'),
     error => String(error).includes('Invalid params JSON'));
   check(await runResistancePipelineBrowserAsync(...inputs(), JSON.stringify(params)));
+});
+
+
+test('rasterizes per-feature values without layer configuration and transfers a typed raster', async () => {
+  const grid = { nrows: 8, ncols: 8, xmin: 0, ymax: 8, cellsize: 1 };
+  const features = {
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', properties: { value: 3 }, geometry: {
+        type: 'Polygon', coordinates: [[[1, 1], [5, 1], [5, 5], [1, 5], [1, 1]]],
+      } },
+      { type: 'Feature', properties: { value: 10 }, geometry: {
+        type: 'Polygon', coordinates: [[[3, 3], [7, 3], [7, 7], [3, 7], [3, 3]]],
+      } },
+    ],
+  };
+  const raster = await rasterizeGeojsonAsync(features, grid);
+  assert.ok(raster instanceof Float64Array);
+  assert.equal(raster.length, 64);
+  assert.equal(raster[0], 0);
+  assert.equal(raster[6 * 8 + 2], 3);
+  assert.equal(raster[4 * 8 + 4], 10);
+  assert.equal(features.features[0].properties.value, 3);
+  assert.equal(instances[0].lastReply.transferCount, 1);
+
+  const line = { type: 'FeatureCollection', features: [{
+    type: 'Feature', properties: { value: 2 },
+    geometry: { type: 'LineString', coordinates: [[1, 4], [7, 4]] },
+  }] };
+  const thin = await rasterizeGeojsonAsync(line, grid);
+  const buffered = await rasterizeGeojsonAsync(line, { ...grid, buffer: 2 });
+  assert.ok(buffered.filter(v => v === 2).length > thin.filter(v => v === 2).length);
+});
+
+test('rasterizer rejects missing values and invalid grids and remains usable', async () => {
+  const grid = { nrows: 8, ncols: 8, xmin: 0, ymax: 8, cellsize: 1 };
+  const invalid = { type: 'FeatureCollection', features: [{
+    type: 'Feature', properties: {}, geometry: {
+      type: 'Polygon', coordinates: [[[1, 1], [5, 1], [5, 5], [1, 5], [1, 1]]],
+    },
+  }] };
+  await assert.rejects(rasterizeGeojsonAsync(invalid, grid), /properties.value/);
+  await assert.rejects(rasterizeGeojsonAsync(invalid, { ...grid, cellsize: 0 }), /cellsize/);
+  await assert.rejects(rasterizeGeojsonAsync(invalid, { ...grid, buffer: -1 }), /buffer/);
+  const empty = await rasterizeGeojsonAsync({ type: 'FeatureCollection', features: [] }, grid);
+  assert.deepEqual(empty, new Float64Array(64));
+});
+
+
+test('solver-only public wrapper matches the current solve without geospatial inputs', async () => {
+  const { solveCurrentAsync, runGeospatialPipelineMgStencilAsync } = await import('../lib/index.js');
+  const nrows = 32;
+  const ncols = 32;
+  const resistance = new Float64Array(nrows * ncols).fill(1);
+  const source = new Float64Array(nrows * ncols);
+  const ground = new Float64Array(nrows * ncols);
+  source[0] = 1;
+  ground[ground.length - 1] = 1;
+  for (const precision of ['f64', 'f32', 'mixed']) {
+    for (const useDirichletGround of [false, true]) {
+      const options = { precision, useDirichletGround, maxIter: 100000 };
+      const result = await solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground, options);
+      assert.ok(!result.error, result.error);
+      assert.equal(result.output.nrows, nrows);
+      assert.equal(result.output.ncols, ncols);
+      assert.ok(result.output.current_map.every(Number.isFinite));
+      const geospatial = JSON.parse(await runGeospatialPipelineMgStencilAsync(
+        resistance, nrows, ncols, -9999, 0, nrows, 1, source, ground, options,
+      ));
+      assert.deepEqual(result.output.current_map, geospatial.current_map);
+      assert.deepEqual(result.output.voltages, geospatial.voltage_map);
+      assert.equal(result.total_iters, geospatial.total_iters);
+    }
+  }
+  const defaultResult = await solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground);
+  assert.ok(!defaultResult.error, defaultResult.error);
+  assert.equal(source[0], 1);
+  assert.equal(source[1], 0);
+  assert.equal(ground[ground.length - 1], 1);
+  await assert.rejects(solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground,
+    { precision: 'invalid' }), /precision/);
 });

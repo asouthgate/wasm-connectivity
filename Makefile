@@ -9,11 +9,15 @@ build:
 	@grep -q 'export function get_memory' lib/wasm_connect.js || cat lib/patch.js >> lib/wasm_connect.js
 
 bench:
-	node scripts/scenarios/prepare.mjs
+	node benchmarks/scenarios/prepare.mjs
 	cargo build --release --features bin --bin scenario-solve
 
 test:
 	cargo test
+	$(MAKE) build
+	node tests/resistance_worker.mjs
+	npm ci --prefix example
+	npm run build --prefix example
 
 serve: build
 	cd example && npm install && npm run dev

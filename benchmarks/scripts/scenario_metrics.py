@@ -9,7 +9,7 @@ import rasterio
 
 
 SCENARIOS = ("dsm", "linear_res", "point_lights")
-INPUTS = Path(__file__).resolve().parent / "scenarios"
+INPUTS = Path(__file__).resolve().parent.parent / "scenarios"
 
 
 def load(path):

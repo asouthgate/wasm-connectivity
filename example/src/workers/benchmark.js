@@ -62,15 +62,27 @@ function runBenchmark(solveFn, precision, [baseRaster, nrows, ncols, nodata, geo
   const ArrayType = precision !== 'f64' ? Float32Array : Float64Array;
   const rasterize = precision !== 'f64' ? rasterize_geojson_f32 : rasterize_geojson;
   const t0 = performance.now();
-  const resJson = rasterize(new ArrayType(baseRaster), nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize);
+  const prepared = new ArrayType(baseRaster);
+  const collection = JSON.parse(geojsonStr);
+  for (const [layer, params] of Object.entries(JSON.parse(layerParamsStr))) {
+    const features = {
+      type: 'FeatureCollection',
+      features: collection.features.filter(f => f.properties?.layer === layer).map(f => ({
+        ...f, properties: { ...f.properties, value: params.resistance },
+      })),
+    };
+    const values = rasterize(JSON.stringify(features), nrows, ncols, xmin, ymax, cellsize, params.width);
+    for (let i = 0; i < prepared.length; i++) {
+      if (values[i] !== 0 && values[i] > prepared[i]) prepared[i] = values[i];
+    }
+  }
   const t1 = performance.now();
   const prepMem = getWasmAllocatedMB();
-  const parsed = JSON.parse(resJson);
   // Keep the prepared raster in JS, but discard rasterization's WASM heap.
   // Connectivity measures a fresh instance, including input transfer and output export.
   freshInstance();
   const t2 = performance.now();
-  const out = solveFn(new ArrayType(parsed.resistance_map), parsed.nrows, parsed.ncols, nodata, new ArrayType(srcData), new ArrayType(gndData), !!useDirichletGround);
+  const out = solveFn(prepared, nrows, ncols, nodata, new ArrayType(srcData), new ArrayType(gndData), !!useDirichletGround);
   const t3 = performance.now();
   const connMem = getWasmAllocatedMB();
   const parsed_out = JSON.parse(out);

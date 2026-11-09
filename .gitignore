@@ -1,2 +1,6 @@
 target/
-/scripts/scenarios/*/*.asc
+/benchmarks/scenarios/*/*.asc
+
+/benchmarks/results/
+/benchmarks/scenarios/*/output/
+/benchmarks/scripts/__pycache__/

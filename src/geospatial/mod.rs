@@ -232,6 +232,53 @@ fn rasterize_lines<F: Real>(
     }
 }
 
+/// Rasterize each feature's numeric `properties.value` onto a zero-filled grid.
+/// Overlaps take the maximum value. `buffer` is the line buffer radius in grid units.
+pub fn rasterize_values<F: Real>(
+    geojson_str: &str, nrows: usize, ncols: usize,
+    transform: &GeoTransform, buffer: f64,
+) -> Result<Vec<F>, String> {
+    let size = nrows.checked_mul(ncols).filter(|&n| n > 0)
+        .ok_or("raster dimensions must be positive and fit in memory")?;
+    if !transform.xmin.is_finite() || !transform.ymax.is_finite()
+        || !transform.cellsize.is_finite() || transform.cellsize <= 0.0
+        || !buffer.is_finite() || buffer < 0.0 {
+        return Err("grid coordinates must be finite, cellsize positive, and buffer nonnegative".into());
+    }
+    let collection = match geojson_str.parse::<GeoJson>().map_err(|e| e.to_string())? {
+        GeoJson::FeatureCollection(collection) => collection,
+        _ => return Err("expected a GeoJSON FeatureCollection".into()),
+    };
+    let mut raster = vec![F::neg_infinity(); size];
+    let mut mask = vec![F::zero(); size];
+    for (index, feature) in collection.features.iter().enumerate() {
+        let value = feature.properties.as_ref().and_then(|p| p.get("value"))
+            .and_then(|v| v.as_f64()).filter(|v| v.is_finite())
+            .ok_or_else(|| format!("feature {index} requires a finite numeric properties.value"))?;
+        let value = scalar::<F>(value);
+        if !value.is_finite() { return Err(format!("feature {index} value exceeds raster precision")); }
+        let geometry = feature.geometry.as_ref().ok_or_else(|| format!("feature {index} has no geometry"))?;
+        let geometry = Geometry::<f64>::try_from(geometry)
+            .map_err(|e| format!("feature {index}: {e}"))?;
+        match geometry {
+            Geometry::Polygon(poly) => rasterize_polygon(&mut raster, &mut mask, nrows, ncols, &poly, value, transform),
+            Geometry::MultiPolygon(polys) => {
+                for poly in &polys { rasterize_polygon(&mut raster, &mut mask, nrows, ncols, poly, value, transform); }
+            }
+            Geometry::LineString(line) => rasterize_lines(&mut raster, &mut mask, nrows, ncols, &[&line], value, buffer, transform),
+            Geometry::MultiLineString(lines) => {
+                let lines: Vec<_> = lines.0.iter().collect();
+                rasterize_lines(&mut raster, &mut mask, nrows, ncols, &lines, value, buffer, transform);
+            }
+            _ => return Err(format!("feature {index}: expected polygon or line geometry")),
+        }
+    }
+    for (value, covered) in raster.iter_mut().zip(mask) {
+        if covered == F::zero() { *value = F::zero(); }
+    }
+    Ok(raster)
+}
+
 /// Rasterize vector features from GeoJSON into a resistance raster and layer masks.
 ///
 /// The behavior is max value logic: overlapping features take the max resistance.
@@ -514,6 +561,20 @@ mod tests {
             ymax: 10.0,
             cellsize: 1.0,
         }
+    }
+
+    #[test]
+    fn value_rasterization_preserves_negative_values_and_f32_output() {
+        let features = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"value":-3},"geometry":{
+                "type":"Polygon","coordinates":[[[1,1],[3,1],[3,3],[1,3],[1,1]]]}}
+        ]}"#;
+        let transform = GeoTransform { xmin: 0.0, ymax: 4.0, cellsize: 1.0 };
+        let raster = rasterize_values::<f32>(features, 4, 4, &transform, 0.0).unwrap();
+        assert_eq!(raster[0], 0.0);
+        assert_eq!(raster[5], -3.0);
+        assert!(raster.iter().all(|v| v.is_finite()));
+        assert!(rasterize_values::<f32>(features, 0, 4, &transform, 0.0).is_err());
     }
 
     #[test]
