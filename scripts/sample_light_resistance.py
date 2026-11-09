@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run scenario 3 with sampled light-resistance maxima using the native Rust solver."""
+"""Run paper scenario 3 with sampled light-resistance maxima using the native Rust solver."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
