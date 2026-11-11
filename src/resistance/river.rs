@@ -1,4 +1,5 @@
-use super::distance::euclidean_distance_transform;
+use super::distance::distance_generation;
+use super::operations::distance_from_feature_power;
 
 // Cal river resistance from a binary river raster,
 // a buffer distance, and resistance parameters
@@ -21,33 +22,11 @@ pub fn cal_river_resistance(
     xmax: f64,
     pixw: f64,
 ) -> Vec<f64> {
-    let has_rivers = river_binary.iter().any(|&v| v != 0.0 && v.is_finite());
+    let mut river_distance = distance_generation(river_binary, nrows, ncols, f64::INFINITY);
 
-    if !has_rivers {
-        // No river features: everywhere is far from a river, so river
-        // resistance is at its maximum. Missing (NaN) cells stay NaN.
-        return river_binary
-            .iter()
-            .map(|&v| if v.is_finite() { resmax } else { f64::NAN })
-            .collect();
-    }
-
-    let mut river_distance = euclidean_distance_transform(river_binary, nrows, ncols);
-
-    // `river_distance` is expressed in pixels; convert the buffer (metres)
-    // to pixels so the comparison is dimensionally consistent.
-    let buffer_cells = buffer / pixw;
-
-    for (i, value) in river_distance.iter_mut().enumerate() {
-        let d = *value;
-        *value = if !river_binary[i].is_finite() {
-            f64::NAN
-        } else if !d.is_finite() || d > buffer_cells {
-            resmax
-        } else {
-            (d / buffer_cells).powf(xmax) * resmax
-        };
-    }
+    distance_from_feature_power(
+        &mut river_distance, buffer / pixw, resmax, xmax, resmax, |d| d,
+    );
     river_distance
 }
 

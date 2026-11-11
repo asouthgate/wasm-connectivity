@@ -1,3 +1,5 @@
+use super::operations::power_response;
+
 // Compute the linear resistance for each pixel based on the distance rasters and ranking values
 //
 // Linear resistance is computed as a function of the distance from features,
@@ -50,7 +52,7 @@ pub(crate) fn update_linear_resistance(
 ) {
     // Distances are in pixels, while the buffer is in metres.
     let buffer_cells = buffer / pixw;
-    let rbuff = ((0.5 + 0.5 * (ranking / rankmax)).powf(xmax) * resmax) + 1.0;
+    let rbuff = power_response(0.5 + 0.5 * (ranking / rankmax), xmax, resmax) + 1.0;
     for i in 0..resistance.len() {
         if resistance[i].is_nan() {
             continue;
@@ -63,7 +65,7 @@ pub(crate) fn update_linear_resistance(
             // Preserve the R reference's extra +1 in the far field.
             rbuff + 1.0
         } else {
-            ((0.5 * (d / buffer_cells) + 0.5 * (ranking / rankmax)).powf(xmax) * resmax) + 1.0
+            power_response(0.5 * (d / buffer_cells) + 0.5 * (ranking / rankmax), xmax, resmax) + 1.0
         };
         if partial > resistance[i] {
             resistance[i] = partial;

@@ -1,3 +1,5 @@
+use super::operations::power_response;
+
 const LOG10: f64 = 2.302585092994046;
 
 #[derive(Debug, Clone, Copy)]
@@ -231,7 +233,7 @@ pub fn irradiance_to_resistance(
     }
     for v in io_raster.iter_mut().take(total) {
         if v.is_finite() && *v > 0.0 {
-            *v = (*v / maxpi).powf(xmax) * resmax;
+            *v = power_response(*v / maxpi, xmax, resmax);
         }
     }
 }

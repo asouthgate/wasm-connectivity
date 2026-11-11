@@ -1,3 +1,5 @@
+use super::operations::{power_response, ranker};
+
 // Reclassify the UKCEH Land Cover Map (LCM) into the expert-opinion rank
 // scale of Finch et al. (2020, Table 1). The rank (1..=8) is the ``Rank``
 // term in R = (Rank / Vmax)^x * Rmax, where rank 1 is the most permeable
@@ -16,15 +18,7 @@
 // # Returns
 // A 2D array of f64 values representing the paper rank for each pixel (NaN where invalid)
 pub fn compute_base_rank(lcm: &[f64]) -> Vec<f64> {
-    lcm.iter()
-        .map(|&v| {
-            if !v.is_finite() {
-                return f64::NAN;
-            }
-            let class = v.round() as i32;
-            ukceh_to_rank(class).unwrap_or(f64::NAN)
-        })
-        .collect()
+    ranker(lcm, |value| ukceh_to_rank(value.round() as i32).unwrap_or(f64::NAN))
 }
 
 // Map a single UKCEH LCM class (1..=21) to the paper's land-cover rank
@@ -62,7 +56,7 @@ fn ranked_resistance_in_place(conductance: &mut [f64], rankmax: f64, resmax: f64
         *value = if *value >= rankmax {
             resmax
         } else {
-            (*value / rankmax).powf(xmax) * resmax
+            power_response(*value / rankmax, xmax, resmax)
         };
     }
 }
@@ -122,10 +116,9 @@ pub fn get_landscape_resistance_from_conductance(
     resmax: f64,
     xmax: f64,
 ) -> Vec<f64> {
-    let mut conductance: Vec<f64> = base_conductance
-        .iter()
-        .map(|&c| if c.is_finite() && c >= 0.0 { c } else { f64::NAN })
-        .collect();
+    let mut conductance = ranker(base_conductance, |rank| {
+        if rank >= 0.0 { rank } else { f64::NAN }
+    });
     apply_building_max(&mut conductance, buildings, rankmax);
     ranked_resistance_in_place(&mut conductance, rankmax, resmax, xmax);
     conductance
