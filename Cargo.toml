@@ -30,22 +30,22 @@ developer = ["bin", "instrumentation-profile"]
 
 [[bin]]
 name = "lmc-resistance"
-path = "src/bin/resistance_pipeline.rs"
+path = "src/bin/lmc-resistance.rs"
 required-features = ["bin"]
 
 [[bin]]
 name = "lmc-current"
-path = "src/bin/scenario_solve.rs"
+path = "src/bin/lmc-current.rs"
 required-features = ["bin"]
 
 [[bin]]
 name = "lmc-profile"
-path = "src/bin/instrumentation_profile.rs"
+path = "src/bin/lmc-profile.rs"
 required-features = ["developer"]
 
 [[bin]]
 name = "lmc-roost"
-path = "src/bin/roost_locate/main.rs"
+path = "src/bin/lmc-roost.rs"
 required-features = ["bin"]
 
 [profile.release-prof]
