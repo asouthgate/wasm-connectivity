@@ -103,7 +103,7 @@ export interface ResistanceOutput {
 }
 
 export function runResistancePipelineBrowserAsync(
-  roadBinary: RasterInput, riverBinary: RasterInput, buildingMask: RasterInput,
+  roadBinary: RasterInput, riverBinary: RasterInput, buildingHeightsMask: RasterInput,
   dtm: RasterInput, dsm: RasterInput, genericResistance: RasterInput,
   lamps: RasterInput, landscapeConductance: RasterInput, paramsJson: string,
 ): Promise<ResistanceOutput>;

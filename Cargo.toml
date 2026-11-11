@@ -21,10 +21,11 @@ geo = "0.28"
 geojson = "0.24"
 csv = "1"
 tiff = { version = "0.9", optional = true }
+gdal = { version = "0.18", optional = true }
 image = { version = "0.24", default-features = false, features = ["png"], optional = true }
 
 [features]
-bin = ["tiff", "image"]
+bin = ["tiff", "image", "gdal"]
 instrumentation-profile = []
 developer = ["bin", "instrumentation-profile"]
 

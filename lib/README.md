@@ -58,8 +58,8 @@ const buildings = {
   }],
 };
 
-// Rasterise the buildings to get a buildings mask
-const buildingMask = await rasterizeGeojsonAsync(buildings, {
+// Rasterise building heights, with zero outside footprints.
+const buildingHeightsMask = await rasterizeGeojsonAsync(buildings, {
   nrows, ncols, xmin: 0, ymax: nrows, cellsize: 1,
 });
 
@@ -79,7 +79,7 @@ const params = {
 
 // Run the resistance pipeline
 const resistance = await runResistancePipelineBrowserAsync(
-  noRoads, noRivers, buildingMask, dtm, dsm,
+  noRoads, noRivers, buildingHeightsMask, dtm, dsm,
   new Float32Array(size).fill(1), // Generic resistance raster.
   new Float32Array(0), // No lamp data.
   new Float32Array(size).fill(4), // Landscape conductance raster.

@@ -72,7 +72,7 @@ fn ranked_resistance_in_place(conductance: &mut [f64], rankmax: f64, resmax: f64
 //
 // # Arguments
 // * conductance: a mutable 2D array of f64 values representing the rank for each pixel
-// * buildings: a 2D array of f64 values where non-zero values indicate the presence of a building
+// * buildings: a 2D array of f64 values containing heights, with zero outside building footprints
 // * rankmax: the maximum rank value (Vmax); buildings are set to this rank
 fn apply_building_max(conductance: &mut [f64], buildings: &[f64], rankmax: f64) {
     for i in 0..conductance.len() {
@@ -86,7 +86,7 @@ fn apply_building_max(conductance: &mut [f64], buildings: &[f64], rankmax: f64) 
 //
 // # Arguments
 // * lcm: a 2D array of f64 values representing the land cover map (UKCEH classes)
-// * buildings: a 2D array of f64 values where non-zero values indicate the presence of a building
+// * buildings: a 2D array of f64 values containing heights, with zero outside building footprints
 // * rankmax: the maximum rank value (Vmax)
 // * resmax: the maximum resistance value
 // * xmax: the exponent for the resistance calculation
@@ -109,7 +109,7 @@ pub fn get_landscape_resistance_lcm(
 //
 // # Arguments
 // * base_conductance: a 2D array of f64 values representing the land-cover rank for each pixel
-// * buildings: a 2D array of f64 values where non-zero values indicate the presence of a building
+// * buildings: a 2D array of f64 values containing heights, with zero outside building footprints
 // * rankmax: the maximum rank value (Vmax)
 // * resmax: the maximum resistance value
 // * xmax: the exponent for the resistance calculation

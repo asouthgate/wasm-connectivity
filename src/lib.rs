@@ -495,7 +495,7 @@ pub fn upsample_raster(
 }
 
 /// Rasterize GeoJSON `properties.value` fields. Returns row-major values;
-/// uncovered cells are zero and overlaps take the maximum feature value.
+/// uncovered cells use zero and overlaps take the maximum feature value.
 #[wasm_bindgen]
 pub fn rasterize_geojson(
     geojson_str: String, nrows: usize, ncols: usize,
@@ -514,11 +514,13 @@ pub fn rasterize_geojson_f32(
         &geospatial::GeoTransform { xmin, ymax, cellsize }, buffer)
 }
 
+/// Building heights are relative to DTM, with zero outside footprints.
+/// Positive supplied heights override DSM minus DTM.
 #[wasm_bindgen]
 pub fn run_resistance_pipeline_browser(
     road_binary: Vec<f64>,
     river_binary: Vec<f64>,
-    building_mask: Vec<f64>,
+    building_heights_mask: Vec<f64>,
     dtm: Vec<f64>,
     dsm: Vec<f64>,
     generic_resistance: Vec<f64>,
@@ -529,10 +531,10 @@ pub fn run_resistance_pipeline_browser(
     let params: resistance::pipeline::ResistanceParams = serde_json::from_str(&params_json)
         .map_err(|e| format!("Invalid params JSON: {}", e))?;
     let output = resistance::pipeline::run_resistance_pipeline_impl(
-        &road_binary, &river_binary, &building_mask, None, &dtm, &dsm,
+        &road_binary, &river_binary, &building_heights_mask, None, &dtm, &dsm,
         &generic_resistance, &lamps, &params, Some(&landscape_conductance), None, false,
     );
-    drop((road_binary, river_binary, building_mask, dtm, dsm,
+    drop((road_binary, river_binary, building_heights_mask, dtm, dsm,
         generic_resistance, lamps, landscape_conductance));
     Ok(resistance_output_to_binary(output))
 }
@@ -546,7 +548,7 @@ pub fn run_resistance_pipeline_browser(
 pub fn run_resistance_pipeline_browser_with_lightmap(
     road_binary: Vec<f64>,
     river_binary: Vec<f64>,
-    building_mask: Vec<f64>,
+    building_heights_mask: Vec<f64>,
     dtm: Vec<f64>,
     dsm: Vec<f64>,
     generic_resistance: Vec<f64>,
@@ -557,11 +559,11 @@ pub fn run_resistance_pipeline_browser_with_lightmap(
     let params: resistance::pipeline::ResistanceParams = serde_json::from_str(&params_json)
         .map_err(|e| format!("Invalid params JSON: {}", e))?;
     let output = resistance::pipeline::run_resistance_pipeline_impl(
-        &road_binary, &river_binary, &building_mask, None, &dtm, &dsm,
+        &road_binary, &river_binary, &building_heights_mask, None, &dtm, &dsm,
         &generic_resistance, &[], &params, Some(&landscape_conductance),
         Some(&lightmap), false,
     );
-    drop((road_binary, river_binary, building_mask, dtm, dsm,
+    drop((road_binary, river_binary, building_heights_mask, dtm, dsm,
         generic_resistance, lightmap, landscape_conductance));
     Ok(resistance_output_to_binary(output))
 }

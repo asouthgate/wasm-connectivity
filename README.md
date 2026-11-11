@@ -11,6 +11,21 @@ To build and use the command-line application:
 cargo build --release --features bin --bins
 ```
 
+To compute resistance using the bundled 500×500 sample:
+
+```sh
+./target/release/lmc-resistance \
+  --config example/resistance-config.json \
+  --dtm example/data/resistance/dtm.tif \
+  --dsm example/data/resistance/dsm.tif \
+  --lcm example/data/resistance/lcm.tif \
+  --buildings example/data/resistance/buildings.gpkg \
+  --roads example/data/resistance/roads.geojson \
+  --output-dir results/
+```
+
+See `lmc-resistance --help` for optional inputs and stages.
+
 To run the `lmc-current` solver on an example resistance map in low-memory mixed-precision mode:
 
 ```sh
@@ -27,6 +42,7 @@ See `lmc-current --help` for command-line flags.
 ## Prerequisites
 
 - CLI and library: [Rust](https://rustup.rs)
+- CLI GIS input/output: GDAL development libraries and `pkg-config` (e.g. `sudo apt install libgdal-dev pkg-config` on Debian/Ubuntu).
 - Wasm integration: [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
 - Browser example: [Node.js](https://nodejs.org)
 
