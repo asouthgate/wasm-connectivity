@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { downsampleRaster, upsampleRaster } from '@wasm-connect/lib';
+import { downsampleRaster, upsampleRaster } from 'lmConnect';
 import { StatusBar } from '../components/StatusBar';
 import { downloadCSV } from '../stats';
 import { loadExampleData } from '../data';

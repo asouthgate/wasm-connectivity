@@ -1,4 +1,6 @@
-//! Raster-based ecological connectivity analysis for native Rust and WebAssembly.
+//! lmConnect: Low-memory Biological Connectivity Analysis.
+//!
+//! Raster-based connectivity analysis for native Rust and WebAssembly.
 //!
 //! Current and voltage maps are computed from resistance, source, and ground
 //! rasters using preconditioned conjugate gradients. Solver variants include
@@ -24,7 +26,7 @@
 //! Use the module APIs for Rust inputs and structured results. For example:
 //!
 //! ```
-//! use wasm_connect::solve::{solve_raster_sources_mg_stencil, GroundMode};
+//! use lm_connect::solve::{solve_raster_sources_mg_stencil, GroundMode};
 //!
 //! let (nrows, ncols) = (32, 32);
 //! let resistance = vec![1.0_f64; nrows * ncols];

@@ -631,7 +631,7 @@ to attach them to the start of each source file to most effectively
 state the exclusion of warranty; and each file should have at least
 the "copyright" line and a pointer to where the full notice is found.
 
-    wasm-connectivity a library for connectivity analysis in frontends
+    lmConnect a library for connectivity analysis in frontends
     Copyright (C) 2026 Alex Southgate
 
     This program is free software: you can redistribute it and/or modify

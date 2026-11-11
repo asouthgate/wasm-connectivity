@@ -1,16 +1,19 @@
-.PHONY: build bench test serve clean
+.PHONY: build cli bench test serve clean
 
 build:
-	wasm-pack build --target web
-	cp pkg/wasm_connect.js lib/
-	cp pkg/wasm_connect_bg.wasm lib/
-	cp pkg/wasm_connect.d.ts lib/
-	cp pkg/wasm_connect_bg.wasm.d.ts lib/
-	@grep -q 'export function get_memory' lib/wasm_connect.js || cat lib/patch.js >> lib/wasm_connect.js
+	wasm-pack build --target web --out-name lmConnect
+	cp pkg/lmConnect.js lib/
+	cp pkg/lmConnect_bg.wasm lib/
+	cp pkg/lmConnect.d.ts lib/
+	cp pkg/lmConnect_bg.wasm.d.ts lib/
+	@grep -q 'export function get_memory' lib/lmConnect.js || cat lib/patch.js >> lib/lmConnect.js
+
+cli:
+	cargo build --release --features bin --bins
 
 bench:
 	node benchmarks/scenarios/prepare.mjs
-	cargo build --release --features bin --bin scenario-solve
+	cargo build --release --features bin --bin lmc-current
 
 test:
 	cargo test
@@ -23,4 +26,4 @@ serve: build
 	cd example && npm install && npm run dev
 
 clean:
-	rm -rf pkg lib/wasm_connect.js lib/wasm_connect_bg.wasm lib/wasm_connect.d.ts lib/wasm_connect_bg.wasm.d.ts
+	rm -rf pkg lib/lmConnect.js lib/lmConnect_bg.wasm lib/lmConnect.d.ts lib/lmConnect_bg.wasm.d.ts

@@ -2,7 +2,7 @@ export type RasterInput = Float32Array | Float64Array | number[];
 export type Precision = "f32" | "f64" | "mixed";
 
 export function load(): Promise<void>;
-export { downsample_raster as downsampleRaster, upsample_raster as upsampleRaster } from "./wasm_connect.js";
+export { downsample_raster as downsampleRaster, upsample_raster as upsampleRaster } from "./lmConnect.js";
 
 export interface CurrentSolverOptions {
   maxIter?: number;

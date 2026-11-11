@@ -1,16 +1,16 @@
 {
-  "name": "wasm-connect",
+  "name": "lmConnect",
   "type": "module",
   "version": "0.1.1",
   "files": [
-    "wasm_connect_bg.wasm",
-    "wasm_connect.js",
-    "wasm_connect.d.ts",
+    "lmConnect_bg.wasm",
+    "lmConnect.js",
+    "lmConnect.d.ts",
     "index.js",
     "wasm.js",
     "worker.js",
     "parseAsc.js",
-    "wasm_connect_bg.wasm.d.ts",
+    "lmConnect_bg.wasm.d.ts",
     "index.d.ts"
   ],
   "main": "index.js",

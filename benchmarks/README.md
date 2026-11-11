@@ -50,21 +50,13 @@ python3 benchmarks/scripts/plot_benchmark.py benchmark.csv
 ```
 
 
-## Memory profiling
-
-To run the `prof-solve` executable with Valgrind, run: 
-
-```sh
-bash benchmarks/scripts/profile-mem.sh
-```
-
 ## Instrumentation
 
 Some instrumentation code has been developed. To make use of this for memory profiling, run:
 
 ```sh
 mkdir -p benchmarks/results
-cargo run --profile release-prof --features bin,instrumentation-profile --bin instrumentation-profile -- 500 --solver mg --ground shunt > benchmarks/results/profile.json
+cargo run --profile release-prof --features bin,instrumentation-profile --bin lmc-profile -- 500 --solver mg --ground shunt > benchmarks/results/profile.json
 python3 benchmarks/scripts/plot_instrumentation_profile.py benchmarks/results/profile.json
 ```
 
@@ -72,7 +64,7 @@ Then run with `--solver mg-lowmem` for the `lowmem` version:
 
 ```sh
 cargo run --profile release-prof --features bin,instrumentation-profile \
-  --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt > profile-lowmem.json
+  --bin lmc-profile -- 500 --solver mg-lowmem --ground shunt > profile-lowmem.json
 python3 benchmarks/scripts/plot_instrumentation_profile.py profile-lowmem.json
 ```
 

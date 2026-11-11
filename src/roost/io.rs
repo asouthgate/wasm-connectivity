@@ -3,7 +3,7 @@
 //!
 //! This is the single source of truth for parsing the roost-finder input CSVs.
 //! It is part of the library (not the `bin` feature) so that both the WASM
-//! build and the `roost-locate` CLI share the exact same parsing + aggregation
+//! build and the `lmc-roost` CLI share the exact same parsing + aggregation
 //! logic.
 //!
 //! # CSV contract

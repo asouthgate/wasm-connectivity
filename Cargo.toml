@@ -1,12 +1,13 @@
 [package]
-name = "wasm-connect"
+name = "lmConnect"
 version = "0.1.1"
 edition = "2021"
-description = "Low-mem ecological connectivity analysis for Rust and WebAssembly"
+description = "Low-memory Biological Connectivity Analysis"
 license-file = "COPYING.md"
 include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/COPYING.md"]
 
 [lib]
+name = "lm_connect"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -27,27 +28,22 @@ bin = ["tiff", "image"]
 instrumentation-profile = []
 
 [[bin]]
-name = "resistance-pipeline"
+name = "lmc-resistance"
 path = "src/bin/resistance_pipeline.rs"
 required-features = ["bin"]
 
 [[bin]]
-name = "prof-solve"
-path = "src/bin/prof_solve.rs"
-required-features = ["bin"]
-
-[[bin]]
-name = "scenario-solve"
+name = "lmc-current"
 path = "src/bin/scenario_solve.rs"
 required-features = ["bin"]
 
 [[bin]]
-name = "instrumentation-profile"
+name = "lmc-profile"
 path = "src/bin/instrumentation_profile.rs"
 required-features = ["bin", "instrumentation-profile"]
 
 [[bin]]
-name = "roost-locate"
+name = "lmc-roost"
 path = "src/bin/roost_locate/main.rs"
 required-features = ["bin"]
 

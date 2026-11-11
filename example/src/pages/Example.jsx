@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { rasterizeGeojsonAsync, runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from '@wasm-connect/lib';
+import { rasterizeGeojsonAsync, runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from 'lmConnect';
 import { renderMap } from '../render';
 import RasterView from '../components/RasterView';
 import { StatusBar } from '../components/StatusBar';

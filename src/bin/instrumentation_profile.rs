@@ -2,18 +2,18 @@
 //!
 //! Usage:
 //!   cargo run --profile release-prof --features bin,instrumentation-profile \
-//!       --bin instrumentation-profile -- 500 --solver mg-lowmem --ground shunt
+//!       --bin lmc-profile -- 500 --solver mg-lowmem --ground shunt
 //! Diagnostics go to stderr.
 
-use wasm_connect::linalg::real::Real;
+use lm_connect::linalg::real::Real;
 use std::fs;
 
 use serde::Serialize;
 
-use wasm_connect::linalg::multigrid::MgOptions;
-use wasm_connect::raster::io::{parse_asc_typed, AscGrid};
-use wasm_connect::memory::{take_profile, InstrumentationProfile};
-use wasm_connect::solve::{self, GroundMode};
+use lm_connect::linalg::multigrid::MgOptions;
+use lm_connect::raster::io::{parse_asc_typed, AscGrid};
+use lm_connect::memory::{take_profile, InstrumentationProfile};
+use lm_connect::solve::{self, GroundMode};
 
 const DATA_DIR: &str = "example/public/geodata";
 
@@ -43,7 +43,7 @@ fn emit<F: Real>(resolution: usize, solver: &str, ground: &str, total_iters: usi
     println!("{}", serde_json::to_string_pretty(&rec).unwrap());
 }
 
-const USAGE: &str = "Usage: instrumentation-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground shunt|dirichlet [--precision f32|f64]";
+const USAGE: &str = "Usage: lmc-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground shunt|dirichlet [--precision f32|f64]";
 
 struct Args {
     resolution: usize,
@@ -54,7 +54,7 @@ struct Args {
 
 fn upsample_grid<F: Real>(grid: &mut AscGrid<F>, resolution: usize) {
     let width = grid.ncols as f64 * grid.cellsize;
-    grid.data = wasm_connect::raster::upsample_raster(
+    grid.data = lm_connect::raster::upsample_raster(
         &grid.data, grid.nrows, grid.ncols, resolution, resolution,
     );
     grid.cellsize = width / resolution as f64;
@@ -154,7 +154,7 @@ fn run<F: Real>(resolution: usize, solver: String, ground: String) {
 
     let layer_params_str = r#"{"roads":{"resistance":5,"width":3},"rivers":{"resistance":0.5,"width":4},"buildings":{"resistance":500,"width":0}}"#;
 
-    let (resistance, _, warnings) = wasm_connect::geospatial::prepare_geospatial_layers(
+    let (resistance, _, warnings) = lm_connect::geospatial::prepare_geospatial_layers(
         &base.data,
         base.nrows,
         base.ncols,
@@ -237,6 +237,6 @@ mod tests {
         assert_eq!(grid.ncols as f64 * grid.cellsize, 2.0);
         assert_eq!(grid.yllcorner + grid.nrows as f64 * grid.cellsize, grid.ymax);
         assert_eq!((grid.xllcorner, grid.yllcorner), (286100.0, 78550.0));
-        assert_eq!(grid.data, wasm_connect::raster::upsample_raster(&[1.0, -9999.0, 0.0, 4.0], 2, 2, 4, 4));
+        assert_eq!(grid.data, lm_connect::raster::upsample_raster(&[1.0, -9999.0, 0.0, 4.0], 2, 2, 4, 4));
     }
 }

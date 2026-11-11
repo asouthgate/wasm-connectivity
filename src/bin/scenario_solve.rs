@@ -1,11 +1,11 @@
-use wasm_connect::linalg::real::{Real, scalar};
+use lm_connect::linalg::real::{Real, scalar};
 use std::{collections::HashMap, env, fs, path::Path};
 
-use wasm_connect::raster::io::{parse_asc_typed, write_asc};
-use wasm_connect::solve::{solve_raster_sources_mg_stencil_with_options, solve_raster_sources_mg_with_options, GroundMode};
-use wasm_connect::linalg::multigrid::MgOptions;
+use lm_connect::raster::io::{parse_asc_typed, write_asc};
+use lm_connect::solve::{solve_raster_sources_mg_stencil_with_options, solve_raster_sources_mg_with_options, GroundMode};
+use lm_connect::linalg::multigrid::MgOptions;
 
-const USAGE: &str = "Usage: scenario-solve --resistance FILE --source FILE --ground FILE
+const USAGE: &str = "Usage: lmc-current --resistance FILE --source FILE --ground FILE
     [--precision f32|f64|mixed] [--tol FLOAT] [--max-iter INTEGER] [--l0nu INTEGER] [--l1nu INTEGER] [--coarsenu INTEGER] [--l0omega FLOAT] [--coarseomega FLOAT] [--l0postnu INTEGER] [--explicit] [--output FILE] [--verbose] [--profile]
 
 Solve ASC rasters using low-memory CGMG with shunt grounding.
@@ -258,7 +258,7 @@ fn run_mixed(options: &HashMap<String, String>, output: &Path, max_iter: usize,
         "no grounds"
     );
 
-    let mut result = wasm_connect::solve::mixed::solve_raster_sources_mg_mixed_with_options(
+    let mut result = lm_connect::solve::mixed::solve_raster_sources_mg_mixed_with_options(
         &resistance.data, resistance.nrows, resistance.ncols, resistance.nodata,
         &mut source.data, &ground.data, max_iter, tol, false, GroundMode::Shunt, mg_options,
     );

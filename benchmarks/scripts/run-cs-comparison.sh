@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 export LC_ALL=C
-cargo build --release --features bin --bin scenario-solve
+cargo build --release --features bin --bin lmc-current
 
 config_dir=$(mktemp -d)
 trap 'rm -rf "$config_dir"' EXIT
@@ -42,7 +42,7 @@ for scenario in point_lights dsm linear_res; do
       fi
       echo "$scenario: run $run/5, Rust low-memory MG $precision"
       printf '\nscenario=%s run=%s\nprecision=%s tol=%s\n' "$scenario" "$run" "$precision" "$tol" >> "$trace"
-      /usr/bin/time -v target/release/scenario-solve \
+      /usr/bin/time -v target/release/lmc-current \
         --resistance "benchmarks/scenarios/$scenario/resistance.asc" \
         --source "benchmarks/scenarios/$scenario/source.asc" \
         --ground "benchmarks/scenarios/$scenario/ground.asc" \

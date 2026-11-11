@@ -1,4 +1,4 @@
-import { parseAsc } from '@wasm-connect/lib';
+import { parseAsc } from 'lmConnect';
 
 const GEO_BASE = '/geodata';
 

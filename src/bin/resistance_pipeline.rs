@@ -4,9 +4,9 @@ use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::encoder::{colortype, TiffEncoder};
-use wasm_connect::geospatial::{rasterize_values, GeoTransform};
-use wasm_connect::resistance::pipeline::{run_resistance_pipeline, ResistanceParams};
-use wasm_connect::resistance::landscape::{compute_base_rank, get_landscape_resistance_lcm};
+use lm_connect::geospatial::{rasterize_values, GeoTransform};
+use lm_connect::resistance::pipeline::{run_resistance_pipeline, ResistanceParams};
+use lm_connect::resistance::landscape::{compute_base_rank, get_landscape_resistance_lcm};
 
 fn read_tiff_f32(path: &Path) -> io::Result<(Vec<f64>, usize, usize)> {
     let file = fs::File::open(path)?;
@@ -329,7 +329,7 @@ fn write_asc_files(
 fn run() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: resistance-pipeline <work_dir> [--stage landscape|full]");
+        eprintln!("Usage: lmc-resistance <work_dir> [--stage landscape|full]");
         std::process::exit(1);
     }
 

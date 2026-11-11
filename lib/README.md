@@ -1,7 +1,7 @@
 # JavaScript API
 
 This directory contains code for the JavaScript API for the
-scientific `wasm-connectivity` code.
+scientific `lmConnect` code.
 
 ## Build
 
@@ -19,7 +19,7 @@ it in `package.json` as:
 ```json
 {
   "dependencies": {
-    "@wasm-connect/lib": "file:../lib"
+    "lmConnect": "file:../lib"
   }
 }
 ```
@@ -37,7 +37,7 @@ import {
   rasterizeGeojsonAsync,
   runResistancePipelineBrowserAsync,
   solveCurrentAsync,
-} from '@wasm-connect/lib';
+} from 'lmConnect';
 
 const nrows = 32;
 const ncols = 32;
