@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn asc_export_preserves_small_currents_and_f64_precision() {
         let path = std::env::temp_dir().join(format!(
-            "wasm-connect-asc-{}-{}.asc",
+            "lmConnect-asc-{}-{}.asc",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),

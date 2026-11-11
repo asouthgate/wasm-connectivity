@@ -9,9 +9,9 @@ import {
   solve_raster_sources_mg_stencil_f32,
   rasterize_geojson_f32,
   rasterize_geojson,
-} from '@wasm-connect/lib/wasm_connect.js';
-import wasmUrl from '@wasm-connect/lib/wasm_connect_bg.wasm?url';
-import { parseAsc } from '@wasm-connect/lib';
+} from 'lmConnect/lmConnect.js';
+import wasmUrl from 'lmConnect/lmConnect_bg.wasm?url';
+import { parseAsc } from 'lmConnect';
 import { SCENARIOS, scenarioMasks, scenarioResistance } from '../scenarios';
 
 let compiledModule = null;

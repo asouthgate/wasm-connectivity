@@ -1,17 +1,17 @@
 //! Command-line entry point for bat roost location estimation.
 
-use wasm_connect::roost::io::{aggregate_with_warnings, count_calls, read_detectors, read_sunset};
-use wasm_connect::roost::compute_error_surface;
+use lm_connect::roost::io::{aggregate_with_warnings, count_calls, read_detectors, read_sunset};
+use lm_connect::roost::compute_error_surface;
 
 fn read_to_string(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
 const USAGE: &str = "\
-roost-locate: estimate a bat roost location from call data
+lmc-roost: estimate a bat roost location from call data
 
 USAGE:
-    roost-locate --detectors <detectors.csv> --master <master.csv> [OPTIONS]
+    lmc-roost --detectors <detectors.csv> --master <master.csv> [OPTIONS]
 
 OPTIONS:
     --detectors <path>       Path to *_detectors.csv (required)

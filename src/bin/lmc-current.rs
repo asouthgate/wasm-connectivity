@@ -1,12 +1,12 @@
-use wasm_connect::linalg::real::{Real, scalar};
+use lm_connect::linalg::real::{Real, scalar};
 use std::{collections::HashMap, env, fs, path::Path};
 
-use wasm_connect::raster::io::{parse_asc_typed, write_asc};
-use wasm_connect::solve::{solve_raster_sources_mg_stencil_with_options, solve_raster_sources_mg_with_options, GroundMode};
-use wasm_connect::linalg::multigrid::MgOptions;
+use lm_connect::raster::io::{parse_asc_typed, write_asc};
+use lm_connect::solve::{solve_raster_sources_mg_stencil_with_options, solve_raster_sources_mg_with_options, GroundMode};
+use lm_connect::linalg::multigrid::MgOptions;
 
-const USAGE: &str = "Usage: scenario-solve --resistance FILE --source FILE --ground FILE
-    [--precision f32|f64|mixed] [--tol FLOAT] [--max-iter INTEGER] [--l0nu INTEGER] [--l1nu INTEGER] [--coarsenu INTEGER] [--l0omega FLOAT] [--coarseomega FLOAT] [--l0postnu INTEGER] [--explicit] [--output FILE] [--verbose] [--profile]
+const USAGE: &str = "Usage: lmc-current --resistance FILE --source FILE --ground FILE
+    [--precision f32|f64|mixed] [--tol FLOAT] [--max-iter INTEGER] [--l0nu INTEGER] [--l1nu INTEGER] [--coarsenu INTEGER] [--l0omega FLOAT] [--coarseomega FLOAT] [--l0postnu INTEGER] [--explicit] [--output FILE] [-v|--verbose]
 
 Solve ASC rasters using low-memory CGMG with shunt grounding.
 --precision mixed uses f32 hierarchy/work vectors with f64 master voltages and reliable residual updates.
@@ -18,8 +18,7 @@ Default damping: --l0omega 0.95 --coarseomega 0.4.
 --l0nu sets L0 pre/post sweeps (default 2).
 --l1nu sets L1 pre/post sweeps (default 5).
 --coarsenu sets pre/post sweeps on L2 and deeper nonterminal levels (default 25).
---verbose prints aggregate solve timings by level.
---profile traces equation residuals at each CG iteration and V-cycle step.
+-v, --verbose prints the completion message.
 Defaults: --tol 1e-4 (f64), 1e-3 (f32/mixed); --max-iter 100000 --l0nu 2 --l1nu 5 --coarsenu 25 --l0omega 0.95 --coarseomega 0.4 --l0postnu 40 --output rust_current.asc";
 
 fn argument_error(message: &str) -> ! {
@@ -32,20 +31,14 @@ fn main() {
     let mut options = HashMap::new();
     let mut verbose = false;
     let mut explicit = false;
-    let mut profile = false;
     while let Some(flag) = args.next() {
         if flag == "--help" || flag == "-h" {
             println!("{USAGE}");
             return;
         }
-        if flag == "--verbose" {
+        if flag == "--verbose" || flag == "-v" {
             if verbose { argument_error("duplicate argument: --verbose"); }
             verbose = true;
-            continue;
-        }
-        if flag == "--profile" {
-            if profile { argument_error("duplicate argument: --profile"); }
-            profile = true;
             continue;
         }
         if flag == "--explicit" {
@@ -103,18 +96,18 @@ fn main() {
     let l0postnu = options.get("--l0postnu").map(|value| value.parse::<usize>()
         .unwrap_or_else(|_| argument_error("--l0postnu must be a nonnegative integer")))
         .unwrap_or(defaults.l0postnu);
-    let mg_options = MgOptions { verbose, profile, l0nu, l1nu, coarsenu, l0omega, coarseomega, l0postnu, ..defaults };
+    let mg_options = MgOptions { l0nu, l1nu, coarsenu, l0omega, coarseomega, l0postnu, ..defaults };
     if precision == "mixed" && explicit { argument_error("mixed precision uses the low-memory solver; remove --explicit"); }
     match precision {
-        "mixed" => run_mixed(&options, output, max_iter, tol, mg_options),
-        "f32" => run::<f32>(&options, output, max_iter, tol, explicit, mg_options),
-        "f64" => run::<f64>(&options, output, max_iter, tol, explicit, mg_options),
+        "mixed" => run_mixed(&options, output, max_iter, tol, mg_options, verbose),
+        "f32" => run::<f32>(&options, output, max_iter, tol, explicit, mg_options, verbose),
+        "f64" => run::<f64>(&options, output, max_iter, tol, explicit, mg_options, verbose),
         _ => argument_error("--precision must be f32, f64 or mixed"),
     }
 }
 
 fn run<F: Real>(options: &HashMap<String, String>, output: &Path, max_iter: usize,
-    tol: f64, explicit: bool, mg_options: MgOptions) {
+    tol: f64, explicit: bool, mg_options: MgOptions, verbose: bool) {
     let tol = scalar::<F>(tol);
     if !tol.is_finite() || tol <= F::zero() { argument_error("--tol must be representable and positive in the selected precision"); }
     let resistance = parse_asc_typed::<F, _>(&options["--resistance"]);
@@ -208,11 +201,13 @@ fn run<F: Real>(options: &HashMap<String, String>, output: &Path, max_iter: usiz
         resistance.cellsize,
         resistance.nodata,
     );
-    eprintln!("{}: {} iterations", output.display(), result.total_iters);
+    if verbose {
+        eprintln!("Computed {} in {} iterations.", output.display(), result.total_iters);
+    }
 }
 
 fn run_mixed(options: &HashMap<String, String>, output: &Path, max_iter: usize,
-    tol: f64, mg_options: MgOptions) {
+    tol: f64, mg_options: MgOptions, verbose: bool) {
     let resistance = parse_asc_typed::<f32, _>(&options["--resistance"]);
     let mut source = parse_asc_typed::<f32, _>(&options["--source"]);
     let ground = parse_asc_typed::<f32, _>(&options["--ground"]);
@@ -258,7 +253,7 @@ fn run_mixed(options: &HashMap<String, String>, output: &Path, max_iter: usize,
         "no grounds"
     );
 
-    let mut result = wasm_connect::solve::mixed::solve_raster_sources_mg_mixed_with_options(
+    let mut result = lm_connect::solve::mixed::solve_raster_sources_mg_mixed_with_options(
         &resistance.data, resistance.nrows, resistance.ncols, resistance.nodata,
         &mut source.data, &ground.data, max_iter, tol, false, GroundMode::Shunt, mg_options,
     );
@@ -287,5 +282,7 @@ fn run_mixed(options: &HashMap<String, String>, output: &Path, max_iter: usize,
         resistance.cellsize,
         resistance.nodata as f64,
     );
-    eprintln!("{}: {} iterations", output.display(), result.total_iters);
+    if verbose {
+        eprintln!("Computed {} in {} iterations.", output.display(), result.total_iters);
+    }
 }

@@ -46,7 +46,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--layers", type=Path, default=ROOT / "2000x2000-lit")
     parser.add_argument("--scenario", type=Path, default=ROOT / "benchmarks/scenarios/point_lights")
-    parser.add_argument("--solver", type=Path, default=ROOT / "target/release/scenario-solve")
+    parser.add_argument("--solver", type=Path, default=ROOT / "target/release/lmc-current")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--samples", type=int, default=100)
     parser.add_argument("--workers", type=int, default=16)
@@ -60,7 +60,7 @@ def main():
             and 0 < args.minimum <= args.maximum):
         parser.error("require finite 0 < minimum <= maximum")
     if not args.solver.is_file():
-        parser.error("solver missing; build with cargo build --release --features bin --bin scenario-solve")
+        parser.error("solver missing; build with cargo build --release --features bin --bin lmc-current")
 
     light, grid = load(args.layers / "lamp_res.tif")
     finite_light = light[np.isfinite(light)]

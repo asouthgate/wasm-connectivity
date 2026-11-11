@@ -1,12 +1,13 @@
 [package]
-name = "wasm-connect"
+name = "lmConnect"
 version = "0.1.1"
 edition = "2021"
-description = "Low-mem ecological connectivity analysis for Rust and WebAssembly"
+description = "Low-memory Biological Connectivity Analysis"
 license-file = "COPYING.md"
 include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/COPYING.md"]
 
 [lib]
+name = "lm_connect"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -20,35 +21,32 @@ geo = "0.28"
 geojson = "0.24"
 csv = "1"
 tiff = { version = "0.9", optional = true }
+gdal = { version = "0.18", optional = true }
 image = { version = "0.24", default-features = false, features = ["png"], optional = true }
 
 [features]
-bin = ["tiff", "image"]
+bin = ["tiff", "image", "gdal"]
 instrumentation-profile = []
+developer = ["bin", "instrumentation-profile"]
 
 [[bin]]
-name = "resistance-pipeline"
-path = "src/bin/resistance_pipeline.rs"
+name = "lmc-resistance"
+path = "src/bin/lmc-resistance.rs"
 required-features = ["bin"]
 
 [[bin]]
-name = "prof-solve"
-path = "src/bin/prof_solve.rs"
+name = "lmc-current"
+path = "src/bin/lmc-current.rs"
 required-features = ["bin"]
 
 [[bin]]
-name = "scenario-solve"
-path = "src/bin/scenario_solve.rs"
-required-features = ["bin"]
+name = "lmc-profile"
+path = "src/bin/lmc-profile.rs"
+required-features = ["developer"]
 
 [[bin]]
-name = "instrumentation-profile"
-path = "src/bin/instrumentation_profile.rs"
-required-features = ["bin", "instrumentation-profile"]
-
-[[bin]]
-name = "roost-locate"
-path = "src/bin/roost_locate/main.rs"
+name = "lmc-roost"
+path = "src/bin/lmc-roost.rs"
 required-features = ["bin"]
 
 [profile.release-prof]

@@ -232,7 +232,7 @@ fn rasterize_lines<F: Real>(
     }
 }
 
-/// Rasterize each feature's numeric `properties.value` onto a zero-filled grid.
+/// Rasterize each feature's numeric `properties.value` onto a grid filled with zero outside features.
 /// Overlaps take the maximum value. `buffer` is the line buffer radius in grid units.
 pub fn rasterize_values<F: Real>(
     geojson_str: &str, nrows: usize, ncols: usize,

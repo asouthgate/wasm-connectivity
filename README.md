@@ -1,44 +1,78 @@
-# wasm-connect
+# lmConnect: Low-memory Biological Connectivity Analysis
 
-This software provides an implementation of connectivity analysis suitable for use in Wasm/browser
-context, using a geometric multigrid conjugate gradient solver. This can enable certain kinds of 
-interactive connectivity modelling for biological systems, such as ecological mapping.
+This software provides an implementation of connectivity analysis suitable for use in a memory-constrained environment (such as a Wasm/browser or high-throughput applications), using a geometric multigrid conjugate gradient solver. This can enable certain kinds of 
+interactive connectivity modelling for biological systems, such as ecological mapping. It can also be used to enable greater parallelism, such as in sampling algorithms.
+
+## Quick-Start
+
+To build and use the command-line application:
+
+```sh
+cargo build --release --features bin --bins
+```
+
+To compute resistance using the bundled 500×500 sample:
+
+```sh
+./target/release/lmc-resistance \
+  --config example/resistance-config.json \
+  --dtm example/data/resistance/dtm.tif \
+  --dsm example/data/resistance/dsm.tif \
+  --lcm example/data/resistance/lcm.tif \
+  --buildings example/data/resistance/buildings.gpkg \
+  --roads example/data/resistance/roads.geojson \
+  --output-dir results/
+```
+
+See `lmc-resistance --help` for optional inputs and stages.
+
+To run the `lmc-current` solver on an example resistance map in low-memory mixed-precision mode:
+
+```sh
+./target/release/lmc-current \
+  --resistance example/public/geodata/base_resistance_500.asc \
+  --source example/public/geodata/source_500.asc \
+  --ground example/public/geodata/ground_500.asc \
+  --precision mixed \
+  --output current.asc
+```
+
+See `lmc-current --help` for command-line flags. 
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs)
-- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
-- [Node.js](https://nodejs.org)
+- CLI and library: [Rust](https://rustup.rs)
+- CLI GIS input/output: GDAL development libraries and `pkg-config` (e.g. `sudo apt install libgdal-dev pkg-config` on Debian/Ubuntu).
+- Wasm integration: [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
+- Browser example: [Node.js](https://nodejs.org)
 
-## Build the project
+## Build
+
+This repository contains both a Rust library, CLI utilities, examples, and benchmarking and evaluation codes.
+
+To build the entire project with `make`: 
 
 ```
 make build
 ```
 
-To also build the scenario/benchmark extras (the `scenario-solve` binary and
+To build the CLI utiliies:
+
+```
+make cli
+```
+
+To also build the scenario/benchmark extras (the `lmc-current` binary and
 the prepared scenario rasters), run:
 
 ```
 make bench
 ```
 
-To build the optional profiling dependencies, see (or run) `benchmarks/scripts/profile-mem.sh`.
-
-## Serve the example frontend
+## Example frontend
 
 ```
 make serve
-```
-
-## Rust
-
-To build the Rust crate directly with Cargo:
-
-```sh
-cargo build
-cargo test
-cargo doc --no-deps --open
 ```
 
 ## Tests
@@ -62,5 +96,6 @@ make test
 
 The Rust crate here has a few feature flags. 
 
-- `bin`: compiles the project CLI executables. 
-- `instrumentation-profile`: compiles the instrumentation profiling script for development and benchmarking.
+- `bin`: compiles the main CLI executables. 
+- `developer`: enables the `lmc-profile` executable.
+- `instrumentation-profile`: enables solver memory instrumentation in the library.

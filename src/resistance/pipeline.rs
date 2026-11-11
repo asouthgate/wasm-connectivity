@@ -93,7 +93,7 @@ pub fn combine_resistance(
 // # Arguments
 // * road_binary: a 2D array of f64 values where non-zero values indicate the presence of a road
 // * river_binary: a 2D array of f64 values where non-zero values indicate the presence of a river
-// * building_mask: a 2D array of f64 values where non-zero values indicate the presence of a building
+// * building_heights_mask: a 2D array of f64 values containing heights, with zero outside building footprints
 // * lcm: the land cover map; optional when landscape conductance is supplied
 // * dtm: a 2D array of f64 values representing the digital terrain model
 // * dsm: a 2D array of f64 values representing the digital surface model
@@ -110,7 +110,7 @@ pub fn combine_resistance(
 pub fn run_resistance_pipeline(
     road_binary: &[f64],
     river_binary: &[f64],
-    building_mask: &[f64],
+    building_heights_mask: &[f64],
     lcm: Option<&[f64]>,
     dtm: &[f64],
     dsm: &[f64],
@@ -121,7 +121,7 @@ pub fn run_resistance_pipeline(
     lightmap: Option<&[f64]>,
 ) -> ResistanceOutput {
     run_resistance_pipeline_impl(
-        road_binary, river_binary, building_mask, lcm, dtm, dsm, generic_resistance,
+        road_binary, river_binary, building_heights_mask, lcm, dtm, dsm, generic_resistance,
         lamps, params, landscape_conductance_override, lightmap, true,
     )
 }
@@ -129,7 +129,7 @@ pub fn run_resistance_pipeline(
 pub(crate) fn run_resistance_pipeline_impl(
     road_binary: &[f64],
     river_binary: &[f64],
-    building_mask: &[f64],
+    building_heights_mask: &[f64],
     lcm: Option<&[f64]>,
     dtm: &[f64],
     dsm: &[f64],
@@ -164,13 +164,13 @@ pub(crate) fn run_resistance_pipeline_impl(
         params.pixw,
     );
 
-    let surfs = calc_surfs(dtm, dsm, building_mask, m, n);
+    let surfs = calc_surfs(dtm, dsm, building_heights_mask, m, n);
     drop(surfs.surf);
 
     let mut landscape_res = if let Some(conductance) = landscape_conductance_override {
         get_landscape_resistance_from_conductance(
             conductance,
-            building_mask,
+            building_heights_mask,
             params.landscape_rankmax,
             params.landscape_resmax,
             params.landscape_xmax,
@@ -178,7 +178,7 @@ pub(crate) fn run_resistance_pipeline_impl(
     } else {
         get_landscape_resistance_lcm(
             lcm.expect("LCM is required without a landscape conductance override"),
-            building_mask,
+            building_heights_mask,
             params.landscape_rankmax,
             params.landscape_resmax,
             params.landscape_xmax,
@@ -239,7 +239,7 @@ pub(crate) fn run_resistance_pipeline_impl(
         .collect();
 
     for i in 0..total {
-        let terrain_missing = !dsm[i].is_finite() || !dtm[i].is_finite();
+        let terrain_missing = !dtm[i].is_finite() || (!dsm[i].is_finite() && !(building_heights_mask[i].is_finite() && building_heights_mask[i] > 0.0));
         if terrain_missing || lcm.is_some_and(|data| !data[i].is_finite()) {
             landscape_res[i] = f64::NAN;
         }
@@ -262,7 +262,7 @@ pub(crate) fn run_resistance_pipeline_impl(
 
     let mut final_total = total_res;
     for i in 0..total {
-        if !dsm[i].is_finite() || !dtm[i].is_finite() {
+        if !dtm[i].is_finite() || (!dsm[i].is_finite() && !(building_heights_mask[i].is_finite() && building_heights_mask[i] > 0.0)) {
             final_total[i] = f64::NAN;
         }
     }
@@ -314,6 +314,30 @@ mod tests {
     }
 
     #[test]
+    fn proposed_building_replaces_missing_dsm_but_requires_valid_dtm() {
+        let params = make_params();
+        let zeros = vec![0.0; 25];
+        let mut buildings = vec![0.0; 25];
+        let mut dtm = vec![10.0; 25];
+        let mut dsm = vec![20.0; 25];
+        let lcm = vec![4.0; 25];
+        buildings[0] = 1.0;
+        dsm[0] = f64::NAN;
+        buildings[1] = 0.0;
+        buildings[2] = 5.0;
+        dtm[2] = f64::NAN;
+        let output = run_resistance_pipeline(&zeros, &zeros, &buildings, Some(&lcm),
+            &dtm, &dsm, &zeros, &[], &params, None, None);
+        assert_eq!(output.hard_surf[0], 1.0);
+        assert_eq!(output.soft_surf[0], 0.0);
+        assert!(output.total_res[0].is_finite());
+        assert_eq!(output.landscape_res[1], output.landscape_res[3]);
+        assert!(output.total_res[2].is_nan());
+        assert_eq!(output.soft_surf[3], 10.0);
+        assert_eq!(output.hard_surf[3], 0.0);
+    }
+
+    #[test]
     fn test_empty_pipeline() {
         let total = 25;
         let zeros = vec![0.0f64; total];
@@ -323,7 +347,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
+            &zeros, &zeros, &vec![0.0; zeros.len()], Some(&lcm), &dtm, &dsm, &zeros, &[],
             &params, None, None,
         );
 
@@ -342,7 +366,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &lamps,
+            &zeros, &zeros, &vec![0.0; zeros.len()], Some(&lcm), &dtm, &dsm, &zeros, &lamps,
             &params, None, None,
         );
 
@@ -362,7 +386,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
+            &zeros, &zeros, &vec![0.0; zeros.len()], Some(&lcm), &dtm, &dsm, &zeros, &[],
             &params, None, Some(&lightmap),
         );
 
@@ -405,7 +429,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
+            &zeros, &zeros, &vec![0.0; zeros.len()], Some(&lcm), &dtm, &dsm, &zeros, &[],
             &params, None, None,
         );
 
@@ -429,7 +453,7 @@ mod tests {
         let params = make_params();
 
         let output = run_resistance_pipeline(
-            &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &generic, &[],
+            &zeros, &zeros, &vec![0.0; zeros.len()], Some(&lcm), &dtm, &dsm, &generic, &[],
             &params, None, None,
         );
 
@@ -443,7 +467,7 @@ mod tests {
         let zeros = vec![0.0; 25];
         let mut dtm = vec![10.0; 25];
         let mut dsm: Vec<f64> = (0..25).map(|i| 10.0 + [0.0, 2.0, 4.0, 7.0][i % 4]).collect();
-        let mut buildings = zeros.clone();
+        let mut buildings = vec![0.0; 25];
         let mut ranks = vec![4.0; 25];
         ranks[0] = f64::NAN;
         ranks[1] = f64::NAN;
@@ -474,7 +498,7 @@ mod tests {
         let dtm = vec![10.0; 25];
         let dsm = vec![12.0; 25];
         let mut lcm = vec![4.0; 25];
-        let mut buildings = zeros.clone();
+        let mut buildings = vec![0.0; 25];
         let ranks = vec![4.0; 25];
         lcm[7] = f64::NAN;
         buildings[7] = 3.0;
@@ -507,7 +531,7 @@ mod tests {
             let dsm = vec![10.0 + height; 25];
             for retain_masks in [true, false] {
                 let output = run_resistance_pipeline_impl(
-                    &zeros, &zeros, &zeros, Some(&lcm), &dtm, &dsm, &zeros, &[],
+                    &zeros, &zeros, &vec![0.0; zeros.len()], Some(&lcm), &dtm, &dsm, &zeros, &[],
                     &params, None, None, retain_masks,
                 );
                 assert!(output.linear_res.iter().all(|&r|

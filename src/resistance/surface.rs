@@ -6,6 +6,8 @@ pub struct SurfaceOutput {
     pub hard_surf: Vec<f64>,
 }
 
+/// Building heights are relative to DTM, with zero outside footprints.
+/// Supplied heights override DSM minus DTM, even when the DSM cell is missing.
 pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, ncols: usize) -> SurfaceOutput {
     let total = nrows * ncols;
     let mut surf = vec![0.0f64; total];
@@ -13,30 +15,21 @@ pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, nco
     let mut hard_surf = vec![0.0f64; total];
 
     for i in 0..total {
-        if !dtm[i].is_finite() || !dsm[i].is_finite() {
+        if !dtm[i].is_finite() {
             surf[i] = f64::NAN;
             soft_surf[i] = f64::NAN;
             hard_surf[i] = f64::NAN;
-            continue;
-        }
-        let sv = dsm[i] - dtm[i];
-        surf[i] = sv;
-        soft_surf[i] = sv;
-    }
-
-    for i in 0..total {
-        if !surf[i].is_finite() {
-            continue;
-        }
-        if buildings[i].is_finite() && buildings[i] > 0.0 {
+        } else if buildings[i].is_finite() && buildings[i] > 0.0 {
+            surf[i] = buildings[i];
+            hard_surf[i] = buildings[i];
             soft_surf[i] = 0.0;
-            hard_surf[i] = if buildings[i] > 1.0 {
-                // Drawn building with explicit height in metres
-                buildings[i]
-            } else {
-                // Server building mask (value 1.0): height comes from DSM-DTM
-                surf[i]
-            };
+        } else if dsm[i].is_finite() {
+            surf[i] = dsm[i] - dtm[i];
+            soft_surf[i] = surf[i];
+        } else {
+            surf[i] = f64::NAN;
+            soft_surf[i] = f64::NAN;
+            hard_surf[i] = f64::NAN;
         }
     }
 
@@ -96,6 +89,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn positive_heights_override_background_and_zero_means_no_building() {
+        let dtm = [10.0, 10.0, 10.0, 10.0, f64::NAN];
+        let dsm = [20.0, 20.0, 20.0, f64::NAN, 20.0];
+        let buildings = [1.0, 0.0, 0.0, 3.0, 5.0];
+        let result = calc_surfs(&dtm, &dsm, &buildings, 1, 5);
+        assert_eq!(&result.surf[..4], &[1.0, 10.0, 10.0, 3.0]);
+        assert_eq!(&result.hard_surf[..4], &[1.0, 0.0, 0.0, 3.0]);
+        assert_eq!(&result.soft_surf[..4], &[0.0, 10.0, 10.0, 0.0]);
+        assert!(result.surf[4].is_nan());
+        assert!(result.hard_surf[4].is_nan());
+    }
+
+    #[test]
     fn test_surface_height() {
         let dtm = vec![10.0; 36];
         let dsm = vec![15.0; 36];
@@ -112,7 +118,7 @@ mod tests {
         let ncols = 2;
         let dtm = vec![10.0; 4];
         let dsm = vec![20.0; 4];
-        let buildings = vec![1.0, 1.0, 0.0, 0.0];
+        let buildings = vec![10.0, 10.0, 0.0, 0.0];
         let result = calc_surfs(&dtm, &dsm, &buildings, nrows, ncols);
         assert!(result.hard_surf[0] > 0.0);
         assert!(result.soft_surf[0] < 0.001);

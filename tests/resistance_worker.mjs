@@ -51,7 +51,7 @@ const params = {
 };
 function inputs(Type = Float32Array, genericValue = 5) {
   const zero = new Type(4);
-  return [zero, zero, zero, new Type(4).fill(10), new Type(4).fill(12),
+  return [zero, zero, new Type(4), new Type(4).fill(10), new Type(4).fill(12),
     new Type(4).fill(genericValue), new Type(0), new Type(4).fill(4)];
 }
 function check(result, genericValue = 5) {
@@ -193,4 +193,25 @@ test('solver-only public wrapper matches the current solve without geospatial in
   assert.equal(ground[ground.length - 1], 1);
   await assert.rejects(solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground,
     { precision: 'invalid' }), /precision/);
+});
+
+
+test('building height rasters use zero outside and a one-metre candidate overrides missing DSM', async () => {
+  const grid = { nrows: 2, ncols: 2, xmin: 0, ymax: 2, cellsize: 1 };
+  const buildings = await rasterizeGeojsonAsync({ type: 'FeatureCollection', features: [{
+    type: 'Feature', properties: { value: 1 }, geometry: {
+      type: 'Polygon', coordinates: [[[0,1],[1,1],[1,2],[0,2],[0,1]]],
+    },
+  }] }, grid);
+  assert.equal(buildings[0], 1);
+  assert.equal(buildings[1], 0);
+  const data = inputs();
+  data[2] = buildings;
+  data[4][0] = NaN;
+  const result = await runResistancePipelineBrowserAsync(...data, JSON.stringify(params));
+  assert.equal(result.hard_surf[0], 1);
+  assert.equal(result.soft_surf[0], 0);
+  assert.ok(Number.isFinite(result.total_res[0]));
+  assert.equal(result.hard_surf[1], 0);
+  assert.equal(result.soft_surf[1], 2);
 });
