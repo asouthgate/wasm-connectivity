@@ -238,6 +238,19 @@ pub fn rasterize_values<F: Real>(
     geojson_str: &str, nrows: usize, ncols: usize,
     transform: &GeoTransform, buffer: f64,
 ) -> Result<Vec<F>, String> {
+    rasterize_values_with_background(geojson_str, nrows, ncols, transform, buffer, 0.0)
+}
+
+/// Rasterize numeric feature values with an explicit value outside all features.
+/// Overlaps take the maximum feature value, independently of the background.
+pub fn rasterize_values_with_background<F: Real>(
+    geojson_str: &str, nrows: usize, ncols: usize,
+    transform: &GeoTransform, buffer: f64, background: f64,
+) -> Result<Vec<F>, String> {
+    let background = scalar::<F>(background);
+    if !background.is_finite() {
+        return Err("background must be finite and fit raster precision".into());
+    }
     let size = nrows.checked_mul(ncols).filter(|&n| n > 0)
         .ok_or("raster dimensions must be positive and fit in memory")?;
     if !transform.xmin.is_finite() || !transform.ymax.is_finite()
@@ -274,7 +287,7 @@ pub fn rasterize_values<F: Real>(
         }
     }
     for (value, covered) in raster.iter_mut().zip(mask) {
-        if covered == F::zero() { *value = F::zero(); }
+        if covered == F::zero() { *value = background; }
     }
     Ok(raster)
 }

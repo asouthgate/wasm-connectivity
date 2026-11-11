@@ -5,9 +5,10 @@ use gdal::{
     Dataset, DriverManager,
 };
 use lm_connect::{
-    geospatial::{rasterize_values, GeoTransform},
+    geospatial::{rasterize_values, rasterize_values_with_background, GeoTransform},
     resistance::{
         landscape::{compute_base_rank, get_landscape_resistance_lcm},
+        model::{Field as ModelField, Grid as ModelGrid, Input as ModelInput, Model},
         pipeline::{run_resistance_pipeline, ResistanceParams},
     },
 };
@@ -21,7 +22,9 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const USAGE: &str = "Usage: lmc-resistance --config model.json --dtm terrain.tif --dsm surface.tif --lcm landcover.tif --output-dir results/
+const USAGE: &str = "Usage: lmc-resistance --model model.json --output-dir results/ [-v|--verbose]
+
+Legacy usage: lmc-resistance --config model.json --dtm terrain.tif --dsm surface.tif --lcm landcover.tif --output-dir results/
     [--buildings buildings.json|buildings.gpkg] [--roads roads.json|roads.gpkg]
     [--rivers rivers.json|rivers.gpkg] [--generic-resistance zones.json|zones.gpkg]
     [--lamps lamps.json|lamps.gpkg] [--stage full|landscape] [-v|--verbose]
@@ -29,7 +32,8 @@ const USAGE: &str = "Usage: lmc-resistance --config model.json --dtm terrain.tif
 Input rasters must be single-band, north-up, square-pixel grids aligned in the same projected CRS with metre units.
 Vector features use numeric value fields: building height, road/river presence, generic resistance, or lamp height.
 GeoJSON coordinates must already use the raster CRS. GeoPackages must contain one vector layer in that CRS.
-The JSON config contains model coefficients only. Grid metadata comes from the rasters.
+The --model JSON defines inline inputs and named operation layers; paths are relative to the model file.
+The legacy --config JSON contains model coefficients only. Grid metadata comes from the rasters.
 Outputs are georeferenced GeoTIFF layers and resistance.asc; no current sources or grounds are generated.";
 
 const MODEL_FIELDS: &[&str] = &[
@@ -75,7 +79,8 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
         }
         if !matches!(
             flag.as_str(),
-            "--config"
+            "--model"
+                | "--config"
                 | "--dtm"
                 | "--dsm"
                 | "--lcm"
@@ -104,6 +109,23 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
             return Err(invalid(format!("duplicate argument: {flag}")).into());
         }
         i += 2;
+    }
+    if paths.contains_key("--model") {
+        if stage.is_some()
+            || paths
+                .keys()
+                .any(|name| name != "--model" && name != "--output-dir")
+        {
+            return Err(invalid("--model accepts inline inputs; do not combine it with legacy input/config/stage flags").into());
+        }
+        if !paths.contains_key("--output-dir") {
+            return Err(invalid("--output-dir is required").into());
+        }
+        return Ok(Args {
+            paths,
+            landscape_only: false,
+            verbose,
+        });
     }
     for name in ["--config", "--dtm", "--dsm", "--lcm", "--output-dir"] {
         if !paths.contains_key(name) {
@@ -214,11 +236,23 @@ fn require_aligned(reference: &Grid, raster: &Raster, path: &Path) -> Result<()>
 }
 
 fn read_features(path: &Path, grid: &Grid) -> Result<Value> {
+    read_features_with_field(path, grid, "value", true)
+}
+
+fn read_features_with_field(
+    path: &Path,
+    grid: &Grid,
+    value_field: &str,
+    nonnegative: bool,
+) -> Result<Value> {
+    if value_field.is_empty() {
+        return Err(invalid("vector value field must not be empty").into());
+    }
     let extension = path
         .extension()
         .and_then(|s| s.to_str())
         .map(str::to_ascii_lowercase);
-    let collection = match extension.as_deref() {
+    let mut collection = match extension.as_deref() {
         Some("json" | "geojson") => {
             let collection: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
             if let Some(crs) = collection.get("crs") {
@@ -248,23 +282,30 @@ fn read_features(path: &Path, grid: &Grid) -> Result<Value> {
             if crs != grid.crs {
                 return Err(invalid("GeoPackage CRS differs from raster CRS").into());
             }
-            let has_value = layer.defn().fields().any(|field| field.name() == "value");
+            let has_value = layer
+                .defn()
+                .fields()
+                .any(|field| field.name() == value_field);
             if !has_value {
-                return Err(invalid("GeoPackage features require a numeric value field").into());
+                return Err(invalid(
+                    "GeoPackage features require the selected numeric value field",
+                )
+                .into());
             }
             let mut features = Vec::new();
             for feature in layer.features() {
-                let value = match feature.field(feature.field_index("value")?)? {
+                let value = match feature.field(feature.field_index(value_field)?)? {
                     Some(FieldValue::IntegerValue(v)) => v as f64,
                     Some(FieldValue::Integer64Value(v)) => v as f64,
                     Some(FieldValue::RealValue(v)) => v,
                     _ => {
-                        return Err(
-                            invalid("GeoPackage features require a numeric value field").into()
+                        return Err(invalid(
+                            "GeoPackage features require the selected numeric value field",
                         )
+                        .into())
                     }
                 };
-                let properties = json!({"value": value});
+                let properties = json!({(value_field): value});
                 let geometry = feature
                     .geometry()
                     .ok_or_else(|| invalid("feature has no geometry"))?;
@@ -278,20 +319,22 @@ fn read_features(path: &Path, grid: &Grid) -> Result<Value> {
         return Err(invalid("expected a GeoJSON FeatureCollection").into());
     }
     let features = collection
-        .get("features")
-        .and_then(Value::as_array)
+        .get_mut("features")
+        .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid("expected GeoJSON features array"))?;
-    for (i, feature) in features.iter().enumerate() {
+    for (i, feature) in features.iter_mut().enumerate() {
         let value = feature
-            .pointer("/properties/value")
+            .get("properties")
+            .and_then(|p| p.get(value_field))
             .and_then(Value::as_f64)
-            .filter(|v| v.is_finite() && *v >= 0.0);
-        if value.is_none() {
-            return Err(invalid(format!(
-                "feature {i} requires a finite nonnegative properties.value"
-            ))
-            .into());
-        }
+            .filter(|v| v.is_finite() && (!nonnegative || *v >= 0.0))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "feature {i} requires a finite {}properties.{value_field}",
+                    if nonnegative { "nonnegative " } else { "" }
+                ))
+            })?;
+        feature["properties"]["value"] = json!(value);
     }
     Ok(collection)
 }
@@ -337,6 +380,10 @@ fn read_lamps(path: Option<&PathBuf>, grid: &Grid) -> Result<Vec<f64>> {
         return Ok(Vec::new());
     };
     let collection = read_features(path, grid)?;
+    lamps_from_collection(&collection, grid)
+}
+
+fn lamps_from_collection(collection: &Value, grid: &Grid) -> Result<Vec<f64>> {
     let mut lamps = Vec::new();
     for feature in collection["features"]
         .as_array()
@@ -444,6 +491,9 @@ fn write_asc(path: &Path, grid: &Grid, values: &[f64]) -> Result<()> {
 }
 
 fn execute(args: Args) -> Result<()> {
+    if args.paths.contains_key("--model") {
+        return execute_model(&args);
+    }
     let log = |message: &str| {
         if args.verbose {
             eprintln!("{message}");
@@ -571,6 +621,98 @@ fn execute(args: Args) -> Result<()> {
         }))?,
     )?;
     log("Resistance pipeline complete");
+    Ok(())
+}
+
+fn execute_model(args: &Args) -> Result<()> {
+    let model_path = &args.paths["--model"];
+    let model: Model = serde_json::from_str(&fs::read_to_string(model_path)?)
+        .map_err(|e| invalid(format!("{}: {e}", model_path.display())))?;
+    let directory = model_path
+        .parent()
+        .ok_or_else(|| invalid("model path has no parent"))?;
+    let Some(ModelInput::Raster { path }) = model.inputs.get(&model.grid) else {
+        return Err(invalid("model grid must name a raster input").into());
+    };
+    let reference = read_raster(&directory.join(path))?;
+    let grid = &reference.grid;
+    let mut fields = HashMap::new();
+    for (name, input) in &model.inputs {
+        if args.verbose {
+            eprintln!("Reading input {name}");
+        }
+        let field = match input {
+            ModelInput::Raster { path } => {
+                if name == &model.grid {
+                    ModelField::raster(reference.data.clone())
+                } else {
+                    let path = directory.join(path);
+                    let raster = read_raster(&path)?;
+                    require_aligned(grid, &raster, &path)?;
+                    ModelField::raster(raster.data)
+                }
+            }
+            ModelInput::Vector {
+                path,
+                value_field,
+                background,
+            } => {
+                if !background.is_finite() {
+                    return Err(invalid(format!("input {name}: background must be finite")).into());
+                }
+                let collection =
+                    read_features_with_field(&directory.join(path), grid, value_field, false)?;
+                ModelField::raster(
+                    rasterize_values_with_background(
+                        &collection.to_string(),
+                        grid.nrows,
+                        grid.ncols,
+                        &GeoTransform {
+                            xmin: grid.affine[0],
+                            ymax: grid.affine[3],
+                            cellsize: grid.affine[1],
+                        },
+                        0.0,
+                        *background,
+                    )
+                    .map_err(invalid)?,
+                )
+            }
+            ModelInput::Points { path, height_field } => {
+                let collection =
+                    read_features_with_field(&directory.join(path), grid, height_field, true)?;
+                ModelField::Points(std::sync::Arc::new(lamps_from_collection(
+                    &collection,
+                    grid,
+                )?))
+            }
+        };
+        fields.insert(name.clone(), field);
+    }
+    if args.verbose {
+        eprintln!("Evaluating model {}", model.name);
+    }
+    let output = model
+        .run(
+            fields,
+            ModelGrid {
+                nrows: grid.nrows,
+                ncols: grid.ncols,
+                pixel_width: grid.affine[1],
+            },
+        )
+        .map_err(invalid)?;
+    // All validation and calculations complete before creating any output files.
+    let output_dir = &args.paths["--output-dir"];
+    fs::create_dir_all(output_dir)?;
+    write_tiff(&output_dir.join("total_res.tif"), grid, &output)?;
+    write_asc(&output_dir.join("resistance.asc"), grid, &output)?;
+    fs::write(
+        output_dir.join("grid_info.json"),
+        serde_json::to_string_pretty(&json!({
+            "xmin":grid.affine[0], "ymax":grid.affine[3], "pixw":grid.affine[1], "nrows":grid.nrows, "ncols":grid.ncols
+        }))?,
+    )?;
     Ok(())
 }
 
@@ -864,4 +1006,206 @@ mod tests {
         ])
         .is_ok());
     }
+
+    fn model_args(path: &Path, output: &Path) -> Args {
+        parse_args(&[
+            "--model".into(),
+            path.to_str().unwrap().into(),
+            "--output-dir".into(),
+            output.to_str().unwrap().into(),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn generic_cli_requires_only_the_model_grid_and_declared_inputs() {
+        let dir = TestDir::new();
+        let mut values = vec![2.0; 64];
+        values[0] = 1.0;
+        values[1] = f64::NAN;
+        write_tiff(&dir.0.join("habitat.tif"), &grid(), &values).unwrap();
+        let model = json!({
+            "name":"another_species", "grid":"habitat", "missing_data":"propagate",
+            "inputs":{"habitat":{"type":"raster","path":"habitat.tif"}},
+            "layers": {
+                "a_total":{"op":"sum","inputs":["z_habitat"]},
+                "z_habitat":{"input":"habitat","operations":[
+                    {"op":"discrete_map","intervals":{"[1,1]":3,"[2,2]":7},"unmatched":"error"}
+                ]}
+            },
+            "output":"a_total"
+        });
+        let path = dir.0.join("model.json");
+        fs::write(&path, model.to_string()).unwrap();
+        let output = dir.0.join("results");
+        execute(model_args(&path, &output)).unwrap();
+        let raster = read_raster(&output.join("total_res.tif")).unwrap();
+        require_aligned(&grid(), &raster, Path::new("output")).unwrap();
+        assert_eq!(raster.data[0], 3.0);
+        assert!(raster.data[1].is_nan());
+        assert_eq!(raster.data[2], 7.0);
+        assert!(output.join("resistance.asc").exists());
+        assert!(output.join("grid_info.json").exists());
+    }
+
+    #[test]
+    fn horseshoe_model_cli_matches_legacy_with_custom_vector_fields() {
+        let dir = TestDir::new();
+        let mut args = setup(&dir.0);
+        let line = json!({"type":"FeatureCollection","features":[{
+            "type":"Feature","properties":{"value":1,"presence":1},
+            "geometry":{"type":"LineString","coordinates":[[1,1],[7,7]]}
+        }]});
+        let lamps = json!({"type":"FeatureCollection","features":[{
+            "type":"Feature","properties":{"value":8,"height":8},
+            "geometry":{"type":"Point","coordinates":[1,7]}
+        }]});
+        for (name, data) in [
+            ("roads", line.clone()),
+            ("rivers", line),
+            ("lamps", lamps),
+            ("zones", collection()),
+        ] {
+            let path = dir.0.join(format!("{name}.json"));
+            fs::write(&path, data.to_string()).unwrap();
+            args.paths.insert(
+                if name == "zones" {
+                    "--generic-resistance".into()
+                } else {
+                    format!("--{name}")
+                },
+                path,
+            );
+        }
+        execute(args).unwrap();
+        let mut model: Value =
+            serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap();
+        for (name, path) in [
+            ("dtm", "dtm.tif"),
+            ("dsm", "dsm.tif"),
+            ("landcover", "lcm.tif"),
+            ("buildings", "buildings.json"),
+            ("roads", "roads.json"),
+            ("rivers", "rivers.json"),
+            ("lamps", "lamps.json"),
+            ("generic", "zones.json"),
+        ] {
+            model["inputs"][name]["path"] = json!(path);
+        }
+        model["inputs"]["roads"]["value_field"] = json!("presence");
+        model["inputs"]["rivers"]["value_field"] = json!("presence");
+        model["inputs"]["lamps"]["height_field"] = json!("height");
+        let path = dir.0.join("generic-model.json");
+        fs::write(&path, model.to_string()).unwrap();
+        let output = dir.0.join("model-results");
+        execute(model_args(&path, &output)).unwrap();
+        let old = read_raster(&dir.0.join("results/total_res.tif")).unwrap();
+        let new = read_raster(&output.join("total_res.tif")).unwrap();
+        assert_eq!(old.data, new.data);
+        let old_asc = fs::read_to_string(dir.0.join("results/resistance.asc")).unwrap();
+        let new_asc = fs::read_to_string(output.join("resistance.asc")).unwrap();
+        assert_eq!(
+            old_asc.lines().take(6).collect::<Vec<_>>(),
+            new_asc.lines().take(6).collect::<Vec<_>>()
+        );
+        let values = |text: &str| {
+            text.lines()
+                .skip(6)
+                .flat_map(str::split_whitespace)
+                .map(|value| value.parse::<f64>().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let (old_values, new_values) = (values(&old_asc), values(&new_asc));
+        assert_eq!(old_values.len(), new_values.len());
+        for (&old, &new) in old_values.iter().zip(&new_values) {
+            assert!((old - new).abs() <= 1e-12 * old.abs().max(1.0));
+        }
+    }
+
+    #[test]
+    fn generic_vectors_use_explicit_background_and_selected_fields() {
+        let dir = TestDir::new();
+        write_tiff(&dir.0.join("grid.tif"), &grid(), &vec![0.0; 64]).unwrap();
+        let mut features = collection();
+        features["features"][0]["properties"] = json!({"cost":-2});
+        fs::write(dir.0.join("zones.json"), features.to_string()).unwrap();
+        let mut model = json!({
+            "name":"direct", "grid":"grid", "missing_data":"propagate",
+            "inputs":{
+                "grid":{"type":"raster","path":"grid.tif"},
+                "zones":{"type":"vector","path":"zones.json","value_field":"cost","background":5}
+            },
+            "layers":{}, "output":"zones"
+        });
+        let path = dir.0.join("model.json");
+        fs::write(&path, model.to_string()).unwrap();
+        let output = dir.0.join("results");
+        execute(model_args(&path, &output)).unwrap();
+        let raster = read_raster(&output.join("total_res.tif")).unwrap();
+        assert_eq!(raster.data[0], 5.0);
+        assert_eq!(raster.data[3 * 8 + 3], -2.0);
+        // Also exercise field selection through the GeoPackage reader.
+        gpkg(&dir.0.join("zones.gpkg"), &grid());
+        model["inputs"]["zones"]["path"] = json!("zones.gpkg");
+        model["inputs"]["zones"]["value_field"] = json!("value");
+        fs::write(&path, model.to_string()).unwrap();
+        let output = dir.0.join("gpkg-results");
+        execute(model_args(&path, &output)).unwrap();
+        assert_eq!(
+            read_raster(&output.join("total_res.tif")).unwrap().data[3 * 8 + 3],
+            10.0
+        );
+    }
+
+    #[test]
+    fn invalid_generic_models_fail_without_creating_outputs() {
+        let dir = TestDir::new();
+        write_tiff(&dir.0.join("grid.tif"), &grid(), &vec![0.0; 64]).unwrap();
+        let mut model = json!({
+            "name":"invalid", "grid":"grid", "missing_data":"propagate",
+            "inputs":{"grid":{"type":"raster","path":"grid.tif"}},
+            "layers":{"result":{"input":"grid","operations":[
+                {"op":"discrete_map","intervals":{"[0,1]":1,"[1,2]":2},"unmatched":0}
+            ]}}, "output":"result"
+        });
+        let path = dir.0.join("model.json");
+        let output = dir.0.join("results");
+        fs::write(&path, model.to_string()).unwrap();
+        assert!(execute(model_args(&path, &output))
+            .unwrap_err()
+            .to_string()
+            .contains("overlapping interval"));
+        assert!(!output.exists());
+        model["layers"]["result"]["input"] = json!("missing");
+        fs::write(&path, model.to_string()).unwrap();
+        assert!(execute(model_args(&path, &output))
+            .unwrap_err()
+            .to_string()
+            .contains("unknown input/layer"));
+        assert!(!output.exists());
+        let mut wrong_grid = grid();
+        wrong_grid.affine[0] += 1.0;
+        write_tiff(&dir.0.join("shifted.tif"), &wrong_grid, &vec![0.0; 64]).unwrap();
+        model["inputs"]["other"] = json!({"type":"raster","path":"shifted.tif"});
+        fs::write(&path, model.to_string()).unwrap();
+        assert!(execute(model_args(&path, &output))
+            .unwrap_err()
+            .to_string()
+            .contains("not aligned"));
+        assert!(!output.exists());
+        assert!(parse_args(
+            &[
+                "--model",
+                "model.json",
+                "--config",
+                "legacy.json",
+                "--output-dir",
+                "results"
+            ]
+            .map(String::from)
+        )
+        .is_err());
+        assert!(parse_args(&["--model", "model.json"].map(String::from)).is_err());
+    }
+
 }

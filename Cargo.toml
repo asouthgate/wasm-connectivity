@@ -4,7 +4,7 @@ version = "0.1.1"
 edition = "2021"
 description = "Low-memory Biological Connectivity Analysis"
 license-file = "COPYING.md"
-include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/COPYING.md"]
+include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/COPYING.md", "/example/horseshoe-bat-model.json"]
 
 [lib]
 name = "lm_connect"
