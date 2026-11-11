@@ -24,7 +24,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const USAGE: &str = "Usage: lmc-resistance --config model.json --dtm terrain.tif --dsm surface.tif --lcm landcover.tif --output-dir results/
     [--buildings buildings.json|buildings.gpkg] [--roads roads.json|roads.gpkg]
     [--rivers rivers.json|rivers.gpkg] [--generic-resistance zones.json|zones.gpkg]
-    [--lamps lamps.json|lamps.gpkg] [--stage full|landscape]
+    [--lamps lamps.json|lamps.gpkg] [--stage full|landscape] [-v|--verbose]
 
 Input rasters must be single-band, north-up, square-pixel grids aligned in the same projected CRS with metre units.
 Vector features use numeric value fields: building height, road/river presence, generic resistance, or lamp height.
@@ -58,14 +58,21 @@ fn invalid(message: impl Into<String>) -> io::Error {
 struct Args {
     paths: HashMap<String, PathBuf>,
     landscape_only: bool,
+    verbose: bool,
 }
 
 fn parse_args(arguments: &[String]) -> Result<Args> {
     let mut paths = HashMap::new();
     let mut stage = None;
+    let mut verbose = false;
     let mut i = 0;
     while i < arguments.len() {
         let flag = &arguments[i];
+        if matches!(flag.as_str(), "-v" | "--verbose") {
+            verbose = true;
+            i += 1;
+            continue;
+        }
         if !matches!(
             flag.as_str(),
             "--config"
@@ -114,6 +121,7 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
     Ok(Args {
         paths,
         landscape_only,
+        verbose,
     })
 }
 
@@ -435,14 +443,12 @@ fn write_asc(path: &Path, grid: &Grid, values: &[f64]) -> Result<()> {
     Ok(())
 }
 
-fn log(message: &str) {
-    println!(
-        "{}",
-        json!({"level":"INFO", "msg":message, "user_visible":true})
-    );
-}
-
 fn execute(args: Args) -> Result<()> {
+    let log = |message: &str| {
+        if args.verbose {
+            eprintln!("{message}");
+        }
+    };
     let config = read_config(&args.paths["--config"])?;
     let dtm = read_raster(&args.paths["--dtm"])?;
     let dsm = read_raster(&args.paths["--dsm"])?;
@@ -656,6 +662,7 @@ mod tests {
         Args {
             paths,
             landscape_only: false,
+            verbose: false,
         }
     }
     fn gpkg(path: &Path, grid: &Grid) {
