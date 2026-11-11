@@ -61,7 +61,8 @@
 //!
 //! [`roost`] provides acoustic-detector-based roost estimation. The `bin` Cargo
 //! feature enables native command-line tools and raster file I/O dependencies;
-//! `instrumentation-profile` enables solver memory instrumentation.
+//! `instrumentation-profile` enables solver memory instrumentation. The
+//! `developer` feature enables the `lmc-profile` executable and its dependencies.
 
 use crate::linalg::real::Real;
 pub mod circuit;

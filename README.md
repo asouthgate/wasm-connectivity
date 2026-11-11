@@ -1,7 +1,6 @@
 # lmConnect: Low-memory Biological Connectivity Analysis
 
-This software provides an implementation of connectivity analysis suitable for use in Wasm/browser
-context, using a geometric multigrid conjugate gradient solver. This can enable certain kinds of 
+This software provides an implementation of connectivity analysis suitable for use in a memory-constrained environment (such as a Wasm/browser or high-throughput applications), using a geometric multigrid conjugate gradient solver. This can enable certain kinds of 
 interactive connectivity modelling for biological systems, such as ecological mapping. It can also be used to enable greater parallelism, such as in sampling algorithms.
 
 ## Quick-Start
@@ -11,6 +10,19 @@ To build and use the command-line application:
 ```sh
 cargo build --release --features bin --bins
 ```
+
+To run the `lmc-current` solver on an example resistance map in low-memory mixed-precision mode:
+
+```sh
+./target/release/lmc-current \
+  --resistance example/public/geodata/base_resistance_500.asc \
+  --source example/public/geodata/source_500.asc \
+  --ground example/public/geodata/ground_500.asc \
+  --precision mixed \
+  --output current.asc
+```
+
+See `lmc-current --help` for command-line flags. 
 
 ## Prerequisites
 
@@ -68,5 +80,6 @@ make test
 
 The Rust crate here has a few feature flags. 
 
-- `bin`: compiles the project CLI executables. 
-- `instrumentation-profile`: compiles the instrumentation profiling script for development and benchmarking.
+- `bin`: compiles the main CLI executables. 
+- `developer`: enables the `lmc-profile` executable.
+- `instrumentation-profile`: enables solver memory instrumentation in the library.
