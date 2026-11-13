@@ -1,7 +1,5 @@
 {
   "name": "greater_horseshoe_bat",
-  "grid": "dtm",
-  "missing_data": "propagate",
   "inputs": {
     "dtm": {
       "type": "raster",

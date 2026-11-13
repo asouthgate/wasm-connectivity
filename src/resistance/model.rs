@@ -15,17 +15,9 @@ type Result<T> = std::result::Result<T, String>;
 #[serde(deny_unknown_fields)]
 pub struct Model {
     pub name: String,
-    pub grid: String,
-    pub missing_data: MissingData,
     pub inputs: BTreeMap<String, Input>,
     pub layers: BTreeMap<String, Layer>,
     pub output: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MissingData {
-    Propagate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,8 +281,12 @@ impl Model {
                 return Err(format!("invalid input/layer name: {name}"));
             }
         }
-        if !matches!(self.inputs.get(&self.grid), Some(Input::Raster { .. })) {
-            return Err("grid must name a raster input".into());
+        if !self
+            .inputs
+            .values()
+            .any(|input| matches!(input, Input::Raster { .. }))
+        {
+            return Err("model requires at least one raster input".into());
         }
         for (name, spec) in &self.inputs {
             if self.layers.contains_key(name) {
@@ -658,7 +654,7 @@ mod tests {
     }
     fn small_model(operations: Value) -> Model {
         serde_json::from_value(json!({
-            "name":"test", "grid":"data", "missing_data":"propagate",
+            "name":"test",
             "inputs":{"data":{"type":"raster", "path":"unused.tif"}},
             "layers":{"result":{"input":"data", "operations":operations}}, "output":"result"
         }))
@@ -830,7 +826,6 @@ mod tests {
         let original: Value =
             serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap();
         for (pointer, value) in [
-            ("/missing_data", json!("ignore")),
             ("/layers/road_res/operations/0/op", json!("script")),
             ("/layers/road_res/operations/0/units", json!("feet")),
             ("/layers/road_res/operations/0/when_empty", json!("zero")),

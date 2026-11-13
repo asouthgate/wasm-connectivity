@@ -4,19 +4,14 @@ use gdal::{
     Dataset,
 };
 use lm_connect::{
-    geospatial::{rasterize_values, rasterize_values_with_background, GeoTransform},
+    geospatial::{rasterize_values_with_background, GeoTransform},
     raster::io::{read_raster, write_raster as write_tiff, Raster, RasterGrid as Grid},
-    resistance::{
-        landscape::{compute_base_rank, get_landscape_resistance_lcm},
-        model::{Field as ModelField, Grid as ModelGrid, Input as ModelInput, Model},
-        pipeline::{run_resistance_pipeline, ResistanceParams},
-    },
+    resistance::model::{Field as ModelField, Grid as ModelGrid, Input as ModelInput, Model},
 };
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    env, fs,
-    io,
+    env, fs, io,
     path::{Path, PathBuf},
 };
 
@@ -24,37 +19,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const USAGE: &str = "Usage: lmc-resistance --model model.json --output-dir results/ [--all-layers] [-v|--verbose]
 
-Legacy usage: lmc-resistance --config model.json --dtm terrain.tif --dsm surface.tif --lcm landcover.tif --output-dir results/
-    [--buildings buildings.json|buildings.gpkg] [--roads roads.json|roads.gpkg]
-    [--rivers rivers.json|rivers.gpkg] [--generic-resistance zones.json|zones.gpkg]
-    [--lamps lamps.json|lamps.gpkg] [--stage full|landscape] [-v|--verbose]
-
 Input rasters must be single-band, north-up, square-pixel grids aligned in the same projected CRS with metre units.
-Vector features use numeric value fields: building height, road/river presence, generic resistance, or lamp height.
+Vector inputs select a numeric value field; point inputs select a nonnegative height field.
 GeoJSON coordinates must already use the raster CRS. GeoPackages must contain one vector layer in that CRS.
 The --model JSON defines inline inputs and named operation layers; paths are relative to the model file.
-The legacy --config JSON contains model coefficients only. Grid metadata comes from the rasters.
-With --model, --all-layers also writes each named raster layer and surface output.
+--all-layers also writes each named raster layer and surface output.
 The final output is total_resistance.tif. Outputs are georeferenced GeoTIFF layers.";
-
-const MODEL_FIELDS: &[&str] = &[
-    "road_buffer",
-    "road_resmax",
-    "road_xmax",
-    "river_buffer",
-    "river_resmax",
-    "river_xmax",
-    "landscape_rankmax",
-    "landscape_resmax",
-    "landscape_xmax",
-    "linear_buffer",
-    "linear_rankmax",
-    "linear_resmax",
-    "linear_xmax",
-    "lamp_resmax",
-    "lamp_xmax",
-    "lamp_ext",
-];
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
@@ -62,99 +32,48 @@ fn invalid(message: impl Into<String>) -> io::Error {
 
 struct Args {
     paths: HashMap<String, PathBuf>,
-    landscape_only: bool,
     all_layers: bool,
     verbose: bool,
 }
 
 fn parse_args(arguments: &[String]) -> Result<Args> {
     let mut paths = HashMap::new();
-    let mut stage = None;
     let mut verbose = false;
     let mut all_layers = false;
     let mut i = 0;
     while i < arguments.len() {
         let flag = &arguments[i];
-        if flag == "--all-layers" {
-            if all_layers {
-                return Err(invalid("duplicate --all-layers").into());
+        match flag.as_str() {
+            "--all-layers" => {
+                if all_layers {
+                    return Err(invalid("duplicate --all-layers").into());
+                }
+                all_layers = true;
             }
-            all_layers = true;
-            i += 1;
-            continue;
-        }
-        if matches!(flag.as_str(), "-v" | "--verbose") {
-            verbose = true;
-            i += 1;
-            continue;
-        }
-        if !matches!(
-            flag.as_str(),
-            "--model"
-                | "--config"
-                | "--dtm"
-                | "--dsm"
-                | "--lcm"
-                | "--output-dir"
-                | "--buildings"
-                | "--roads"
-                | "--rivers"
-                | "--generic-resistance"
-                | "--lamps"
-                | "--stage"
-        ) {
-            return Err(invalid(format!("unknown argument: {flag}")).into());
-        }
-        let value = arguments
-            .get(i + 1)
-            .filter(|s| !s.starts_with('-'))
-            .ok_or_else(|| invalid(format!("missing value for {flag}")))?;
-        if flag == "--stage" {
-            if stage.replace(value.clone()).is_some() {
-                return Err(invalid("duplicate --stage").into());
+            "-v" | "--verbose" => {
+                verbose = true;
             }
-            if !matches!(value.as_str(), "full" | "landscape") {
-                return Err(invalid("--stage must be full or landscape").into());
+            "--model" | "--output-dir" => {
+                let value = arguments
+                    .get(i + 1)
+                    .filter(|s| !s.starts_with('-'))
+                    .ok_or_else(|| invalid(format!("missing value for {flag}")))?;
+                if paths.insert(flag.clone(), PathBuf::from(value)).is_some() {
+                    return Err(invalid(format!("duplicate argument: {flag}")).into());
+                }
+                i += 1;
             }
-        } else if paths.insert(flag.clone(), PathBuf::from(value)).is_some() {
-            return Err(invalid(format!("duplicate argument: {flag}")).into());
+            _ => return Err(invalid(format!("unknown argument: {flag}")).into()),
         }
-        i += 2;
+        i += 1;
     }
-    if paths.contains_key("--model") {
-        if stage.is_some()
-            || paths
-                .keys()
-                .any(|name| name != "--model" && name != "--output-dir")
-        {
-            return Err(invalid("--model accepts inline inputs; do not combine it with legacy input/config/stage flags").into());
-        }
-        if !paths.contains_key("--output-dir") {
-            return Err(invalid("--output-dir is required").into());
-        }
-        return Ok(Args {
-            paths,
-            landscape_only: false,
-            all_layers,
-            verbose,
-        });
-    }
-    for name in ["--config", "--dtm", "--dsm", "--lcm", "--output-dir"] {
+    for name in ["--model", "--output-dir"] {
         if !paths.contains_key(name) {
             return Err(invalid(format!("{name} is required")).into());
         }
     }
-    let landscape_only = stage.as_deref() == Some("landscape");
-    if landscape_only
-        && ["--roads", "--rivers", "--generic-resistance", "--lamps"]
-            .iter()
-            .any(|name| paths.contains_key(*name))
-    {
-        return Err(invalid("--stage landscape accepts buildings but not roads, rivers, generic resistance, or lamps").into());
-    }
     Ok(Args {
         paths,
-        landscape_only,
         all_layers,
         verbose,
     })
@@ -164,16 +83,7 @@ fn require_aligned(reference: &Grid, raster: &Raster, path: &Path) -> Result<()>
     lm_connect::raster::io::require_aligned(reference, &raster.grid, path)
 }
 
-fn read_features(path: &Path, grid: &Grid) -> Result<Value> {
-    read_features_with_field(path, grid, "value", true)
-}
-
-fn read_features_with_field(
-    path: &Path,
-    grid: &Grid,
-    value_field: &str,
-    nonnegative: bool,
-) -> Result<Value> {
+fn read_features(path: &Path, grid: &Grid, value_field: &str, nonnegative: bool) -> Result<Value> {
     if value_field.is_empty() {
         return Err(invalid("vector value field must not be empty").into());
     }
@@ -269,50 +179,6 @@ fn read_features_with_field(
     Ok(collection)
 }
 
-fn vector_raster(path: Option<&PathBuf>, grid: &Grid) -> Result<Vec<f64>> {
-    let Some(path) = path else {
-        return Ok(vec![0.0; grid.nrows * grid.ncols]);
-    };
-    let features = read_features(path, grid)?;
-    rasterize_collection(&features, grid)
-}
-
-fn rasterize_collection(features: &Value, grid: &Grid) -> Result<Vec<f64>> {
-    rasterize_values(
-        &features.to_string(),
-        grid.nrows,
-        grid.ncols,
-        &GeoTransform {
-            xmin: grid.affine[0],
-            ymax: grid.affine[3],
-            cellsize: grid.affine[1],
-        },
-        0.0,
-    )
-    .map_err(|e| invalid(e).into())
-}
-
-fn read_buildings(path: Option<&PathBuf>, grid: &Grid) -> Result<Vec<f64>> {
-    let Some(path) = path else {
-        return Ok(vec![0.0; grid.nrows * grid.ncols]);
-    };
-    let collection = read_features(path, grid)?;
-    for (index, feature) in collection["features"].as_array().unwrap().iter().enumerate() {
-        if feature["properties"]["value"].as_f64().unwrap() <= 0.0 {
-            return Err(invalid(format!("building feature {index} requires a positive height in properties.value")).into());
-        }
-    }
-    rasterize_collection(&collection, grid)
-}
-
-fn read_lamps(path: Option<&PathBuf>, grid: &Grid) -> Result<Vec<f64>> {
-    let Some(path) = path else {
-        return Ok(Vec::new());
-    };
-    let collection = read_features(path, grid)?;
-    lamps_from_collection(&collection, grid)
-}
-
 fn lamps_from_collection(collection: &Value, grid: &Grid) -> Result<Vec<f64>> {
     let mut lamps = Vec::new();
     for feature in collection["features"]
@@ -352,168 +218,24 @@ fn lamps_from_collection(collection: &Value, grid: &Grid) -> Result<Vec<f64>> {
     Ok(lamps)
 }
 
-fn read_config(path: &Path) -> Result<Map<String, Value>> {
-    let config: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
-    let config = config
-        .as_object()
-        .ok_or_else(|| invalid("config must be a JSON object of model parameters"))?;
-    for name in config.keys() {
-        if !MODEL_FIELDS.contains(&name.as_str()) {
-            return Err(invalid(format!("unknown model parameter: {name}")).into());
-        }
-    }
-    Ok(config.clone())
-}
-
-fn parameter(config: &Map<String, Value>, name: &str) -> Result<f64> {
-    let value = config
-        .get(name)
-        .and_then(Value::as_f64)
-        .filter(|v| v.is_finite())
-        .ok_or_else(|| invalid(format!("config requires a finite numeric {name}")))?;
-    let denominator = name.ends_with("xmax") || name.ends_with("rankmax");
-    if value < 0.0 || (denominator && value == 0.0) {
-        return Err(invalid(format!("invalid model parameter: {name}")).into());
-    }
-    Ok(value)
-}
-
-fn execute(args: Args) -> Result<()> {
-    if args.paths.contains_key("--model") {
-        return execute_model(&args);
-    }
-    let log = |message: &str| {
-        if args.verbose {
-            eprintln!("{message}");
-        }
-    };
-    let config = read_config(&args.paths["--config"])?;
-    let dtm = read_raster(&args.paths["--dtm"])?;
-    let dsm = read_raster(&args.paths["--dsm"])?;
-    let lcm = read_raster(&args.paths["--lcm"])?;
-    let grid = &dtm.grid;
-    require_aligned(grid, &dsm, &args.paths["--dsm"])?;
-    require_aligned(grid, &lcm, &args.paths["--lcm"])?;
-    let buildings = read_buildings(args.paths.get("--buildings"), &dtm.grid)?;
-    let rankmax = parameter(&config, "landscape_rankmax")?;
-    let resmax = parameter(&config, "landscape_resmax")?;
-    let xmax = parameter(&config, "landscape_xmax")?;
-    let output_dir = &args.paths["--output-dir"];
-    if args.landscape_only {
-        log("Computing landscape resistance");
-        let conductance = compute_base_rank(&lcm.data);
-        let mut landscape =
-            get_landscape_resistance_lcm(&lcm.data, &buildings, rankmax, resmax, xmax);
-        for (i, value) in landscape.iter_mut().enumerate() {
-            if !dtm.data[i].is_finite() || (!dsm.data[i].is_finite() && !(buildings[i].is_finite() && buildings[i] > 0.0)) {
-                *value = f64::NAN;
-            }
-        }
-        fs::create_dir_all(output_dir)?;
-        write_tiff(
-            &output_dir.join("landscape_conductance.tif"),
-            grid,
-            &conductance,
-        )?;
-        write_tiff(&output_dir.join("landscape_res.tif"), grid, &landscape)?;
-    } else {
-        let params = ResistanceParams {
-            road_buffer: parameter(&config, "road_buffer")?,
-            road_resmax: parameter(&config, "road_resmax")?,
-            road_xmax: parameter(&config, "road_xmax")?,
-            river_buffer: parameter(&config, "river_buffer")?,
-            river_resmax: parameter(&config, "river_resmax")?,
-            river_xmax: parameter(&config, "river_xmax")?,
-            landscape_rankmax: rankmax,
-            landscape_resmax: resmax,
-            landscape_xmax: xmax,
-            linear_buffer: parameter(&config, "linear_buffer")?,
-            linear_rankmax: parameter(&config, "linear_rankmax")?,
-            linear_resmax: parameter(&config, "linear_resmax")?,
-            linear_xmax: parameter(&config, "linear_xmax")?,
-            lamp_resmax: parameter(&config, "lamp_resmax")?,
-            lamp_xmax: parameter(&config, "lamp_xmax")?,
-            lamp_ext: parameter(&config, "lamp_ext")?,
-            pixw: grid.affine[1],
-            nrows: grid.nrows,
-            ncols: grid.ncols,
-        };
-        let roads = vector_raster(args.paths.get("--roads"), grid)?;
-        let rivers = vector_raster(args.paths.get("--rivers"), grid)?;
-        let generic = vector_raster(args.paths.get("--generic-resistance"), grid)?;
-        let lamps = read_lamps(args.paths.get("--lamps"), grid)?;
-        log("Computing resistance rasters");
-        let output = run_resistance_pipeline(
-            &roads,
-            &rivers,
-            &buildings,
-            Some(&lcm.data),
-            &dtm.data,
-            &dsm.data,
-            &generic,
-            &lamps,
-            &params,
-            None,
-            None,
-        );
-        fs::create_dir_all(output_dir)?;
-        for (name, values) in [
-            ("road_res", &output.road_res),
-            ("river_res", &output.river_res),
-            ("landscape_res", &output.landscape_res),
-            ("linear_res", &output.linear_res),
-            ("lamp_res", &output.lamp_res),
-            ("generic_res", &output.generic_res),
-            ("total_resistance", &output.total_res),
-            ("soft_surf", &output.soft_surf),
-            ("hard_surf", &output.hard_surf),
-            ("manhedge", &output.manhedge),
-            ("unmanhedge", &output.unmanhedge),
-            ("tree", &output.tree),
-        ] {
-            write_tiff(&output_dir.join(format!("{name}.tif")), grid, values)?;
-        }
-        let log_total: Vec<_> = output
-            .total_res
-            .iter()
-            .map(|v| {
-                if v.is_finite() && *v > 0.0 {
-                    v.ln()
-                } else {
-                    f64::NAN
-                }
-            })
-            .collect();
-        write_tiff(&output_dir.join("log_total_res.tif"), grid, &log_total)?;
-        if output.lamp_res.iter().any(|v| *v > 0.0) {
-            let log_lamp: Vec<_> = output
-                .lamp_res
-                .iter()
-                .map(|v| {
-                    if v.is_finite() && *v > 0.0 {
-                        v.ln()
-                    } else {
-                        f64::NAN
-                    }
-                })
-                .collect();
-            write_tiff(&output_dir.join("log_lamp_res.tif"), grid, &log_lamp)?;
-        }
-    }
-    log("Resistance pipeline complete");
-    Ok(())
-}
-
-fn execute_model(args: &Args) -> Result<()> {
+fn execute(args: &Args) -> Result<()> {
     let model_path = &args.paths["--model"];
     let model: Model = serde_json::from_str(&fs::read_to_string(model_path)?)
         .map_err(|e| invalid(format!("{}: {e}", model_path.display())))?;
     let directory = model_path
         .parent()
         .ok_or_else(|| invalid("model path has no parent"))?;
-    let Some(ModelInput::Raster { path }) = model.inputs.get(&model.grid) else {
-        return Err(invalid("model grid must name a raster input").into());
-    };
+    let (reference_name, path) = model
+        .inputs
+        .iter()
+        .find_map(|(name, input)| {
+            if let ModelInput::Raster { path } = input {
+                Some((name, path))
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| invalid("model requires at least one raster input"))?;
     let reference = read_raster(&directory.join(path))?;
     let grid = &reference.grid;
     let mut fields = HashMap::new();
@@ -523,7 +245,7 @@ fn execute_model(args: &Args) -> Result<()> {
         }
         let field = match input {
             ModelInput::Raster { path } => {
-                if name == &model.grid {
+                if name == reference_name {
                     ModelField::raster(reference.data.clone())
                 } else {
                     let path = directory.join(path);
@@ -540,8 +262,7 @@ fn execute_model(args: &Args) -> Result<()> {
                 if !background.is_finite() {
                     return Err(invalid(format!("input {name}: background must be finite")).into());
                 }
-                let collection =
-                    read_features_with_field(&directory.join(path), grid, value_field, false)?;
+                let collection = read_features(&directory.join(path), grid, value_field, false)?;
                 ModelField::raster(
                     rasterize_values_with_background(
                         &collection.to_string(),
@@ -559,8 +280,7 @@ fn execute_model(args: &Args) -> Result<()> {
                 )
             }
             ModelInput::Points { path, height_field } => {
-                let collection =
-                    read_features_with_field(&directory.join(path), grid, height_field, true)?;
+                let collection = read_features(&directory.join(path), grid, height_field, true)?;
                 ModelField::Points(std::sync::Arc::new(lamps_from_collection(
                     &collection,
                     grid,
@@ -627,7 +347,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(e) = execute(args) {
+    if let Err(e) = execute(&args) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
@@ -636,8 +356,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gdal::{raster::Buffer, DriverManager};
     use gdal::vector::{Feature, Geometry, LayerOptions, OGRFieldType, OGRwkbGeometryType};
+    use gdal::{raster::Buffer, DriverManager};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct TestDir(PathBuf);
@@ -667,14 +387,8 @@ mod tests {
             crs: Some(SpatialRef::from_epsg(27700).unwrap()),
         }
     }
-    fn config() -> Value {
-        json!({
-            "road_buffer":200,"road_resmax":10,"road_xmax":5,
-            "river_buffer":10,"river_resmax":2000,"river_xmax":4,
-            "landscape_rankmax":8,"landscape_resmax":100,"landscape_xmax":5,
-            "linear_buffer":10,"linear_rankmax":4,"linear_resmax":22000,"linear_xmax":3,
-            "lamp_resmax":100000000,"lamp_xmax":1,"lamp_ext":100
-        })
+    fn model() -> Value {
+        serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap()
     }
     fn collection() -> Value {
         json!({"type":"FeatureCollection","features":[{
@@ -683,29 +397,33 @@ mod tests {
         }]})
     }
     fn setup(dir: &Path) -> Args {
-        let grid = grid();
         for (name, value) in [("dtm", 100.0), ("dsm", 100.0), ("lcm", 1.0)] {
-            write_tiff(&dir.join(format!("{name}.tif")), &grid, &vec![value; 64]).unwrap();
+            write_tiff(&dir.join(format!("{name}.tif")), &grid(), &vec![value; 64]).unwrap();
         }
-        fs::write(dir.join("model.json"), config().to_string()).unwrap();
         fs::write(dir.join("buildings.json"), collection().to_string()).unwrap();
-        let mut paths = HashMap::new();
-        for (flag, file) in [
-            ("--config", "model.json"),
-            ("--dtm", "dtm.tif"),
-            ("--dsm", "dsm.tif"),
-            ("--lcm", "lcm.tif"),
-            ("--buildings", "buildings.json"),
-            ("--output-dir", "results"),
+        fs::write(
+            dir.join("empty.json"),
+            json!({"type":"FeatureCollection","features":[]}).to_string(),
+        )
+        .unwrap();
+        let mut model = model();
+        for (name, path) in [
+            ("dtm", "dtm.tif"),
+            ("dsm", "dsm.tif"),
+            ("landcover", "lcm.tif"),
+            ("buildings", "buildings.json"),
+            ("roads", "empty.json"),
+            ("rivers", "empty.json"),
+            ("generic", "empty.json"),
+            ("lamps", "empty.json"),
         ] {
-            paths.insert(flag.into(), dir.join(file));
+            model["inputs"][name]["path"] = json!(path);
         }
-        Args {
-            paths,
-            landscape_only: false,
-            all_layers: false,
-            verbose: false,
-        }
+        let path = dir.join("model.json");
+        fs::write(&path, model.to_string()).unwrap();
+        let mut args = model_args(&path, &dir.join("results"));
+        args.all_layers = true;
+        args
     }
     fn gpkg(path: &Path, grid: &Grid) {
         let mut dataset = DriverManager::get_driver_by_name("GPKG")
@@ -734,38 +452,35 @@ mod tests {
     }
 
     #[test]
-    fn buildings_require_explicit_heights() {
+    fn vector_fields_require_finite_numeric_values() {
         let dir = TestDir::new();
-        let grid = grid();
         let path = dir.0.join("buildings.json");
         let mut features = collection();
-        for invalid in [json!({}), json!({"value":null}), json!({"value":"10"}), json!({"value":0}), json!({"value":-1})] {
+        for invalid in [json!({}), json!({"value":null}), json!({"value":"10"})] {
             features["features"][0]["properties"] = invalid;
             fs::write(&path, features.to_string()).unwrap();
-            assert!(read_buildings(Some(&path), &grid)
+            assert!(read_features(&path, &grid(), "value", false)
                 .unwrap_err()
                 .to_string()
                 .contains("properties.value"));
         }
         features["features"][0]["properties"] = json!({"value":10});
         fs::write(&path, features.to_string()).unwrap();
-        let heights = read_buildings(Some(&path), &grid).unwrap();
-        assert_eq!(heights[0], 0.0);
-        assert_eq!(heights[3 * 8 + 3], 10.0);
-        assert!(read_buildings(None, &grid)
-            .unwrap()
-            .iter()
-            .all(|v| *v == 0.0));
+        assert_eq!(
+            read_features(&path, &grid(), "value", false).unwrap()["features"][0]["properties"]
+                ["value"],
+            json!(10.0)
+        );
     }
 
     #[test]
     fn full_pipeline_uses_direct_paths_and_preserves_georeferencing() {
         let dir = TestDir::new();
-        execute(setup(&dir.0)).unwrap();
+        execute(&setup(&dir.0)).unwrap();
         let output = read_raster(&dir.0.join("results/total_resistance.tif")).unwrap();
         require_aligned(&grid(), &output, Path::new("output")).unwrap();
         assert!(output.data.iter().all(|v| v.is_finite() && *v > 0.0));
-        let hard = read_raster(&dir.0.join("results/hard_surf.tif")).unwrap();
+        let hard = read_raster(&dir.0.join("results/surfaces.hard.tif")).unwrap();
         assert_eq!(hard.data[3 * 8 + 3], 10.0);
         assert_eq!(hard.data[0], 0.0);
         assert!(!dir.0.join("results/resistance.asc").exists());
@@ -777,24 +492,20 @@ mod tests {
     #[test]
     fn geopackage_and_geojson_rasterize_the_same_feature_values() {
         let dir = TestDir::new();
-        let grid = grid();
-        let json_path = dir.0.join("building.json");
-        fs::write(&json_path, collection().to_string()).unwrap();
-        let gpkg_path = dir.0.join("building.gpkg");
-        gpkg(&gpkg_path, &grid);
-        assert_eq!(
-            vector_raster(Some(&json_path), &grid).unwrap(),
-            vector_raster(Some(&gpkg_path), &grid).unwrap()
-        );
         let mut args = setup(&dir.0);
-        args.paths.insert("--buildings".into(), gpkg_path);
-        execute(args).unwrap();
-        assert_eq!(
-            read_raster(&dir.0.join("results/hard_surf.tif"))
-                .unwrap()
-                .data[3 * 8 + 3],
-            10.0
-        );
+        execute(&args).unwrap();
+        let json = read_raster(&dir.0.join("results/surfaces.hard.tif")).unwrap();
+        gpkg(&dir.0.join("buildings.gpkg"), &grid());
+        let mut model: Value =
+            serde_json::from_str(&fs::read_to_string(dir.0.join("model.json")).unwrap()).unwrap();
+        model["inputs"]["buildings"]["path"] = json!("buildings.gpkg");
+        fs::write(dir.0.join("model.json"), model.to_string()).unwrap();
+        args.paths
+            .insert("--output-dir".into(), dir.0.join("gpkg-results"));
+        execute(&args).unwrap();
+        let gpkg = read_raster(&dir.0.join("gpkg-results/surfaces.hard.tif")).unwrap();
+        assert_eq!(json.data, gpkg.data);
+        assert_eq!(gpkg.data[3 * 8 + 3], 10.0);
     }
 
     #[test]
@@ -805,17 +516,17 @@ mod tests {
         let mut invalid_feature = collection();
         invalid_feature["features"][0]["properties"] = json!({});
         fs::write(&path, invalid_feature.to_string()).unwrap();
-        assert!(vector_raster(Some(&path), &grid).is_err());
+        assert!(read_features(&path, &grid, "value", false).is_err());
         let mut wrong_crs = collection();
         wrong_crs["crs"] = json!({"type":"name","properties":{"name":"EPSG:4326"}});
         fs::write(&path, wrong_crs.to_string()).unwrap();
-        assert!(vector_raster(Some(&path), &grid).is_err());
-        assert!(vector_raster(Some(&dir.0.join("missing.json")), &grid).is_err());
+        assert!(read_features(&path, &grid, "value", false).is_err());
+        assert!(read_features(&dir.0.join("missing.json"), &grid, "value", false).is_err());
         let mut geographic = grid.clone();
         geographic.crs = Some(SpatialRef::from_epsg(4326).unwrap());
         let gpkg_path = dir.0.join("wrong.gpkg");
         gpkg(&gpkg_path, &geographic);
-        assert!(vector_raster(Some(&gpkg_path), &grid).is_err());
+        assert!(read_features(&gpkg_path, &grid, "value", false).is_err());
     }
 
     #[test]
@@ -825,7 +536,7 @@ mod tests {
         let mut shifted = grid();
         shifted.affine[0] = 0.5;
         write_tiff(&dir.0.join("dsm.tif"), &shifted, &vec![100.0; 64]).unwrap();
-        assert!(execute(args).is_err());
+        assert!(execute(&args).is_err());
         assert!(!dir.0.join("results").exists());
     }
 
@@ -854,55 +565,26 @@ mod tests {
     }
 
     #[test]
-    fn config_has_required_coefficients_without_grid_metadata_or_defaults() {
-        let dir = TestDir::new();
-        let args = setup(&dir.0);
-        let mut incomplete = config();
-        incomplete.as_object_mut().unwrap().remove("road_resmax");
-        fs::write(dir.0.join("model.json"), incomplete.to_string()).unwrap();
-        assert!(execute(args).is_err());
-        assert!(!dir.0.join("results").exists());
-        let mut bad = config();
-        bad["nrows"] = json!(8);
-        fs::write(dir.0.join("model.json"), bad.to_string()).unwrap();
-        assert!(read_config(&dir.0.join("model.json")).is_err());
-    }
-
-    #[test]
-    fn landscape_stage_requires_only_landscape_coefficients() {
-        let dir = TestDir::new();
-        let mut args = setup(&dir.0);
-        args.landscape_only = true;
-        fs::write(
-            dir.0.join("model.json"),
-            json!({"landscape_rankmax":8,"landscape_resmax":100,"landscape_xmax":5}).to_string(),
-        )
-        .unwrap();
-        execute(args).unwrap();
-        assert!(dir.0.join("results/landscape_conductance.tif").exists());
-        assert!(dir.0.join("results/landscape_res.tif").exists());
-        assert!(!dir.0.join("results/total_resistance.tif").exists());
-    }
-
-    #[test]
-    fn flags_are_explicit_and_invalid_stage_values_are_rejected() {
+    fn only_model_flags_are_accepted() {
         let parse =
-            |values: &[&str]| parse_args(&values.iter().map(|v| v.to_string()).collect::<Vec<_>>());
-        assert!(parse(&["work-directory"]).is_err());
-        assert!(parse(&["--dtm"]).is_err());
-        assert!(parse(&["--stage", "bad"]).is_err());
-        assert!(parse(&["--config", "x", "--config", "y"]).is_err());
+            |values: &[&str]| parse_args(&values.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        for values in [
+            vec!["--config", "old.json"],
+            vec!["--dtm", "terrain.tif"],
+            vec!["--stage", "landscape"],
+            vec!["--model"],
+            vec!["--model", "x", "--model", "y"],
+            vec!["--all-layers", "--all-layers"],
+            vec!["--output-dir", "results"],
+        ] {
+            assert!(parse(&values).is_err());
+        }
         assert!(parse(&[
-            "--config",
+            "--model",
             "model.json",
-            "--dtm",
-            "dtm.tif",
-            "--dsm",
-            "dsm.tif",
-            "--lcm",
-            "lcm.tif",
             "--output-dir",
-            "results"
+            "results",
+            "--all-layers"
         ])
         .is_ok());
     }
@@ -918,14 +600,14 @@ mod tests {
     }
 
     #[test]
-    fn generic_cli_requires_only_the_model_grid_and_declared_inputs() {
+    fn generic_cli_infers_grid_from_raster_inputs() {
         let dir = TestDir::new();
         let mut values = vec![2.0; 64];
         values[0] = 1.0;
         values[1] = f64::NAN;
         write_tiff(&dir.0.join("habitat.tif"), &grid(), &values).unwrap();
         let model = json!({
-            "name":"another_species", "grid":"habitat", "missing_data":"propagate",
+            "name":"another_species",
             "inputs":{"habitat":{"type":"raster","path":"habitat.tif"}},
             "layers": {
                 "a_total":{"op":"sum","inputs":["z_habitat"]},
@@ -938,7 +620,7 @@ mod tests {
         let path = dir.0.join("model.json");
         fs::write(&path, model.to_string()).unwrap();
         let output = dir.0.join("results");
-        execute(model_args(&path, &output)).unwrap();
+        execute(&model_args(&path, &output)).unwrap();
         let raster = read_raster(&output.join("total_resistance.tif")).unwrap();
         require_aligned(&grid(), &raster, Path::new("output")).unwrap();
         assert_eq!(raster.data[0], 3.0);
@@ -949,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn horseshoe_model_cli_matches_legacy_with_custom_vector_fields() {
+    fn horseshoe_model_uses_custom_vector_fields() {
         let dir = TestDir::new();
         let mut args = setup(&dir.0);
         let line = json!({"type":"FeatureCollection","features":[{
@@ -960,52 +642,30 @@ mod tests {
             "type":"Feature","properties":{"value":8,"height":8},
             "geometry":{"type":"Point","coordinates":[1,7]}
         }]});
+        let mut model: Value =
+            serde_json::from_str(&fs::read_to_string(dir.0.join("model.json")).unwrap()).unwrap();
         for (name, data) in [
             ("roads", line.clone()),
             ("rivers", line),
             ("lamps", lamps),
-            ("zones", collection()),
+            ("generic", collection()),
         ] {
-            let path = dir.0.join(format!("{name}.json"));
-            fs::write(&path, data.to_string()).unwrap();
-            args.paths.insert(
-                if name == "zones" {
-                    "--generic-resistance".into()
-                } else {
-                    format!("--{name}")
-                },
-                path,
-            );
+            let filename = format!("{name}.json");
+            fs::write(dir.0.join(&filename), data.to_string()).unwrap();
+            model["inputs"][name]["path"] = json!(filename);
         }
-        execute(args).unwrap();
-        let mut model: Value =
-            serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap();
-        for (name, path) in [
-            ("dtm", "dtm.tif"),
-            ("dsm", "dsm.tif"),
-            ("landcover", "lcm.tif"),
-            ("buildings", "buildings.json"),
-            ("roads", "roads.json"),
-            ("rivers", "rivers.json"),
-            ("lamps", "lamps.json"),
-            ("generic", "zones.json"),
-        ] {
-            model["inputs"][name]["path"] = json!(path);
-        }
+        fs::write(dir.0.join("model.json"), model.to_string()).unwrap();
+        execute(&args).unwrap();
         model["inputs"]["roads"]["value_field"] = json!("presence");
         model["inputs"]["rivers"]["value_field"] = json!("presence");
         model["inputs"]["lamps"]["height_field"] = json!("height");
-        let path = dir.0.join("generic-model.json");
-        fs::write(&path, model.to_string()).unwrap();
-        let output = dir.0.join("model-results");
-        execute(model_args(&path, &output)).unwrap();
-        let old = read_raster(&dir.0.join("results/total_resistance.tif")).unwrap();
-        let new = read_raster(&output.join("total_resistance.tif")).unwrap();
-        for (&old, &new) in old.data.iter().zip(&new.data) {
-            assert!((old-new).abs() <= 1e-12 * old.abs().max(1.0));
-        }
-        assert_eq!(old.grid.affine, new.grid.affine);
-        assert_eq!(old.grid.crs, new.grid.crs);
+        fs::write(dir.0.join("model.json"), model.to_string()).unwrap();
+        args.paths
+            .insert("--output-dir".into(), dir.0.join("custom-results"));
+        execute(&args).unwrap();
+        let original = read_raster(&dir.0.join("results/total_resistance.tif")).unwrap();
+        let custom = read_raster(&dir.0.join("custom-results/total_resistance.tif")).unwrap();
+        assert_eq!(original.data, custom.data);
     }
 
     #[test]
@@ -1016,7 +676,7 @@ mod tests {
         features["features"][0]["properties"] = json!({"cost":-2});
         fs::write(dir.0.join("zones.json"), features.to_string()).unwrap();
         let mut model = json!({
-            "name":"direct", "grid":"grid", "missing_data":"propagate",
+            "name":"direct",
             "inputs":{
                 "grid":{"type":"raster","path":"grid.tif"},
                 "zones":{"type":"vector","path":"zones.json","value_field":"cost","background":5}
@@ -1026,7 +686,7 @@ mod tests {
         let path = dir.0.join("model.json");
         fs::write(&path, model.to_string()).unwrap();
         let output = dir.0.join("results");
-        execute(model_args(&path, &output)).unwrap();
+        execute(&model_args(&path, &output)).unwrap();
         let raster = read_raster(&output.join("total_resistance.tif")).unwrap();
         assert_eq!(raster.data[0], 5.0);
         assert_eq!(raster.data[3 * 8 + 3], -2.0);
@@ -1036,9 +696,11 @@ mod tests {
         model["inputs"]["zones"]["value_field"] = json!("value");
         fs::write(&path, model.to_string()).unwrap();
         let output = dir.0.join("gpkg-results");
-        execute(model_args(&path, &output)).unwrap();
+        execute(&model_args(&path, &output)).unwrap();
         assert_eq!(
-            read_raster(&output.join("total_resistance.tif")).unwrap().data[3 * 8 + 3],
+            read_raster(&output.join("total_resistance.tif"))
+                .unwrap()
+                .data[3 * 8 + 3],
             10.0
         );
     }
@@ -1048,7 +710,7 @@ mod tests {
         let dir = TestDir::new();
         write_tiff(&dir.0.join("grid.tif"), &grid(), &vec![0.0; 64]).unwrap();
         let mut model = json!({
-            "name":"invalid", "grid":"grid", "missing_data":"propagate",
+            "name":"invalid",
             "inputs":{"grid":{"type":"raster","path":"grid.tif"}},
             "layers":{"result":{"input":"grid","operations":[
                 {"op":"discrete_map","intervals":{"[0,1]":1,"[1,2]":2},"unmatched":0}
@@ -1057,14 +719,14 @@ mod tests {
         let path = dir.0.join("model.json");
         let output = dir.0.join("results");
         fs::write(&path, model.to_string()).unwrap();
-        assert!(execute(model_args(&path, &output))
+        assert!(execute(&model_args(&path, &output))
             .unwrap_err()
             .to_string()
             .contains("overlapping interval"));
         assert!(!output.exists());
         model["layers"]["result"]["input"] = json!("missing");
         fs::write(&path, model.to_string()).unwrap();
-        assert!(execute(model_args(&path, &output))
+        assert!(execute(&model_args(&path, &output))
             .unwrap_err()
             .to_string()
             .contains("unknown input/layer"));
@@ -1074,17 +736,24 @@ mod tests {
         write_tiff(&dir.0.join("shifted.tif"), &wrong_grid, &vec![0.0; 64]).unwrap();
         model["inputs"]["other"] = json!({"type":"raster","path":"shifted.tif"});
         fs::write(&path, model.to_string()).unwrap();
-        assert!(execute(model_args(&path, &output))
+        assert!(execute(&model_args(&path, &output))
             .unwrap_err()
             .to_string()
             .contains("not aligned"));
+        assert!(!output.exists());
+        model["inputs"] = json!({});
+        fs::write(&path, model.to_string()).unwrap();
+        assert!(execute(&model_args(&path, &output))
+            .unwrap_err()
+            .to_string()
+            .contains("requires at least one raster input"));
         assert!(!output.exists());
         assert!(parse_args(
             &[
                 "--model",
                 "model.json",
                 "--config",
-                "legacy.json",
+                "other.json",
                 "--output-dir",
                 "results"
             ]
@@ -1094,13 +763,12 @@ mod tests {
         assert!(parse_args(&["--model", "model.json"].map(String::from)).is_err());
     }
 
-
     #[test]
     fn all_layers_exports_named_rasters_and_surface_outputs_without_duplicating_total() {
         let dir = TestDir::new();
         write_tiff(&dir.0.join("terrain.tif"), &grid(), &vec![100.0; 64]).unwrap();
         let model = json!({
-            "name":"layers", "grid":"terrain", "missing_data":"propagate",
+            "name":"layers",
             "inputs":{"terrain":{"type":"raster","path":"terrain.tif"}},
             "layers":{
                 "habitat":{"input":"terrain","operations":[
@@ -1113,7 +781,7 @@ mod tests {
         let path = dir.0.join("model.json");
         fs::write(&path, model.to_string()).unwrap();
         let output = dir.0.join("results");
-        execute(model_args(&path, &output)).unwrap();
+        execute(&model_args(&path, &output)).unwrap();
         assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
         let all_output = dir.0.join("all-results");
         let args = parse_args(&[
@@ -1124,7 +792,7 @@ mod tests {
             "--all-layers".into(),
         ])
         .unwrap();
-        execute(args).unwrap();
+        execute(&args).unwrap();
         let mut names: Vec<_> = fs::read_dir(&all_output)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -1150,5 +818,4 @@ mod tests {
             assert_eq!(raster.data, vec![value; 64]);
         }
     }
-
 }
