@@ -5,43 +5,43 @@
   "inputs": {
     "dtm": {
       "type": "raster",
-      "path": "terrain.tif"
+      "path": "data/resistance/dtm.tif"
     },
     "dsm": {
       "type": "raster",
-      "path": "surface.tif"
+      "path": "data/resistance/dsm.tif"
     },
     "landcover": {
       "type": "raster",
-      "path": "landcover.tif"
+      "path": "data/resistance/lcm.tif"
     },
     "buildings": {
       "type": "vector",
-      "path": "buildings.gpkg",
+      "path": "data/resistance/buildings.gpkg",
       "value_field": "value",
       "background": 0
     },
     "roads": {
       "type": "vector",
-      "path": "roads.gpkg",
+      "path": "data/resistance/roads.geojson",
       "value_field": "value",
       "background": 0
     },
     "rivers": {
       "type": "vector",
-      "path": "rivers.gpkg",
+      "path": "data/resistance/empty.geojson",
       "value_field": "value",
       "background": 0
     },
     "generic": {
       "type": "vector",
-      "path": "zones.gpkg",
+      "path": "data/resistance/empty.geojson",
       "value_field": "value",
       "background": 0
     },
     "lamps": {
       "type": "points",
-      "path": "lamps.gpkg",
+      "path": "data/resistance/empty.geojson",
       "height_field": "value"
     }
   },
