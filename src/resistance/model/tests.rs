@@ -297,7 +297,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
         "result".into(),
         NodeSpec::Node(Node {
             operation: Operation::Sum {},
-            inputs: BTreeMap::from([("data".into(), Connection::Many(vec![]))]),
+            inputs: BTreeMap::from([("data".into(), InputEdges::Many(vec![]))]),
         }),
     );
     assert!(run_small(&model, vec![0.0; 6])
@@ -559,7 +559,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
     };
     node.inputs.insert(
         "point_sources".into(),
-        Connection::One(Reference::Input {
+        InputEdges::One(Reference::Input {
             from_input: "dtm".into(),
         }),
     );
@@ -574,7 +574,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
     };
     node.inputs.insert(
         "data".into(),
-        Connection::Many(vec![
+        InputEdges::Many(vec![
             Reference::Input {
                 from_input: "roads".into(),
             },
@@ -591,7 +591,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             operation: Operation::Round,
             inputs: BTreeMap::from([(
                 "data".into(),
-                Connection::Many(vec![Reference::Input {
+                InputEdges::Many(vec![Reference::Input {
                     from_input: "data".into(),
                 }]),
             )]),
@@ -609,13 +609,13 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             inputs: BTreeMap::from([
                 (
                     "data".into(),
-                    Connection::One(Reference::Input {
+                    InputEdges::One(Reference::Input {
                         from_input: "data".into(),
                     }),
                 ),
                 (
                     "typo".into(),
-                    Connection::One(Reference::Input {
+                    InputEdges::One(Reference::Input {
                         from_input: "data".into(),
                     }),
                 ),

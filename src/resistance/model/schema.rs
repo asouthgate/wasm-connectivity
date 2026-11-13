@@ -119,11 +119,11 @@ impl Reference {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-pub enum Connection {
+pub enum InputEdges {
     One(Reference),
     Many(Vec<Reference>),
 }
-impl Connection {
+impl InputEdges {
     pub(super) fn references(&self) -> &[Reference] {
         match self {
             Self::One(value) => std::slice::from_ref(value),
@@ -135,7 +135,7 @@ impl Connection {
 #[derive(Debug, Clone)]
 pub struct Node {
     pub operation: Operation,
-    pub inputs: BTreeMap<String, Connection>,
+    pub inputs: BTreeMap<String, InputEdges>,
 }
 impl<'de> Deserialize<'de> for Node {
     fn deserialize<D: serde::Deserializer<'de>>(
@@ -165,7 +165,7 @@ impl<'de> Deserialize<'de> for Node {
         let inputs = match definition.inputs {
             None => BTreeMap::new(),
             Some(value) if operation.ports().len() == 1 && operation.ports()[0].name == "data" => {
-                let connection: Connection =
+                let connection: InputEdges =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
                 BTreeMap::from([("data".into(), connection)])
             }
@@ -175,6 +175,9 @@ impl<'de> Deserialize<'de> for Node {
     }
 }
 
+/// Parsed JSON definition: either one operation with explicit inputs (`Node`),
+/// or an `input` and `operations` array (`Chain`). Compilation expands the array
+/// into connected operation nodes.
 #[derive(Debug, Clone)]
 pub enum NodeSpec {
     Chain {

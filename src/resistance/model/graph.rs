@@ -336,7 +336,7 @@ impl Model {
                                 operation: Operation::Identity,
                                 inputs: BTreeMap::from([(
                                     "data".into(),
-                                    Connection::One(input.clone()),
+                                    InputEdges::One(input.clone()),
                                 )]),
                             },
                         );
@@ -361,7 +361,7 @@ impl Model {
                                 index + 1
                             ));
                         }
-                        step.inputs.insert("data".into(), Connection::One(previous));
+                        step.inputs.insert("data".into(), InputEdges::One(previous));
                         let id = if index + 1 == operations.len() {
                             name.clone()
                         } else {
@@ -442,7 +442,7 @@ impl TypeChecker<'_, '_> {
                     .inputs
                     .get(port.name)
                     .ok_or_else(|| format!("missing input port {}", port.name))?;
-                if port.many != matches!(connection, Connection::Many(_)) {
+                if port.many != matches!(connection, InputEdges::Many(_)) {
                     return Err(format!(
                         "input {} expects {}",
                         port.name,
