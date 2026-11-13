@@ -61,7 +61,9 @@ impl Interval {
     }
 }
 
-pub(super) fn mapping_rules(intervals: &BTreeMap<String, f64>) -> Result<Vec<(Interval, f64)>> {
+pub(super) fn parse_interval_mappings(
+    intervals: &BTreeMap<String, f64>,
+) -> Result<Vec<(Interval, f64)>> {
     let mut rules: Vec<(Interval, f64)> = Vec::new();
     for (text, &value) in intervals {
         let interval = Interval::parse(text)?;

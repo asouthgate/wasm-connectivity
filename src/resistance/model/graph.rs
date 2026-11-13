@@ -1,5 +1,5 @@
 use super::{
-    interval::{mapping_rules, Interval},
+    interval::{parse_interval_mappings, Interval},
     schema::*,
     Result,
 };
@@ -221,7 +221,7 @@ impl Operation {
                 intervals,
                 unmatched,
             } => {
-                mapping_rules(intervals)?;
+                parse_interval_mappings(intervals)?;
                 if matches!(unmatched,Unmatched::Number(value) if !value.is_finite()) {
                     return Err("unmatched value must be finite".into());
                 }

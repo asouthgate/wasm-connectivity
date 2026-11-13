@@ -8,7 +8,7 @@ use lm_connect::{
     raster::io::{read_raster, write_raster as write_tiff, Raster, RasterGrid as Grid},
     resistance::{
         distance::distance_generation,
-        model::{Field as ModelField, Grid as ModelGrid, Input as ModelInput, Model},
+        model::{Grid as ModelGrid, Input as ModelInput, Model, PipelineData},
     },
 };
 use serde_json::{json, Value};
@@ -381,7 +381,7 @@ fn execute(args: &Args) -> Result<()> {
             eprintln!("Reading input {name}");
         }
         let reference = read_raster(path)?;
-        fields.insert(name.clone(), ModelField::raster(reference.data));
+        fields.insert(name.clone(), PipelineData::raster(reference.data));
         reference.grid
     };
     let grid = &grid;
@@ -404,7 +404,7 @@ fn execute(args: &Args) -> Result<()> {
                     require_aligned(grid, &raster, &path)?;
                     raster.data
                 };
-                ModelField::raster(values)
+                PipelineData::raster(values)
             }
             ModelInput::VectorDistance {} => {
                 let collection = read_features(path, grid, None, false)?;
@@ -424,7 +424,7 @@ fn execute(args: &Args) -> Result<()> {
                 for value in &mut distance {
                     *value *= grid.affine[1];
                 }
-                ModelField::raster(distance)
+                PipelineData::raster(distance)
             }
             ModelInput::VectorOccluder {} | ModelInput::VectorResistance {} => {
                 let (field, nonnegative) = if matches!(input, ModelInput::VectorOccluder {}) {
@@ -447,7 +447,7 @@ fn execute(args: &Args) -> Result<()> {
                     0.0,
                 )
                 .map_err(invalid)?;
-                ModelField::raster(values)
+                PipelineData::raster(values)
             }
             ModelInput::RaycasterPointSource {} => {
                 let collection = read_features(path, grid, Some("height"), true)?;
@@ -458,7 +458,7 @@ fn execute(args: &Args) -> Result<()> {
                         "Warning: input {name}: {outside} light source(s) outside the grid were ignored and will not contribute irradiance."
                     );
                 }
-                ModelField::Points(std::sync::Arc::new(points))
+                PipelineData::Points(std::sync::Arc::new(points))
             }
         };
         fields.insert(name.clone(), field);
@@ -483,7 +483,7 @@ fn execute(args: &Args) -> Result<()> {
                 if model.output.selects_node(&name, &port) {
                     continue;
                 }
-                if let ModelField::Raster(values) = field {
+                if let PipelineData::Raster(values) = field {
                     let filename = if port == "data" {
                         name.clone()
                     } else {

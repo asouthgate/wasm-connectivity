@@ -38,7 +38,7 @@ fn small_model(operations: Value) -> Model {
 }
 fn run_small(model: &Model, values: Vec<f64>) -> Result<Vec<f64>> {
     model.run(
-        HashMap::from([("data".into(), Field::raster(values))]),
+        HashMap::from([("data".into(), PipelineData::raster(values))]),
         grid(),
     )
 }
@@ -72,11 +72,11 @@ fn raycaster_outside_points_do_not_contribute_or_error() {
     }))
     .unwrap();
     let mut fields = HashMap::from([
-        ("terrain".into(), Field::raster(vec![0.0; 4])),
-        ("buildings".into(), Field::raster(vec![0.0; 4])),
+        ("terrain".into(), PipelineData::raster(vec![0.0; 4])),
+        ("buildings".into(), PipelineData::raster(vec![0.0; 4])),
         (
             "lights".into(),
-            Field::Points(Arc::new(vec![
+            PipelineData::Points(Arc::new(vec![
                 -1.0, 0.0, 3.0, 2.0, 0.0, 3.0, 0.0, -1.0, 3.0, 0.0, 2.0, 3.0,
             ])),
         ),
@@ -89,7 +89,7 @@ fn raycaster_outside_points_do_not_contribute_or_error() {
     assert_eq!(model.run(fields.clone(), grid).unwrap(), vec![0.0; 4]);
     fields.insert(
         "lights".into(),
-        Field::Points(Arc::new(vec![-1.0, 0.0, -3.0])),
+        PipelineData::Points(Arc::new(vec![-1.0, 0.0, -3.0])),
     );
     assert!(model
         .run(fields, grid)
@@ -316,7 +316,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
     model = small_model(json!([]));
     assert!(model
         .run(
-            HashMap::from([("data".into(), Field::raster(vec![0.0; 5]))]),
+            HashMap::from([("data".into(), PipelineData::raster(vec![0.0; 5]))]),
             grid()
         )
         .is_err());
@@ -325,7 +325,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
         .insert("data".into(), Input::RaycasterPointSource {});
     assert!(model
         .run(
-            HashMap::from([("data".into(), Field::Points(Arc::new(vec![])))]),
+            HashMap::from([("data".into(), PipelineData::Points(Arc::new(vec![])))]),
             grid()
         )
         .is_err());
@@ -468,10 +468,10 @@ fn horseshoe_spec_matches_every_existing_resistance_layer() {
                         *value *= pixel_width;
                     }
                 }
-                let field = Field::raster(values);
+                let field = PipelineData::raster(values);
                 fields.insert(name.into(), field);
             }
-            fields.insert("lamps".into(), Field::Points(Arc::new(lamps)));
+            fields.insert("lamps".into(), PipelineData::Points(Arc::new(lamps)));
             let mut model = example();
             for (name, expected) in [
                 ("road_res", expected.road_res),
