@@ -22,7 +22,7 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const USAGE: &str = "Usage: lmc-resistance --model model.json --output-dir results/ [-v|--verbose]
+const USAGE: &str = "Usage: lmc-resistance --model model.json --output-dir results/ [--all-layers] [-v|--verbose]
 
 Legacy usage: lmc-resistance --config model.json --dtm terrain.tif --dsm surface.tif --lcm landcover.tif --output-dir results/
     [--buildings buildings.json|buildings.gpkg] [--roads roads.json|roads.gpkg]
@@ -34,7 +34,8 @@ Vector features use numeric value fields: building height, road/river presence, 
 GeoJSON coordinates must already use the raster CRS. GeoPackages must contain one vector layer in that CRS.
 The --model JSON defines inline inputs and named operation layers; paths are relative to the model file.
 The legacy --config JSON contains model coefficients only. Grid metadata comes from the rasters.
-Outputs are georeferenced GeoTIFF layers; no current sources or grounds are generated.";
+With --model, --all-layers also writes each named raster layer and surface output.
+The final output is total_resistance.tif. Outputs are georeferenced GeoTIFF layers.";
 
 const MODEL_FIELDS: &[&str] = &[
     "road_buffer",
@@ -62,6 +63,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
 struct Args {
     paths: HashMap<String, PathBuf>,
     landscape_only: bool,
+    all_layers: bool,
     verbose: bool,
 }
 
@@ -69,9 +71,18 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
     let mut paths = HashMap::new();
     let mut stage = None;
     let mut verbose = false;
+    let mut all_layers = false;
     let mut i = 0;
     while i < arguments.len() {
         let flag = &arguments[i];
+        if flag == "--all-layers" {
+            if all_layers {
+                return Err(invalid("duplicate --all-layers").into());
+            }
+            all_layers = true;
+            i += 1;
+            continue;
+        }
         if matches!(flag.as_str(), "-v" | "--verbose") {
             verbose = true;
             i += 1;
@@ -124,6 +135,7 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
         return Ok(Args {
             paths,
             landscape_only: false,
+            all_layers,
             verbose,
         });
     }
@@ -143,6 +155,7 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
     Ok(Args {
         paths,
         landscape_only,
+        all_layers,
         verbose,
     })
 }
@@ -451,7 +464,7 @@ fn execute(args: Args) -> Result<()> {
             ("linear_res", &output.linear_res),
             ("lamp_res", &output.lamp_res),
             ("generic_res", &output.generic_res),
-            ("total_res", &output.total_res),
+            ("total_resistance", &output.total_res),
             ("soft_surf", &output.soft_surf),
             ("hard_surf", &output.hard_surf),
             ("manhedge", &output.manhedge),
@@ -559,8 +572,8 @@ fn execute_model(args: &Args) -> Result<()> {
     if args.verbose {
         eprintln!("Evaluating model {}", model.name);
     }
-    let output = model
-        .run(
+    let (output, layers) = model
+        .run_with_layers(
             fields,
             ModelGrid {
                 nrows: grid.nrows,
@@ -569,10 +582,35 @@ fn execute_model(args: &Args) -> Result<()> {
             },
         )
         .map_err(invalid)?;
+    let mut extra_layers = Vec::new();
+    if args.all_layers {
+        for (name, field) in layers {
+            match field {
+                ModelField::Raster(values) => extra_layers.push((name, values)),
+                ModelField::Surfaces { soft, hard } => {
+                    extra_layers.push((format!("{name}.soft"), soft));
+                    extra_layers.push((format!("{name}.hard"), hard));
+                }
+                ModelField::Points(_) => {}
+            }
+        }
+        extra_layers.retain(|(name, _)| name != &model.output);
+        if extra_layers
+            .iter()
+            .any(|(name, _)| name == "total_resistance")
+        {
+            return Err(
+                invalid("layer total_resistance conflicts with the final output filename").into(),
+            );
+        }
+    }
     // All validation and calculations complete before creating any output files.
     let output_dir = &args.paths["--output-dir"];
     fs::create_dir_all(output_dir)?;
-    write_tiff(&output_dir.join("total_res.tif"), grid, &output)?;
+    write_tiff(&output_dir.join("total_resistance.tif"), grid, &output)?;
+    for (name, values) in extra_layers {
+        write_tiff(&output_dir.join(format!("{name}.tif")), grid, &values)?;
+    }
     Ok(())
 }
 
@@ -665,6 +703,7 @@ mod tests {
         Args {
             paths,
             landscape_only: false,
+            all_layers: false,
             verbose: false,
         }
     }
@@ -723,7 +762,7 @@ mod tests {
     fn full_pipeline_uses_direct_paths_and_preserves_georeferencing() {
         let dir = TestDir::new();
         execute(setup(&dir.0)).unwrap();
-        let output = read_raster(&dir.0.join("results/total_res.tif")).unwrap();
+        let output = read_raster(&dir.0.join("results/total_resistance.tif")).unwrap();
         require_aligned(&grid(), &output, Path::new("output")).unwrap();
         assert!(output.data.iter().all(|v| v.is_finite() && *v > 0.0));
         let hard = read_raster(&dir.0.join("results/hard_surf.tif")).unwrap();
@@ -842,7 +881,7 @@ mod tests {
         execute(args).unwrap();
         assert!(dir.0.join("results/landscape_conductance.tif").exists());
         assert!(dir.0.join("results/landscape_res.tif").exists());
-        assert!(!dir.0.join("results/total_res.tif").exists());
+        assert!(!dir.0.join("results/total_resistance.tif").exists());
     }
 
     #[test]
@@ -900,7 +939,7 @@ mod tests {
         fs::write(&path, model.to_string()).unwrap();
         let output = dir.0.join("results");
         execute(model_args(&path, &output)).unwrap();
-        let raster = read_raster(&output.join("total_res.tif")).unwrap();
+        let raster = read_raster(&output.join("total_resistance.tif")).unwrap();
         require_aligned(&grid(), &raster, Path::new("output")).unwrap();
         assert_eq!(raster.data[0], 3.0);
         assert!(raster.data[1].is_nan());
@@ -960,8 +999,8 @@ mod tests {
         fs::write(&path, model.to_string()).unwrap();
         let output = dir.0.join("model-results");
         execute(model_args(&path, &output)).unwrap();
-        let old = read_raster(&dir.0.join("results/total_res.tif")).unwrap();
-        let new = read_raster(&output.join("total_res.tif")).unwrap();
+        let old = read_raster(&dir.0.join("results/total_resistance.tif")).unwrap();
+        let new = read_raster(&output.join("total_resistance.tif")).unwrap();
         for (&old, &new) in old.data.iter().zip(&new.data) {
             assert!((old-new).abs() <= 1e-12 * old.abs().max(1.0));
         }
@@ -988,7 +1027,7 @@ mod tests {
         fs::write(&path, model.to_string()).unwrap();
         let output = dir.0.join("results");
         execute(model_args(&path, &output)).unwrap();
-        let raster = read_raster(&output.join("total_res.tif")).unwrap();
+        let raster = read_raster(&output.join("total_resistance.tif")).unwrap();
         assert_eq!(raster.data[0], 5.0);
         assert_eq!(raster.data[3 * 8 + 3], -2.0);
         // Also exercise field selection through the GeoPackage reader.
@@ -999,7 +1038,7 @@ mod tests {
         let output = dir.0.join("gpkg-results");
         execute(model_args(&path, &output)).unwrap();
         assert_eq!(
-            read_raster(&output.join("total_res.tif")).unwrap().data[3 * 8 + 3],
+            read_raster(&output.join("total_resistance.tif")).unwrap().data[3 * 8 + 3],
             10.0
         );
     }
@@ -1053,6 +1092,63 @@ mod tests {
         )
         .is_err());
         assert!(parse_args(&["--model", "model.json"].map(String::from)).is_err());
+    }
+
+
+    #[test]
+    fn all_layers_exports_named_rasters_and_surface_outputs_without_duplicating_total() {
+        let dir = TestDir::new();
+        write_tiff(&dir.0.join("terrain.tif"), &grid(), &vec![100.0; 64]).unwrap();
+        let model = json!({
+            "name":"layers", "grid":"terrain", "missing_data":"propagate",
+            "inputs":{"terrain":{"type":"raster","path":"terrain.tif"}},
+            "layers":{
+                "habitat":{"input":"terrain","operations":[
+                    {"op":"discrete_map","intervals":{"[100,100]":4},"unmatched":"error"}
+                ]},
+                "surfaces":{"op":"surface_heights","terrain":"terrain","surface":"terrain","buildings":"terrain"},
+                "total_res":{"op":"sum","inputs":["habitat"]}
+            },"output":"total_res"
+        });
+        let path = dir.0.join("model.json");
+        fs::write(&path, model.to_string()).unwrap();
+        let output = dir.0.join("results");
+        execute(model_args(&path, &output)).unwrap();
+        assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+        let all_output = dir.0.join("all-results");
+        let args = parse_args(&[
+            "--model".into(),
+            path.to_str().unwrap().into(),
+            "--output-dir".into(),
+            all_output.to_str().unwrap().into(),
+            "--all-layers".into(),
+        ])
+        .unwrap();
+        execute(args).unwrap();
+        let mut names: Vec<_> = fs::read_dir(&all_output)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "habitat.tif",
+                "surfaces.hard.tif",
+                "surfaces.soft.tif",
+                "total_resistance.tif"
+            ]
+        );
+        for (name, value) in [
+            ("habitat", 4.0),
+            ("surfaces.soft", 0.0),
+            ("surfaces.hard", 100.0),
+            ("total_resistance", 4.0),
+        ] {
+            let raster = read_raster(&all_output.join(format!("{name}.tif"))).unwrap();
+            require_aligned(&grid(), &raster, Path::new(name)).unwrap();
+            assert_eq!(raster.data, vec![value; 64]);
+        }
     }
 
 }

@@ -264,6 +264,14 @@ impl Interval {
 impl Model {
     /// Evaluate named layers independent of declaration order; retain shared fields once.
     pub fn run(&self, inputs: HashMap<String, Field>, grid: Grid) -> Result<Vec<f64>> {
+        self.run_with_layers(inputs, grid).map(|(output, _)| output)
+    }
+
+    pub fn run_with_layers(
+        &self,
+        inputs: HashMap<String, Field>,
+        grid: Grid,
+    ) -> Result<(Vec<f64>, BTreeMap<String, Field>)> {
         if grid.nrows == 0
             || grid.ncols == 0
             || !grid.pixel_width.is_finite()
@@ -324,7 +332,13 @@ impl Model {
         for name in self.layers.keys() {
             evaluator.resolve(name)?;
         }
-        Ok(evaluator.resolve(&self.output)?.values()?.to_vec())
+        let output = evaluator.resolve(&self.output)?.values()?.to_vec();
+        let layers = self
+            .layers
+            .keys()
+            .map(|name| Ok((name.clone(), evaluator.resolve(name)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        Ok((output, layers))
     }
 }
 
