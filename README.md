@@ -11,24 +11,6 @@ To build and use the command-line application:
 cargo build --release --features bin --bins
 ```
 
-To compute resistance, start with [the horseshoe-bat model](example/horseshoe-bat-model.json)
-and edit its `inputs` paths to point to your raster and vector data. Paths are
-relative to the JSON model file. The model defines the operations for each layer
-and how those layers combine, including interval mappings such as `"(1,3)": 4`.
-
-```sh
-./target/release/lmc-resistance \
-  --model example/horseshoe-bat-model.json \
-  --output-dir results/
-```
-
-This writes `results/total_res.tif`, `results/resistance.asc`, and
-`results/grid_info.json`. All declared inputs must exist and raster inputs must
-share the model grid's dimensions, alignment, and projected CRS in metres.
-
-See `lmc-resistance --help` for command-line flags, including the legacy
-`--config` mode.
-
 To run the `lmc-current` solver on an example resistance map in low-memory mixed-precision mode:
 
 ```sh
@@ -41,6 +23,18 @@ To run the `lmc-current` solver on an example resistance map in low-memory mixed
 ```
 
 See `lmc-current --help` for command-line flags. 
+
+To run a resistance pipeline, see the [the Greater Horseshoe example](example/horseshoe-bat-model.json).
+
+```sh
+./target/release/lmc-resistance \
+  --model example/horseshoe-bat-model.json \
+  --output-dir results/
+```
+
+See `lmc-resistance --help` for command-line flags, including the legacy
+`--config` mode.
+
 
 ## Prerequisites
 
