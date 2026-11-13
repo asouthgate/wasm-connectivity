@@ -1,11 +1,11 @@
 use gdal::{
-    raster::Buffer,
     spatial_ref::SpatialRef,
     vector::{FieldValue, LayerAccess},
-    Dataset, DriverManager,
+    Dataset,
 };
 use lm_connect::{
     geospatial::{rasterize_values, rasterize_values_with_background, GeoTransform},
+    raster::io::{read_raster, write_raster as write_tiff, Raster, RasterGrid as Grid},
     resistance::{
         landscape::{compute_base_rank, get_landscape_resistance_lcm},
         model::{Field as ModelField, Grid as ModelGrid, Input as ModelInput, Model},
@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use std::{
     collections::HashMap,
     env, fs,
-    io::{self, BufWriter, Write},
+    io,
     path::{Path, PathBuf},
 };
 
@@ -34,7 +34,7 @@ Vector features use numeric value fields: building height, road/river presence, 
 GeoJSON coordinates must already use the raster CRS. GeoPackages must contain one vector layer in that CRS.
 The --model JSON defines inline inputs and named operation layers; paths are relative to the model file.
 The legacy --config JSON contains model coefficients only. Grid metadata comes from the rasters.
-Outputs are georeferenced GeoTIFF layers and resistance.asc; no current sources or grounds are generated.";
+Outputs are georeferenced GeoTIFF layers; no current sources or grounds are generated.";
 
 const MODEL_FIELDS: &[&str] = &[
     "road_buffer",
@@ -147,92 +147,8 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
     })
 }
 
-#[derive(Clone)]
-struct Grid {
-    ncols: usize,
-    nrows: usize,
-    affine: [f64; 6],
-    crs: SpatialRef,
-}
-struct Raster {
-    grid: Grid,
-    data: Vec<f64>,
-}
-
-fn read_raster(path: &Path) -> Result<Raster> {
-    let dataset = Dataset::open(path)?;
-    if dataset.raster_count() != 1 {
-        return Err(invalid(format!(
-            "{} must have exactly one raster band",
-            path.display()
-        ))
-        .into());
-    }
-    let (ncols, nrows) = dataset.raster_size();
-    if ncols == 0 || nrows == 0 {
-        return Err(invalid("raster dimensions must be positive").into());
-    }
-    let affine = dataset.geo_transform()?;
-    if !affine.iter().all(|v| v.is_finite())
-        || affine[1] <= 0.0
-        || affine[5] >= 0.0
-        || affine[2] != 0.0
-        || affine[4] != 0.0
-        || (affine[1] + affine[5]).abs() > affine[1] * 1e-9
-    {
-        return Err(invalid(format!(
-            "{} requires a north-up grid with square pixels",
-            path.display()
-        ))
-        .into());
-    }
-    let crs = dataset.spatial_ref()?;
-    if !crs.is_projected() || (crs.linear_units() - 1.0).abs() > 1e-9 {
-        return Err(invalid(format!(
-            "{} requires a projected CRS with metre units",
-            path.display()
-        ))
-        .into());
-    }
-    let band = dataset.rasterband(1)?;
-    let nodata = band.no_data_value();
-    let mut data = band
-        .read_as::<f64>((0, 0), (ncols, nrows), (ncols, nrows), None)?
-        .data()
-        .to_vec();
-    for value in &mut data {
-        if !value.is_finite() || nodata == Some(*value) {
-            *value = f64::NAN;
-        }
-    }
-    Ok(Raster {
-        grid: Grid {
-            ncols,
-            nrows,
-            affine,
-            crs,
-        },
-        data,
-    })
-}
-
 fn require_aligned(reference: &Grid, raster: &Raster, path: &Path) -> Result<()> {
-    if reference.ncols != raster.grid.ncols
-        || reference.nrows != raster.grid.nrows
-        || reference.crs != raster.grid.crs
-        || reference
-            .affine
-            .iter()
-            .zip(raster.grid.affine)
-            .any(|(&a, b)| (a - b).abs() > reference.affine[1] * 1e-9)
-    {
-        return Err(invalid(format!(
-            "{} is not aligned with the DTM grid and CRS",
-            path.display()
-        ))
-        .into());
-    }
-    Ok(())
+    lm_connect::raster::io::require_aligned(reference, &raster.grid, path)
 }
 
 fn read_features(path: &Path, grid: &Grid) -> Result<Value> {
@@ -260,14 +176,15 @@ fn read_features_with_field(
                     .pointer("/properties/name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| invalid("GeoJSON crs must declare properties.name"))?;
-                if SpatialRef::from_definition(name)? != grid.crs {
+                if Some(SpatialRef::from_definition(name)?) != grid.crs {
                     return Err(invalid("GeoJSON CRS differs from raster CRS").into());
                 }
             }
             collection
         }
         Some("gpkg") => {
-            let dataset = Dataset::open(path)?;
+            let dataset = Dataset::open(path)
+                .map_err(|e| invalid(format!("cannot open vector {}: {e}", path.display())))?;
             if dataset.layer_count() != 1 {
                 return Err(invalid(format!(
                     "{} must contain exactly one vector layer",
@@ -279,7 +196,7 @@ fn read_features_with_field(
             let crs = layer
                 .spatial_ref()
                 .ok_or_else(|| invalid("GeoPackage layer has no CRS"))?;
-            if crs != grid.crs {
+            if Some(crs) != grid.crs {
                 return Err(invalid("GeoPackage CRS differs from raster CRS").into());
             }
             let has_value = layer
@@ -448,48 +365,6 @@ fn parameter(config: &Map<String, Value>, name: &str) -> Result<f64> {
     Ok(value)
 }
 
-fn write_tiff(path: &Path, grid: &Grid, values: &[f64]) -> Result<()> {
-    let driver = DriverManager::get_driver_by_name("GTiff")?;
-    let mut dataset = driver.create_with_band_type::<f32, _>(path, grid.ncols, grid.nrows, 1)?;
-    dataset.set_geo_transform(&grid.affine)?;
-    dataset.set_spatial_ref(&grid.crs)?;
-    let mut band = dataset.rasterband(1)?;
-    band.set_no_data_value(Some(f64::NAN))?;
-    band.write(
-        (0, 0),
-        (grid.ncols, grid.nrows),
-        &mut Buffer::new(
-            (grid.ncols, grid.nrows),
-            values.iter().map(|v| *v as f32).collect(),
-        ),
-    )?;
-    dataset.flush_cache()?;
-    Ok(())
-}
-
-fn write_asc(path: &Path, grid: &Grid, values: &[f64]) -> Result<()> {
-    let mut file = BufWriter::new(fs::File::create(path)?);
-    writeln!(
-        file,
-        "ncols {}\nnrows {}\nxllcorner {}\nyllcorner {}\ncellsize {}\nNODATA_value -9999",
-        grid.ncols,
-        grid.nrows,
-        grid.affine[0],
-        grid.affine[3] - grid.nrows as f64 * grid.affine[1],
-        grid.affine[1]
-    )?;
-    for row in values.chunks(grid.ncols) {
-        for (i, value) in row.iter().enumerate() {
-            if i > 0 {
-                write!(file, " ")?;
-            }
-            write!(file, "{}", if value.is_finite() { *value } else { -9999.0 })?;
-        }
-        writeln!(file)?;
-    }
-    Ok(())
-}
-
 fn execute(args: Args) -> Result<()> {
     if args.paths.contains_key("--model") {
         return execute_model(&args);
@@ -528,7 +403,6 @@ fn execute(args: Args) -> Result<()> {
             &conductance,
         )?;
         write_tiff(&output_dir.join("landscape_res.tif"), grid, &landscape)?;
-        write_asc(&output_dir.join("resistance.asc"), grid, &landscape)?;
     } else {
         let params = ResistanceParams {
             road_buffer: parameter(&config, "road_buffer")?,
@@ -612,14 +486,7 @@ fn execute(args: Args) -> Result<()> {
                 .collect();
             write_tiff(&output_dir.join("log_lamp_res.tif"), grid, &log_lamp)?;
         }
-        write_asc(&output_dir.join("resistance.asc"), grid, &output.total_res)?;
     }
-    fs::write(
-        output_dir.join("grid_info.json"),
-        serde_json::to_string_pretty(&json!({
-            "xmin":grid.affine[0], "ymax":grid.affine[3], "pixw":grid.affine[1], "nrows":grid.nrows, "ncols":grid.ncols,
-        }))?,
-    )?;
     log("Resistance pipeline complete");
     Ok(())
 }
@@ -706,13 +573,6 @@ fn execute_model(args: &Args) -> Result<()> {
     let output_dir = &args.paths["--output-dir"];
     fs::create_dir_all(output_dir)?;
     write_tiff(&output_dir.join("total_res.tif"), grid, &output)?;
-    write_asc(&output_dir.join("resistance.asc"), grid, &output)?;
-    fs::write(
-        output_dir.join("grid_info.json"),
-        serde_json::to_string_pretty(&json!({
-            "xmin":grid.affine[0], "ymax":grid.affine[3], "pixw":grid.affine[1], "nrows":grid.nrows, "ncols":grid.ncols
-        }))?,
-    )?;
     Ok(())
 }
 
@@ -738,6 +598,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gdal::{raster::Buffer, DriverManager};
     use gdal::vector::{Feature, Geometry, LayerOptions, OGRFieldType, OGRwkbGeometryType};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -765,7 +626,7 @@ mod tests {
             ncols: 8,
             nrows: 8,
             affine: [0.0, 1.0, 0.0, 8.0, 0.0, -1.0],
-            crs: SpatialRef::from_epsg(27700).unwrap(),
+            crs: Some(SpatialRef::from_epsg(27700).unwrap()),
         }
     }
     fn config() -> Value {
@@ -815,7 +676,7 @@ mod tests {
         let layer = dataset
             .create_layer(LayerOptions {
                 name: "buildings",
-                srs: Some(&grid.crs),
+                srs: grid.crs.as_ref(),
                 ty: OGRwkbGeometryType::wkbPolygon,
                 ..Default::default()
             })
@@ -868,7 +729,7 @@ mod tests {
         let hard = read_raster(&dir.0.join("results/hard_surf.tif")).unwrap();
         assert_eq!(hard.data[3 * 8 + 3], 10.0);
         assert_eq!(hard.data[0], 0.0);
-        assert!(dir.0.join("results/resistance.asc").exists());
+        assert!(!dir.0.join("results/resistance.asc").exists());
         assert!(!dir.0.join("inputs.json").exists());
         assert!(!dir.0.join("grid_info.json").exists());
         assert!(!dir.0.join("results/source.asc").exists());
@@ -912,7 +773,7 @@ mod tests {
         assert!(vector_raster(Some(&path), &grid).is_err());
         assert!(vector_raster(Some(&dir.0.join("missing.json")), &grid).is_err());
         let mut geographic = grid.clone();
-        geographic.crs = SpatialRef::from_epsg(4326).unwrap();
+        geographic.crs = Some(SpatialRef::from_epsg(4326).unwrap());
         let gpkg_path = dir.0.join("wrong.gpkg");
         gpkg(&gpkg_path, &geographic);
         assert!(vector_raster(Some(&gpkg_path), &grid).is_err());
@@ -940,7 +801,7 @@ mod tests {
                 .create_with_band_type::<u8, _>(&path, 8, 8, 1)
                 .unwrap();
             ds.set_geo_transform(&grid.affine).unwrap();
-            ds.set_spatial_ref(&grid.crs).unwrap();
+            ds.set_spatial_ref(grid.crs.as_ref().unwrap()).unwrap();
             let mut band = ds.rasterband(1).unwrap();
             band.set_no_data_value(Some(255.0)).unwrap();
             let mut values = vec![1_u8; 64];
@@ -1044,8 +905,8 @@ mod tests {
         assert_eq!(raster.data[0], 3.0);
         assert!(raster.data[1].is_nan());
         assert_eq!(raster.data[2], 7.0);
-        assert!(output.join("resistance.asc").exists());
-        assert!(output.join("grid_info.json").exists());
+        assert!(!output.join("resistance.asc").exists());
+        assert!(!output.join("grid_info.json").exists());
     }
 
     #[test]
@@ -1101,25 +962,11 @@ mod tests {
         execute(model_args(&path, &output)).unwrap();
         let old = read_raster(&dir.0.join("results/total_res.tif")).unwrap();
         let new = read_raster(&output.join("total_res.tif")).unwrap();
-        assert_eq!(old.data, new.data);
-        let old_asc = fs::read_to_string(dir.0.join("results/resistance.asc")).unwrap();
-        let new_asc = fs::read_to_string(output.join("resistance.asc")).unwrap();
-        assert_eq!(
-            old_asc.lines().take(6).collect::<Vec<_>>(),
-            new_asc.lines().take(6).collect::<Vec<_>>()
-        );
-        let values = |text: &str| {
-            text.lines()
-                .skip(6)
-                .flat_map(str::split_whitespace)
-                .map(|value| value.parse::<f64>().unwrap())
-                .collect::<Vec<_>>()
-        };
-        let (old_values, new_values) = (values(&old_asc), values(&new_asc));
-        assert_eq!(old_values.len(), new_values.len());
-        for (&old, &new) in old_values.iter().zip(&new_values) {
-            assert!((old - new).abs() <= 1e-12 * old.abs().max(1.0));
+        for (&old, &new) in old.data.iter().zip(&new.data) {
+            assert!((old-new).abs() <= 1e-12 * old.abs().max(1.0));
         }
+        assert_eq!(old.grid.affine, new.grid.affine);
+        assert_eq!(old.grid.crs, new.grid.crs);
     }
 
     #[test]
