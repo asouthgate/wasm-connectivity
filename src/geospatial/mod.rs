@@ -247,6 +247,28 @@ pub fn rasterize_values_with_background<F: Real>(
     geojson_str: &str, nrows: usize, ncols: usize,
     transform: &GeoTransform, buffer: f64, background: f64,
 ) -> Result<Vec<F>, String> {
+    rasterize_field(geojson_str, "value", nrows, ncols, transform, buffer, background)
+}
+
+/// Rasterize a required numeric property without renaming feature attributes.
+pub fn rasterize_field<F: Real>(
+    geojson_str: &str, field: &str, nrows: usize, ncols: usize,
+    transform: &GeoTransform, buffer: f64, background: f64,
+) -> Result<Vec<F>, String> {
+    rasterize_numeric(geojson_str, Some(field), nrows, ncols, transform, buffer, background)
+}
+
+/// Rasterize geometry alone: one on features, zero elsewhere.
+pub fn rasterize_mask<F: Real>(
+    geojson_str: &str, nrows: usize, ncols: usize, transform: &GeoTransform,
+) -> Result<Vec<F>, String> {
+    rasterize_numeric(geojson_str, None, nrows, ncols, transform, 0.0, 0.0)
+}
+
+fn rasterize_numeric<F: Real>(
+    geojson_str: &str, field: Option<&str>, nrows: usize, ncols: usize,
+    transform: &GeoTransform, buffer: f64, background: f64,
+) -> Result<Vec<F>, String> {
     let background = scalar::<F>(background);
     if !background.is_finite() {
         return Err("background must be finite and fit raster precision".into());
@@ -265,9 +287,11 @@ pub fn rasterize_values_with_background<F: Real>(
     let mut raster = vec![F::neg_infinity(); size];
     let mut mask = vec![F::zero(); size];
     for (index, feature) in collection.features.iter().enumerate() {
-        let value = feature.properties.as_ref().and_then(|p| p.get("value"))
-            .and_then(|v| v.as_f64()).filter(|v| v.is_finite())
-            .ok_or_else(|| format!("feature {index} requires a finite numeric properties.value"))?;
+        let value = if let Some(field) = field {
+            feature.properties.as_ref().and_then(|p| p.get(field))
+                .and_then(|v| v.as_f64()).filter(|v| v.is_finite())
+                .ok_or_else(|| format!("feature {index} requires a finite numeric properties.{field}"))?
+        } else { 1.0 };
         let value = scalar::<F>(value);
         if !value.is_finite() { return Err(format!("feature {index} value exceeds raster precision")); }
         let geometry = feature.geometry.as_ref().ok_or_else(|| format!("feature {index} has no geometry"))?;

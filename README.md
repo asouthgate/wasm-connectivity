@@ -11,7 +11,7 @@ To build and use the command-line application:
 cargo build --release --features bin --bins
 ```
 
-To run the `lmc-current` solver on an example resistance map in low-memory mixed-precision mode:
+To run the `lmc-current` solver on example datasets, run
 
 ```sh
 ./target/release/lmc-current \
@@ -22,19 +22,39 @@ To run the `lmc-current` solver on an example resistance map in low-memory mixed
   --output current.asc
 ```
 
-See `lmc-current --help` for command-line flags. 
-
-To run a resistance pipeline, see the [the Greater Horseshoe example](example/horseshoe-bat-model.json).
+To run a resistance pipeline, see the [the Greater Horseshoe example](example/horseshoe-bat-model.json). 
+We use a simple DAG system to define configurable process pipelines specified via JSON.
+See [Resistance pipeline JSON specification](docs/pipeline-json-spec.md) for details.
 
 ```sh
 ./target/release/lmc-resistance \
   --model example/horseshoe-bat-model.json \
+  --dtm example/data/resistance/dtm.tif \
+  --dsm example/data/resistance/dsm.tif \
+  --landcover example/data/resistance/lcm.tif \
+  --buildings example/data/resistance/buildings.gpkg \
+  --roads example/data/resistance/roads.geojson \
+  --rivers example/data/resistance/empty.geojson \
+  --generic example/data/resistance/empty.geojson \
+  --lamps example/data/resistance/empty.geojson \
+  --all-layers \
   --output-dir results/
 ```
 
-See `lmc-resistance --help` for command-line flags, including the legacy
-`--config` mode.
+See `lmc-resistance --help` for command-line flags.
 
+To run the `lmc-current` solver on that resistance map in low-memory mixed-precision mode:
+
+```sh
+./target/release/lmc-current \
+  --resistance results/total_resistance.tif \
+  --source example/data/resistance/source.tif \
+  --ground example/data/resistance/ground.tif \
+  --precision mixed \
+  --output current.tif
+```
+
+See `lmc-current --help` for command-line flags.
 
 ## Prerequisites
 
@@ -82,6 +102,7 @@ make test
 
 ## Documentation
 
+- [Resistance pipeline JSON specification](docs/pipeline-json-spec.md)
 - [Benchmarks](benchmarks/README.md)
 - [JavaScript API](lib/README.md)
 - [Example](example/README.md)
