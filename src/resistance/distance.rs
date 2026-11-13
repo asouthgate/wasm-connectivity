@@ -1,3 +1,24 @@
+/// Generate distances in cells, preserving missing mask cells. The caller
+/// supplies the distance for an absent feature class to retain its model rules.
+pub fn distance_generation(
+    mask: &[f64], nrows: usize, ncols: usize, empty_distance: f64,
+) -> Vec<f64> {
+    assert_eq!(mask.len(), nrows * ncols);
+    let mut distances = if !mask.iter().any(|&v| v.is_finite() && v != 0.0) {
+        vec![empty_distance; mask.len()]
+    } else if !mask.iter().any(|&v| v == 0.0) {
+        vec![0.0; mask.len()]
+    } else {
+        euclidean_distance_transform(mask, nrows, ncols)
+    };
+    for (distance, &cell) in distances.iter_mut().zip(mask) {
+        if !cell.is_finite() {
+            *distance = f64::NAN;
+        }
+    }
+    distances
+}
+
 // Compute the euclidean distance from nearest feature
 //
 // This implementation is based on the algorithm described in

@@ -1,4 +1,5 @@
-use super::distance::euclidean_distance_transform;
+use super::distance::distance_generation;
+use super::operations::distance_from_feature_power;
 
 // Cal road resistance from binary road raster, a buffer distance, and resistance parameters
 // # Arguments
@@ -20,33 +21,11 @@ pub fn cal_road_resistance(
     xmax: f64,
     pixw: f64,
 ) -> Vec<f64> {
-    let has_roads = road_binary.iter().any(|&v| v != 0.0 && v.is_finite());
+    let mut road_distance = distance_generation(road_binary, nrows, ncols, f64::INFINITY);
 
-    if !has_roads {
-        // No road features: valid (empty) cells have zero road resistance;
-        // missing (NaN) cells stay NaN.
-        return road_binary
-            .iter()
-            .map(|&v| if v.is_finite() { 0.0 } else { f64::NAN })
-            .collect();
-    }
-
-    let mut road_distance = euclidean_distance_transform(road_binary, nrows, ncols);
-
-    // `road_distance` is expressed in pixels; convert the buffer (metres)
-    // to pixels so the comparison is dimensionally consistent.
-    let buffer_cells = buffer / pixw;
-
-    for (i, value) in road_distance.iter_mut().enumerate() {
-        let d = *value;
-        *value = if !road_binary[i].is_finite() {
-            f64::NAN
-        } else if !d.is_finite() || d > buffer_cells {
-            0.0
-        } else {
-            ((1.0 - d / buffer_cells) * 0.5 + 0.5).powf(xmax) * resmax
-        };
-    }
+    distance_from_feature_power(
+        &mut road_distance, buffer / pixw, resmax, xmax, 0.0, |d| (1.0 - d) * 0.5 + 0.5,
+    );
     road_distance
 }
 

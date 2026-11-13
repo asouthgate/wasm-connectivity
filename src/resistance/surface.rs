@@ -1,4 +1,5 @@
-use super::distance::euclidean_distance_transform;
+use super::distance::distance_generation;
+use super::operations::ranker;
 
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
@@ -52,36 +53,18 @@ pub(crate) enum VegetationClass {
 }
 
 pub(crate) fn vegetation_mask(soft_surf: &[f64], class: VegetationClass) -> Vec<f64> {
-    soft_surf.iter().map(|&height| {
-        if !height.is_finite() {
-            return f64::NAN;
-        }
+    ranker(soft_surf, |height| {
         let present = match class {
             VegetationClass::UnmanagedHedge => height > 3.0 && height < 6.0,
             VegetationClass::Tree => height >= 6.0,
             VegetationClass::ManagedHedge => height > 1.0 && height < 3.0,
         };
         if present { 1.0 } else { 0.0 }
-    }).collect()
+    })
 }
 
 pub(crate) fn vegetation_distance(mask: &[f64], nrows: usize, ncols: usize) -> Vec<f64> {
-    let has_features = mask.iter().any(|&v| v == 1.0);
-    let has_empty = mask.iter().any(|&v| v == 0.0);
-    if !has_features {
-        // Missing classes retain the R reference's finite far-field distance.
-        mask.iter().map(|&v| if v.is_nan() { f64::NAN } else { MAX_D }).collect()
-    } else if !has_empty {
-        mask.iter().map(|&v| if v.is_nan() { f64::NAN } else { 0.0 }).collect()
-    } else {
-        let mut distance = euclidean_distance_transform(mask, nrows, ncols);
-        for (value, &cell) in distance.iter_mut().zip(mask) {
-            if cell.is_nan() {
-                *value = f64::NAN;
-            }
-        }
-        distance
-    }
+    distance_generation(mask, nrows, ncols, MAX_D)
 }
 
 #[cfg(test)]

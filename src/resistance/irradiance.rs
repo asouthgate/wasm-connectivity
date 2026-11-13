@@ -1,3 +1,5 @@
+use super::operations::power_response;
+
 const LOG10: f64 = 2.302585092994046;
 
 #[derive(Debug, Clone, Copy)]
@@ -7,13 +9,13 @@ struct Lamp {
     z: f64,
 }
 
-// Compute the raycasted irradiance from a single lamp to the terrain, taking into account soft and hard shadows
+// Compute the raycasted irradiance from a single lamp to the terrain, accounting for translucent attenuation and opaque occlusion
 //
 // Works by iterating over the pixels in the terrain that are within the cutoff distance of the lamp, 
 // and for each pixel, computing the distance to the lamp,
-// checking if there are any hard or soft shadows in the way.
-// If there are no hard shadows, the irradiance is computed based on the inverse square law,
-// and if there are soft shadows, the irradiance is reduced based on the amount of shading. 
+// checking for opaque blockers and translucent material along the ray.
+// If the ray is not blocked by opaque material, irradiance follows the inverse square law.
+// Translucent material reduces irradiance according to the accumulated path length.
 //
 // # Arguments
 // * irr: a mutable 2D array of f64 values, where the computed irradiance values will be stored
@@ -22,8 +24,8 @@ struct Lamp {
 // * ri_lamp: row index of the lamp
 // * cj_lamp: column index of the lamp
 // * z: height of the lamp above the terrain
-// * soft: a 2D array of f64 values representing the soft shadow heights
-// * hard: a 2D array of f64 values representing the hard shadow heights
+// * translucent: a 2D array of f64 values representing translucent surface heights
+// * opaque: a 2D array of f64 values representing opaque surface heights
 // * terr: a 2D array of f64 values representing the terrain heights
 // * absorb: the absorption coefficient for the irradiance
 // * pixw: the width of a pixel in the terrain
@@ -36,8 +38,8 @@ fn raycast(
     ri_lamp: usize,
     cj_lamp: usize,
     z: f64,
-    soft: &[f64],
-    hard: &[f64],
+    translucent: &[f64],
+    opaque: &[f64],
     terr: &[f64],
     absorb: f64,
     pixw: f64,
@@ -99,7 +101,7 @@ fn raycast(
             let mut shadow = 1.0f64;
             let mut shading = 0.0f64;
 
-            // now raycast from the lamp to the pixel, checking for hard and soft shadows
+            // now raycast from the lamp to the pixel, checking for opaque blockers and translucent material
             let step_i = pydist_base / pdist as f64;
             let step_j = pxdist_base / pdist as f64;
             let step_h = zdist / pdist as f64;
@@ -121,16 +123,16 @@ fn raycast(
 
                 let hiijj = cell_elev + step_h * frac;
 
-                let hard_val = hard[dii * n + djj];
+                let opaque_height = opaque[dii * n + djj];
                 let terr_val = terr[dii * n + djj];
-                let soft_val = soft[dii * n + djj];
+                let translucent_height = translucent[dii * n + djj];
                 
-                // if the hard shadow is above the ray, then the pixel is in shadow and we can break early
-                if hard_val.is_finite() && terr_val.is_finite() && hard_val + terr_val >= hiijj {
+                // Opaque material intercepting the ray blocks direct light.
+                if opaque_height.is_finite() && terr_val.is_finite() && opaque_height + terr_val >= hiijj {
                     shadow = 0.0;
                     break;
                 }
-                if soft_val.is_finite() && terr_val.is_finite() && soft_val + terr_val >= hiijj {
+                if translucent_height.is_finite() && terr_val.is_finite() && translucent_height + terr_val >= hiijj {
                     shading += pixw * xyzdist2.sqrt() / xydist;
                 }
             }
@@ -144,13 +146,13 @@ fn raycast(
     }
 }
 
-// Compute the irradiance from multiple lamps, taking into account soft and hard shadows
+// Compute the irradiance from multiple lamps, accounting for translucent attenuation and opaque occlusion
 //
 // # Arguments
 // * lamps: a 1D array of f64 values, where each lamp is represented
 //   by three consecutive values: row index, column index, and height above the terrain
-// * soft: a 2D array of f64 values representing the soft shadow heights
-// * hard: a 2D array of f64 values representing the hard shadow heights
+// * translucent: a 2D array of f64 values representing translucent surface heights
+// * opaque: a 2D array of f64 values representing opaque surface heights
 // * terr: a 2D array of f64 values representing the terrain heights
 // * m: number of rows in the terrain
 // * n: number of columns in the terrain
@@ -162,8 +164,8 @@ fn raycast(
 // A 2D array of f64 values, where each value is the computed irradiance
 pub fn irradiance_run(
     lamps: &[f64],
-    soft: &[f64],
-    hard: &[f64],
+    translucent: &[f64],
+    opaque: &[f64],
     terr: &[f64],
     m: usize,
     n: usize,
@@ -175,8 +177,8 @@ pub fn irradiance_run(
     assert_eq!(lamps.len() % 3, 0, "lamps array length must be a multiple of 3");
     let nlamps = lamps.len() / 3;
     let total = m * n;
-    assert_eq!(soft.len(), total);
-    assert_eq!(hard.len(), total);
+    assert_eq!(translucent.len(), total);
+    assert_eq!(opaque.len(), total);
     assert_eq!(terr.len(), total);
 
     let mut parsed: Vec<Lamp> = Vec::with_capacity(nlamps);
@@ -198,8 +200,8 @@ pub fn irradiance_run(
             lamp.ri,
             lamp.cj,
             lamp.z,
-            soft,
-            hard,
+            translucent,
+            opaque,
             terr,
             absorb,
             pixw,
@@ -231,7 +233,7 @@ pub fn irradiance_to_resistance(
     }
     for v in io_raster.iter_mut().take(total) {
         if v.is_finite() && *v > 0.0 {
-            *v = (*v / maxpi).powf(xmax) * resmax;
+            *v = power_response(*v / maxpi, xmax, resmax);
         }
     }
 }
@@ -253,12 +255,12 @@ mod tests {
         let m = 11;
         let n = 11;
         let size = m * n;
-        let soft = vec![0.0f64; size];
-        let hard = vec![0.0f64; size];
+        let translucent = vec![0.0f64; size];
+        let opaque = vec![0.0f64; size];
         let terr = vec![0.0f64; size];
         let lamps = vec![5.0, 5.0, 10.0];
 
-        let result = irradiance_run(&lamps, &soft, &hard, &terr, m, n, 1.0, 100.0, 0.0, 0.5);
+        let result = irradiance_run(&lamps, &translucent, &opaque, &terr, m, n, 1.0, 100.0, 0.0, 0.5);
 
         let adjacent = result[5 * n + 6];
         assert!(
@@ -282,22 +284,22 @@ mod tests {
     }
 
     #[test]
-    fn test_irradiance_hard_shadow() {
+    fn test_irradiance_opaque_occlusion() {
         let m = 5;
         let n = 5;
         let size = m * n;
-        let mut hard = vec![0.0f64; size];
-        hard[2 * n + 3] = 10.0;
-        let soft = vec![0.0f64; size];
+        let mut opaque = vec![0.0f64; size];
+        opaque[2 * n + 3] = 10.0;
+        let translucent = vec![0.0f64; size];
         let terr = vec![0.0f64; size];
         let lamps = vec![2.0, 2.0, 10.0];
 
-        let result = irradiance_run(&lamps, &soft, &hard, &terr, m, n, 1.0, 100.0, 0.0, 0.5);
+        let result = irradiance_run(&lamps, &translucent, &opaque, &terr, m, n, 1.0, 100.0, 0.0, 0.5);
 
         let behind_wall = result[2 * n + 4];
         assert!(
             behind_wall <= 0.001,
-            "shadow behind hard surface, got {}",
+            "shadow behind opaque surface, got {}",
             behind_wall
         );
 
@@ -315,11 +317,11 @@ mod tests {
         let size = m * n;
         let mut terr = vec![0.0f64; size];
         terr[2 * n + 2] = f64::NAN;
-        let soft = vec![0.0f64; size];
-        let hard = vec![0.0f64; size];
+        let translucent = vec![0.0f64; size];
+        let opaque = vec![0.0f64; size];
         let lamps = vec![2.0, 2.0, 10.0];
 
-        let result = irradiance_run(&lamps, &soft, &hard, &terr, m, n, 1.0, 100.0, 0.0, 0.5);
+        let result = irradiance_run(&lamps, &translucent, &opaque, &terr, m, n, 1.0, 100.0, 0.0, 0.5);
 
         assert!(
             result.iter().all(|&v| v.is_finite()),

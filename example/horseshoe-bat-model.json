@@ -1,0 +1,329 @@
+{
+  "name": "greater_horseshoe_bat",
+  "inputs": {
+    "dtm": {
+      "type": "raster_topography"
+    },
+    "dsm": {
+      "type": "raster_surface"
+    },
+    "landcover": {
+      "type": "raster_ranked"
+    },
+    "buildings": {
+      "type": "vector_occluder"
+    },
+    "roads": {
+      "type": "vector_distance"
+    },
+    "rivers": {
+      "type": "vector_distance"
+    },
+    "generic": {
+      "type": "vector_resistance"
+    },
+    "lamps": {
+      "type": "raycaster_point_source"
+    }
+  },
+  "nodes": {
+    "surfaces": {
+      "op": "surface_heights",
+      "inputs": {
+        "topography": "inputs.dtm",
+        "surface": "inputs.dsm",
+        "occluders": "inputs.buildings"
+      }
+    },
+    "road_res": {
+      "input": "inputs.roads",
+      "operations": [
+        {
+          "op": "power_response",
+          "parameters": {
+            "input_range": [
+              0,
+              200
+            ],
+            "base_range": [
+              1,
+              0.5
+            ],
+            "exponent": 5,
+            "scale": 10,
+            "offset": 0,
+            "above": 0
+          }
+        }
+      ]
+    },
+    "river_res": {
+      "input": "inputs.rivers",
+      "operations": [
+        {
+          "op": "power_response",
+          "parameters": {
+            "input_range": [
+              0,
+              10
+            ],
+            "base_range": [
+              0,
+              1
+            ],
+            "exponent": 4,
+            "scale": 2000,
+            "offset": 0,
+            "above": 2000
+          }
+        }
+      ]
+    },
+    "landscape_res": {
+      "input": "inputs.landcover",
+      "operations": [
+        {
+          "op": "round"
+        },
+        {
+          "op": "discrete_map",
+          "parameters": {
+            "intervals": {
+              "[1,1]": 2,
+              "[2,2]": 5,
+              "[3,3]": 6,
+              "[4,8]": 4,
+              "[9,10]": 3,
+              "[11,11]": 4,
+              "[12,12]": 8,
+              "[13,18]": 7,
+              "[19,19]": 4,
+              "[20,21]": 8
+            },
+            "unmatched": "nodata"
+          }
+        },
+        {
+          "op": "override",
+          "inputs": {
+            "where": "inputs.buildings"
+          },
+          "parameters": {
+            "value": 8,
+            "interval": "(0,inf)"
+          }
+        },
+        {
+          "op": "power_response",
+          "parameters": {
+            "input_range": [
+              0,
+              8
+            ],
+            "base_range": [
+              0,
+              1
+            ],
+            "exponent": 5,
+            "scale": 100,
+            "offset": 0,
+            "above": 100
+          }
+        },
+        {
+          "op": "mask_na",
+          "inputs": {
+            "mask": [
+              "nodes.surfaces.translucent",
+              "inputs.landcover"
+            ]
+          }
+        }
+      ]
+    },
+    "unmanaged_hedge_res": {
+      "input": "nodes.surfaces.translucent",
+      "operations": [
+        {
+          "op": "discrete_map",
+          "parameters": {
+            "intervals": {
+              "(3,6)": 1
+            },
+            "unmatched": 0
+          }
+        },
+        {
+          "op": "distance",
+          "parameters": {
+            "units": "metres",
+            "when_empty": "infinity"
+          }
+        },
+        {
+          "op": "power_response",
+          "parameters": {
+            "input_range": [
+              0,
+              10
+            ],
+            "base_range": [
+              0.125,
+              0.625
+            ],
+            "exponent": 3,
+            "scale": 22000,
+            "offset": 1,
+            "above": 5373.09375
+          }
+        }
+      ]
+    },
+    "tree_res": {
+      "input": "nodes.surfaces.translucent",
+      "operations": [
+        {
+          "op": "discrete_map",
+          "parameters": {
+            "intervals": {
+              "[6,inf)": 1
+            },
+            "unmatched": 0
+          }
+        },
+        {
+          "op": "distance",
+          "parameters": {
+            "units": "metres",
+            "when_empty": "infinity"
+          }
+        },
+        {
+          "op": "power_response",
+          "parameters": {
+            "input_range": [
+              0,
+              10
+            ],
+            "base_range": [
+              0.25,
+              0.75
+            ],
+            "exponent": 3,
+            "scale": 22000,
+            "offset": 1,
+            "above": 9283.25
+          }
+        }
+      ]
+    },
+    "managed_hedge_res": {
+      "input": "nodes.surfaces.translucent",
+      "operations": [
+        {
+          "op": "discrete_map",
+          "parameters": {
+            "intervals": {
+              "(1,3)": 1
+            },
+            "unmatched": 0
+          }
+        },
+        {
+          "op": "distance",
+          "parameters": {
+            "units": "metres",
+            "when_empty": "infinity"
+          }
+        },
+        {
+          "op": "power_response",
+          "parameters": {
+            "input_range": [
+              0,
+              10
+            ],
+            "base_range": [
+              0.5,
+              1
+            ],
+            "exponent": 3,
+            "scale": 22000,
+            "offset": 1,
+            "above": 22002
+          }
+        }
+      ]
+    },
+    "linear_res": {
+      "op": "maximum",
+      "inputs": [
+        "nodes.unmanaged_hedge_res",
+        "nodes.tree_res",
+        "nodes.managed_hedge_res"
+      ]
+    },
+    "irradiance": {
+      "op": "irradiance",
+      "inputs": {
+        "point_sources": "inputs.lamps",
+        "topography": "inputs.dtm",
+        "translucent_surface": "nodes.surfaces.translucent",
+        "opaque_surface": "nodes.surfaces.opaque"
+      },
+      "parameters": {
+        "cutoff_metres": 100,
+        "sensor_height_metres": 0,
+        "absorption": 0.5
+      }
+    },
+    "lamp_res": {
+      "input": "nodes.irradiance",
+      "operations": [
+        {
+          "op": "normalise",
+          "parameters": {
+            "method": "positive_maximum",
+            "when_zero": 0
+          }
+        },
+        {
+          "op": "power_response",
+          "parameters": {
+            "input_range": [
+              0,
+              1
+            ],
+            "base_range": [
+              0,
+              1
+            ],
+            "exponent": 1,
+            "scale": 100000000,
+            "offset": 0
+          }
+        },
+        {
+          "op": "mask_na",
+          "inputs": {
+            "mask": [
+              "nodes.surfaces.translucent"
+            ]
+          }
+        }
+      ]
+    },
+    "total_res": {
+      "op": "sum",
+      "inputs": [
+        "nodes.road_res",
+        "nodes.river_res",
+        "nodes.landscape_res",
+        "nodes.linear_res",
+        "nodes.lamp_res",
+        "inputs.generic"
+      ]
+    }
+  },
+  "output": "nodes.total_res"
+}
