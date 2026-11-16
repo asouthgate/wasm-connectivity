@@ -5,101 +5,49 @@ scientific `lmConnect` code.
 
 ## Build
 
-To build the project, from the repository root directory, run:
+See the repository [build instructions](../README.md#build).
 
-```sh
-make build
-```
+## Pipeline usage
 
-## Local dependency
+Pass your own model JSON, named input arrays, and grid to
+`runResistancePipelineBrowserAsync(modelJson, inputs, grid)`. The library executes
+the operations defined by your model and returns `output` and named `layers`.
 
-To install this package as a local dependency, include
-it in `package.json` as:
+- `modelJson` is a JSON string containing your model definition.
+- `inputs` supplies the data for each input named in your model. For example,
+  `{ habitat: habitatData }` supplies `habitatData` for the model input called
+  `"habitat"`. The data must be a `Float32Array`, `Float64Array`, or `number[]`.
+- `grid` is `{ nrows: number, ncols: number, cellsize: number }`: positive integer
+  row/column counts and a positive cell size in metres.
 
-```json
-{
-  "dependencies": {
-    "lmConnect": "file:../lib"
-  }
-}
-```
-
-## Minimal integration
-
-As an example of using the bindings to run connectivity analysis,
-once resistance, source, and ground f64 arrys are initialised, the
-`solveCurrentAsync` function can be run as follows.
-In this example, there is a single source and ground pixel, each set
-to `1`.
+Raster inputs contain `nrows * ncols` values in row-major order, starting at the
+northwest cell. Supply aligned arrays: `vector_mask` inputs contain `1` on
+features and `0` elsewhere; the model's `distance` operation calculates distances
+in metres. Point-source inputs contain flattened
+`[xPixel, yPixel, heightMetres, ...]` triples, with pixel coordinates measured from
+the northwest corner (x increases east, y increases south). Use `NaN` for missing
+raster cells. If the model declares an explicit grid, its dimensions and cell size
+must match `grid`.
 
 ```js
-import {
-  rasterizeGeojsonAsync,
-  runResistancePipelineBrowserAsync,
-  solveCurrentAsync,
-} from 'lmConnect';
-
-const nrows = 32;
-const ncols = 32;
-const size = nrows * ncols;
-const noRoads = new Float32Array(size);
-const noRivers = new Float32Array(size);
-
-// One building as an example
-const buildings = {
-  type: 'FeatureCollection',
-  features: [{
-    type: 'Feature',
-    properties: { value: 10 },
-    geometry: {
-      type: 'Polygon',
-      coordinates: [[[12, 12], [20, 12], [20, 20], [12, 20], [12, 12]]],
-    },
-  }],
-};
-
-// Rasterise building heights, with zero outside footprints.
-const buildingHeightsMask = await rasterizeGeojsonAsync(buildings, {
-  nrows, ncols, xmin: 0, ymax: nrows, cellsize: 1,
-});
-
-// Trivial DTM/DSM rasters
-const dtm = new Float32Array(size).fill(100);
-const dsm = dtm.slice();
-
-// Define the resistance parameters used for the pipeline
-const params = {
-  road_buffer: 200, road_resmax: 10, road_xmax: 5,
-  river_buffer: 10, river_resmax: 2000, river_xmax: 4,
-  landscape_rankmax: 8, landscape_resmax: 100, landscape_xmax: 5,
-  linear_buffer: 10, linear_rankmax: 4, linear_resmax: 22000, linear_xmax: 3,
-  lamp_resmax: 1e8, lamp_xmax: 1, lamp_ext: 100,
-  pixw: 1, nrows, ncols,
-};
-
-// Run the resistance pipeline
-const resistance = await runResistancePipelineBrowserAsync(
-  noRoads, noRivers, buildingHeightsMask, dtm, dsm,
-  new Float32Array(size).fill(1), // Generic resistance raster.
-  new Float32Array(0), // No lamp data.
-  new Float32Array(size).fill(4), // Landscape conductance raster.
-  JSON.stringify(params),
-);
-
-// Define a simple source and ground with one pixel each
-const source = new Float64Array(size);
-const ground = new Float64Array(size);
-source[0] = 1;
-ground[size - 1] = 1;
-
-// Solve current and voltage from the resistance raster.
-const result = await solveCurrentAsync(
-  resistance.total_res, nrows, ncols, -9999,
-  source, ground,
-);
-if (result.error) throw new Error(result.error);
-console.log(result.output.current_map, result.output.voltages);
+// modelJson has already been loaded or produced with JSON.stringify(model).
+// This example assumes your model declares an input named "habitat".
+const grid = { nrows: 100, ncols: 200, cellsize: 5 };
+const inputs = { habitat: new Float64Array(grid.nrows * grid.ncols).fill(1) };
+const result = await runResistancePipelineBrowserAsync(modelJson, inputs, grid);
+// result.output is the final Float32Array.
+// Intermediate arrays are grouped by the model's step name, then output name:
+// result.layers[stepName][outputName]
 ```
+
+Each named step under `nodes` in your model appears under the same name in
+`result.layers`. Most steps produce one array called `data`; for example, a step
+named `habitat_resistance` produces `result.layers.habitat_resistance.data`.
+Steps with multiple outputs use their declared output names instead.
+
+- [Model JSON specification](../docs/pipeline-json-spec.md)
+- [Example model: horseshoe bat](../example/horseshoe-bat-model.json)
+- [JavaScript function signatures and result types](index.d.ts)
 
 ## Bundler requirements
 

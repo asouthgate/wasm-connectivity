@@ -42,27 +42,13 @@ export function runGeospatialPipelineMgAsync(
   srcData: RasterInput, gndData: RasterInput, options?: GeospatialOptions,
 ): Promise<string>;
 
-export function runGeospatialPipelineMgAsync(
-  baseRaster: RasterInput, nrows: number, ncols: number, nodata: number,
-  geojsonStr: string, layerParamsStr: string, xmin: number, ymax: number,
-  cellsize: number, srcData: RasterInput, gndData: RasterInput,
-  maxIter?: number, tol?: number, useDirichletGround?: boolean, precision?: Precision,
-): Promise<string>;
-
 export function runGeospatialPipelineMgStencilAsync(
   baseRaster: RasterInput, nrows: number, ncols: number, nodata: number,
   xmin: number, ymax: number, cellsize: number,
   srcData: RasterInput, gndData: RasterInput, options?: GeospatialOptions,
 ): Promise<string>;
 
-export function runGeospatialPipelineMgStencilAsync(
-  baseRaster: RasterInput, nrows: number, ncols: number, nodata: number,
-  geojsonStr: string, layerParamsStr: string, xmin: number, ymax: number,
-  cellsize: number, srcData: RasterInput, gndData: RasterInput,
-  maxIter?: number, tol?: number, useDirichletGround?: boolean, precision?: Precision,
-): Promise<string>;
-
-export interface RasterFeatureCollection {
+export interface VectorFeatureCollection {
   type: "FeatureCollection";
   features: Array<{
     type: "Feature";
@@ -85,27 +71,20 @@ export interface RasterGrid {
 }
 
 export function rasterizeGeojsonAsync(
-  features: RasterFeatureCollection, grid: RasterGrid,
+  features: VectorFeatureCollection, grid: RasterGrid,
 ): Promise<Float64Array>;
 
 export interface ResistanceOutput {
   nrows: number;
   ncols: number;
-  total_res: Float32Array;
-  lamp_res: Float32Array;
-  road_res: Float32Array;
-  river_res: Float32Array;
-  landscape_res: Float32Array;
-  linear_res: Float32Array;
-  generic_res: Float32Array;
-  soft_surf: Float32Array;
-  hard_surf: Float32Array;
+  output: Float32Array;
+  layers: Record<string, Record<string, Float32Array>>;
 }
 
+/** Inputs use model names: prepared rasters, feature masks for vector_mask, or pixel x/y/height triples. */
 export function runResistancePipelineBrowserAsync(
-  roadBinary: RasterInput, riverBinary: RasterInput, buildingHeightsMask: RasterInput,
-  dtm: RasterInput, dsm: RasterInput, genericResistance: RasterInput,
-  lamps: RasterInput, landscapeConductance: RasterInput, paramsJson: string,
+  modelJson: string, inputs: Record<string, RasterInput>,
+  grid: { nrows: number; ncols: number; cellsize: number },
 ): Promise<ResistanceOutput>;
 
 export function roostFinderComputeAsync(

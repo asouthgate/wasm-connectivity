@@ -50,7 +50,7 @@ pub enum Input {
     RasterTopography {},
     RasterSurface {},
     RasterRanked {},
-    VectorDistance {},
+    VectorMask {},
     VectorOccluder {},
     VectorResistance {},
     RaycasterPointSource {},

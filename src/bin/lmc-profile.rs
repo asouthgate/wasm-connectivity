@@ -43,7 +43,7 @@ fn emit(resolution: usize, solver: &str, ground: &str, precision: &str, total_it
     println!("{}", serde_json::to_string_pretty(&rec).unwrap());
 }
 
-const USAGE: &str = "Usage: lmc-profile RESOLUTION --solver jacobi|mg|mg-lowmem --ground shunt|dirichlet [--precision f32|f64|mixed] [--timings] [--residuals]\n\nMemory accounting is written as JSON to stdout. Timing tables and residual traces go to stderr.\nMixed precision requires --solver mg-lowmem; timing and residual diagnostics require a multigrid solver.";
+const USAGE: &str = "Usage: lmc-profile RESOLUTION --solver mg|mg-lowmem --ground shunt|dirichlet [--precision f32|f64|mixed] [--timings] [--residuals]\n\nMemory accounting is written as JSON to stdout. Timing tables and residual traces go to stderr.\nMixed precision requires --solver mg-lowmem.";
 
 struct Args {
     resolution: usize,
@@ -94,7 +94,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             .get(i + 1)
             .ok_or_else(|| format!("missing value for {flag}"))?;
         let target = match flag {
-            "--solver" if matches!(value.as_str(), "jacobi" | "mg" | "mg-lowmem") => &mut solver,
+            "--solver" if matches!(value.as_str(), "mg" | "mg-lowmem") => &mut solver,
             "--ground" if matches!(value.as_str(), "shunt" | "dirichlet") => &mut ground,
             "--precision" if matches!(value.as_str(), "f32" | "f64" | "mixed") => &mut precision,
             _ => return Err(format!("unsupported value for {flag}: {value}")),
@@ -108,9 +108,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let precision = precision.unwrap_or_else(|| "f64".into());
     if precision == "mixed" && solver != "mg-lowmem" {
         return Err("mixed precision requires --solver mg-lowmem".into());
-    }
-    if solver == "jacobi" && (timings || residuals) {
-        return Err("timing and residual diagnostics require --solver mg or mg-lowmem".into());
     }
     Ok(Args {
         resolution,
@@ -207,18 +204,6 @@ fn run<F: Real>(resolution: usize, solver: String, ground: String, options: MgOp
     let tol = F::DEFAULT_TOLERANCE;
     let remove_average = true;
     let result = match solver.as_str() {
-        "jacobi" => solve::solve_raster_sources_jacobi(
-            &resistance,
-            base.nrows,
-            base.ncols,
-            base.nodata,
-            &src.data,
-            &gnd.data,
-            max_iter,
-            tol,
-            remove_average,
-            ground_mode,
-        ),
         "mg" => solve::solve_raster_sources_mg_with_options(
             &resistance,
             base.nrows,
@@ -290,7 +275,7 @@ mod tests {
         assert!(traced.timings && traced.residuals);
         assert_eq!(traced.precision, "mixed");
         assert!(parse(&["500", "--solver", "mg", "--ground", "shunt", "--precision", "mixed"]).is_err());
-        assert!(parse(&["500", "--solver", "jacobi", "--ground", "shunt", "--timings"]).is_err());
+        assert!(parse(&["500", "--solver", "jacobi", "--ground", "shunt"]).is_err());
         assert!(parse(&["500", "--solver", "mg", "--ground", "shunt", "--residuals", "--residuals"]).is_err());
     }
 

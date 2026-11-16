@@ -37,6 +37,15 @@ pub struct Grid {
     pub pixel_width: f64,
 }
 
+impl Grid {
+    pub(crate) fn contains_point(&self, point: &[f64]) -> bool {
+        point[0] >= 0.0
+            && point[1] >= 0.0
+            && point[0] < self.ncols as f64
+            && point[1] < self.nrows as f64
+    }
+}
+
 pub type NodeOutputs = BTreeMap<String, PipelineData>;
 
 impl Model {
@@ -96,7 +105,7 @@ impl Graph<'_> {
                     Input::RasterTopography {}
                     | Input::RasterSurface {}
                     | Input::RasterRanked {}
-                    | Input::VectorDistance {}
+                    | Input::VectorMask {}
                     | Input::VectorOccluder {}
                     | Input::VectorResistance {},
                     PipelineData::Raster(values),
@@ -111,12 +120,7 @@ impl Graph<'_> {
             if let PipelineData::Points(points) = field {
                 let retained = points
                     .chunks_exact(3)
-                    .filter(|point| {
-                        point[0] >= 0.0
-                            && point[1] >= 0.0
-                            && point[0] < grid.ncols as f64
-                            && point[1] < grid.nrows as f64
-                    })
+                    .filter(|point| grid.contains_point(point))
                     .flatten()
                     .copied()
                     .collect();

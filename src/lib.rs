@@ -12,7 +12,7 @@
 //!
 //! 1. [`geospatial::rasterize_values`] converts GeoJSON features into raster
 //!    values.
-//! 2. [`resistance::pipeline`] computes resistance from aligned input rasters
+//! 2. [`resistance::model`] computes resistance from aligned input rasters
 //!    and lamp data.
 //! 3. [`solve`] computes current and voltage maps from the resulting resistance
 //!    raster and the caller's source and ground rasters.
@@ -21,7 +21,7 @@
 //! Ground behaviour is selected through [`solve::GroundMode`]. See
 //! [`raster::fill_nodata`] for the solver's treatment of invalid resistance cells.
 //!
-//! # Native Rust
+//! # Rust usage
 //!
 //! Use the module APIs for Rust inputs and structured results. For example:
 //!
@@ -79,82 +79,16 @@ pub use circuit::build_circuit_model;
 use wasm_bindgen::prelude::*;
 use serde::Serialize;
 use serde_json::json;
+mod wasm_output;
+use wasm_output::{encode_f64_as_f32_base64, json_response, maps_to_f32_reusing_buffers};
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
 pub const DEFAULT_MAX_ITER: usize = 100_000;
 pub const DEFAULT_TOL: f64 = <f64 as Real>::DEFAULT_TOLERANCE;
 
-fn json_response<T: Serialize>(output: &T) -> String {
-    serde_json::to_string(output).unwrap_or_else(|e| {
-        serde_json::to_string(&json!({ "error": e.to_string() }))
-            .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
-    })
-}
-
-const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-fn encode_base64(data: &[u8]) -> String {
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(BASE64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        out.push(BASE64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            BASE64_CHARS[((triple >> 6) & 0x3F) as usize] as char
-        } else {
-            b'=' as char
-        });
-        out.push(if chunk.len() > 2 {
-            BASE64_CHARS[(triple & 0x3F) as usize] as char
-        } else {
-            b'=' as char
-        });
-    }
-    out
-}
-
-fn f64_to_base64(data: &[f64]) -> String {
-    let mut bytes = vec![0u8; data.len() * 4];
-    for (i, &v) in data.iter().enumerate() {
-        bytes[i * 4..(i + 1) * 4].copy_from_slice(&(v as f32).to_le_bytes());
-    }
-    encode_base64(&bytes)
-}
-
 #[wasm_bindgen(start)]
 pub fn init_panic_hook() {
     console_error_panic_hook::set_once();
-}
-
-#[wasm_bindgen]
-pub fn solve_raster_sources_jacobi(
-    resistance_data: Vec<f64>,
-    nrows: usize,
-    ncols: usize,
-    nodata: f64,
-    source_data: Vec<f64>,
-    ground_data: Vec<f64>,
-    max_iter: usize,
-    tol: f64,
-    use_dirichlet_ground: bool,
-) -> String {
-    let ground_mode = if use_dirichlet_ground { solve::GroundMode::Dirichlet } else { solve::GroundMode::Shunt };
-    let annotated = solve::solve_raster_sources_jacobi(
-        &resistance_data,
-        nrows,
-        ncols,
-        nodata,
-        &source_data,
-        &ground_data,
-        max_iter,
-        tol,
-        true,
-        ground_mode,
-    );
-    json_response(&annotated)
 }
 
 #[wasm_bindgen]
@@ -223,20 +157,6 @@ pub fn solve_raster_sources_mg_stencil(
     use_dirichlet_ground: bool,
 ) -> String { solve_raster_sources_mg_stencil_impl(resistance_data, nrows, ncols, nodata, source_data, ground_data, max_iter, tol, use_dirichlet_ground) }
 
-// Compute currents and check convergence using the f64 master voltage first.
-// Only the browser output is rounded; reuse input buffers rather than allocate maps.
-fn compact_mixed_maps(
-    output: solve::RasterOutput<f64>, mut voltage: Vec<f32>, mut current: Vec<f32>,
-) -> solve::RasterOutput<f32> {
-    assert_eq!(voltage.len(), output.voltages.len());
-    assert_eq!(current.len(), output.current_map.len());
-    for (dest, &value) in voltage.iter_mut().zip(&output.voltages) { *dest = value as f32; }
-    for (dest, &value) in current.iter_mut().zip(&output.current_map) { *dest = value as f32; }
-    solve::RasterOutput {
-        voltages: voltage, current_map: current, nrows: output.nrows, ncols: output.ncols,
-    }
-}
-
 #[wasm_bindgen]
 pub fn solve_raster_sources_mg_mixed(
     resistance_data: Vec<f32>, nrows: usize, ncols: usize, nodata: f32,
@@ -249,7 +169,7 @@ pub fn solve_raster_sources_mg_mixed(
         max_iter, tol, true, ground_mode, linalg::multigrid::MgOptions::default(),
     );
     let annotated = solve::AnnotatedOutput {
-        output: compact_mixed_maps(annotated.output, source_data, ground_data),
+        output: maps_to_f32_reusing_buffers(annotated.output, source_data, ground_data),
         total_iters: annotated.total_iters,
         error: annotated.error,
     };
@@ -269,7 +189,7 @@ pub fn run_geospatial_pipeline_mg_mixed(
         &base_raster, nrows, ncols, nodata, &geojson_str, &layer_params_str, xmin, ymax, cellsize,
         &mut source_data, &ground_data, max_iter, tol, ground_mode,
     );
-    let maps = compact_mixed_maps(solve::RasterOutput {
+    let maps = maps_to_f32_reusing_buffers(solve::RasterOutput {
         voltages: output.voltage_map, current_map: output.current_map, nrows, ncols,
     }, source_data, ground_data);
     let output = geospatial::GeospatialOutput {
@@ -514,63 +434,71 @@ pub fn rasterize_geojson_f32(
         &geospatial::GeoTransform { xmin, ymax, cellsize }, buffer)
 }
 
-/// Building heights are relative to DTM, with zero outside footprints.
-/// Positive supplied heights override DSM minus DTM.
+/// Named, already-prepared input arrays for the model executor.
 #[wasm_bindgen]
-pub fn run_resistance_pipeline_browser(
-    road_binary: Vec<f64>,
-    river_binary: Vec<f64>,
-    building_heights_mask: Vec<f64>,
-    dtm: Vec<f64>,
-    dsm: Vec<f64>,
-    generic_resistance: Vec<f64>,
-    lamps: Vec<f64>,
-    landscape_conductance: Vec<f64>,
-    params_json: String,
-) -> Result<BrowserResistanceOutput, String> {
-    let params: resistance::pipeline::ResistanceParams = serde_json::from_str(&params_json)
-        .map_err(|e| format!("Invalid params JSON: {}", e))?;
-    let output = resistance::pipeline::run_resistance_pipeline_impl(
-        &road_binary, &river_binary, &building_heights_mask, None, &dtm, &dsm,
-        &generic_resistance, &lamps, &params, Some(&landscape_conductance), None, false,
-    );
-    drop((road_binary, river_binary, building_heights_mask, dtm, dsm,
-        generic_resistance, lamps, landscape_conductance));
-    Ok(resistance_output_to_binary(output))
+#[derive(Default)]
+pub struct BrowserResistanceInputs {
+    values: std::collections::HashMap<String, Vec<f64>>,
 }
 
-/// Like [`run_resistance_pipeline_browser`], but skips the raycasted irradiance
-/// and instead derives lamp resistance from a pre-computed light map (an
-/// irradiance raster already aligned to the model grid, length `nrows*ncols`).
-/// The light map is normalised and scaled by the lamp resistance factor inside
-/// `run_resistance_pipeline`.
 #[wasm_bindgen]
-pub fn run_resistance_pipeline_browser_with_lightmap(
-    road_binary: Vec<f64>,
-    river_binary: Vec<f64>,
-    building_heights_mask: Vec<f64>,
-    dtm: Vec<f64>,
-    dsm: Vec<f64>,
-    generic_resistance: Vec<f64>,
-    lightmap: Vec<f64>,
-    landscape_conductance: Vec<f64>,
-    params_json: String,
+impl BrowserResistanceInputs {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self { Self::default() }
+
+    pub fn insert(&mut self, name: String, values: Vec<f64>) -> Result<(), String> {
+        if self.values.contains_key(&name) {
+            return Err(format!("duplicate model input: {name}"));
+        }
+        self.values.insert(name, values);
+        Ok(())
+    }
+}
+
+/// Execute the same model JSON and prepared input types used by the native CLI.
+/// Vector-mask inputs are feature masks; point sources are pixel x/y/height triples.
+#[wasm_bindgen]
+pub fn run_resistance_pipeline_browser(
+    model_json: String,
+    inputs: &mut BrowserResistanceInputs,
+    nrows: usize,
+    ncols: usize,
+    cellsize: f64,
 ) -> Result<BrowserResistanceOutput, String> {
-    let params: resistance::pipeline::ResistanceParams = serde_json::from_str(&params_json)
-        .map_err(|e| format!("Invalid params JSON: {}", e))?;
-    let output = resistance::pipeline::run_resistance_pipeline_impl(
-        &road_binary, &river_binary, &building_heights_mask, None, &dtm, &dsm,
-        &generic_resistance, &[], &params, Some(&landscape_conductance),
-        Some(&lightmap), false,
-    );
-    drop((road_binary, river_binary, building_heights_mask, dtm, dsm,
-        generic_resistance, lightmap, landscape_conductance));
-    Ok(resistance_output_to_binary(output))
+    use resistance::model::{Grid, Input, Model, PipelineData};
+    use std::sync::Arc;
+
+    let model = Model::from_json(&model_json)?;
+    let graph = model.compile()?;
+    let fields = std::mem::take(&mut inputs.values).into_iter().map(|(name, values)| {
+        let spec = model.inputs.get(&name)
+            .ok_or_else(|| format!("undeclared model input supplied: {name}"))?;
+        let field = match spec {
+            Input::RaycasterPointSource {} => PipelineData::Points(Arc::new(values)),
+            _ => PipelineData::raster(values),
+        };
+        Ok((name, field))
+    }).collect::<Result<_, String>>()?;
+    let (output, layers) = graph.run_with_layers(fields, Grid {
+        nrows, ncols, pixel_width: cellsize,
+    })?;
+    let mut names = Vec::new();
+    let mut rasters = vec![Arc::new(output)];
+    for (node, outputs) in layers {
+        for (port, field) in outputs {
+            if let PipelineData::Raster(values) = field {
+                names.push([node.clone(), port]);
+                rasters.push(values);
+            }
+        }
+    }
+    Ok(BrowserResistanceOutput { names, rasters, nrows, ncols })
 }
 
 #[wasm_bindgen]
 pub struct BrowserResistanceOutput {
-    rasters: [Vec<f64>; 9],
+    names: Vec<[String; 2]>,
+    rasters: Vec<std::sync::Arc<Vec<f64>>>,
     nrows: usize,
     ncols: usize,
 }
@@ -583,19 +511,15 @@ impl BrowserResistanceOutput {
     #[wasm_bindgen(getter)]
     pub fn ncols(&self) -> usize { self.ncols }
 
-    /// Consume one raster in browser field order, returning the existing f32 precision.
+    /// Node and port names corresponding to rasters after the selected output.
+    pub fn layer_names(&self) -> String {
+        serde_json::to_string(&self.names).expect("layer names are JSON strings")
+    }
+
+    /// Consume the selected output (index 0) or a named layer, retaining f32 transport.
     pub fn take_raster(&mut self, index: usize) -> Result<Vec<f32>, String> {
         let raster = self.rasters.get_mut(index).ok_or("Unknown resistance raster")?;
-        Ok(std::mem::take(raster).into_iter().map(|value| value as f32).collect())
-    }
-}
-
-fn resistance_output_to_binary(output: resistance::pipeline::ResistanceOutput) -> BrowserResistanceOutput {
-    BrowserResistanceOutput {
-        rasters: [output.total_res, output.lamp_res, output.road_res, output.river_res,
-            output.landscape_res, output.linear_res, output.generic_res, output.soft_surf, output.hard_surf],
-        nrows: output.nrows,
-        ncols: output.ncols,
+        Ok(std::mem::take(raster).iter().map(|&value| value as f32).collect())
     }
 }
 
@@ -745,7 +669,7 @@ fn run_roost_finder(
     for iy in (0..grid_size).rev() {
         north_first.extend_from_slice(&surface[iy * grid_size..(iy + 1) * grid_size]);
     }
-    let surface_base64 = f64_to_base64(&north_first);
+    let surface_base64 = encode_f64_as_f32_base64(&north_first);
 
     Ok(RoostFinderOutput {
         x: result.x,
@@ -764,32 +688,6 @@ fn run_roost_finder(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn mixed_browser_maps_reuse_f32_buffers_after_f64_current_calculation() {
-        let mut source = vec![1.0_f32, 0.0, 0.0];
-        let ground = vec![0.0_f32, 0.0, 1.0];
-        let voltage_ptr = source.as_ptr();
-        let current_ptr = ground.as_ptr();
-        let result = solve::mixed::solve_raster_sources_mg_mixed_with_options(
-            &[1e-6_f32; 3], 1, 3, -9999.0, &mut source, &ground, 1000, 1e-3,
-            false, solve::GroundMode::Shunt, linalg::multigrid::MgOptions::default(),
-        );
-        assert!(result.error.is_none());
-        let expected_voltage: Vec<f32> = result.output.voltages.iter().map(|&v| v as f32).collect();
-        let expected_current: Vec<f32> = result.output.current_map.iter().map(|&v| v as f32).collect();
-        let compact = compact_mixed_maps(result.output, source, ground);
-        assert_eq!(compact.voltages.as_ptr(), voltage_ptr);
-        assert_eq!(compact.current_map.as_ptr(), current_ptr);
-        assert_eq!(compact.voltages, expected_voltage);
-        assert_eq!(compact.current_map, expected_current);
-        for &current in &compact.current_map { assert!((current - 1.0).abs() < 1e-3); }
-        // Recomputing from rounded output voltages would lose the current accuracy.
-        let rounded_current = solve::current::compute_current_map_from_raster(
-            &[1e-6_f32; 3], &[0.0_f32, 0.0, 1.0], &compact.voltages, 1, 3, -9999.0, true,
-        );
-        assert!(rounded_current.iter().any(|&v| (v - 1.0).abs() > 0.01));
-    }
 
     #[test]
     fn lowmem_wasm_buffer_reuse_preserves_serialized_output() {
@@ -813,52 +711,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_raster_edge_to_edge() {
-        let size = 10;
-        let n = size * size;
-        let res_data = vec![1.0f64; n];
-        let mut source_data = vec![0.0f64; n];
-        let mut ground_data = vec![0.0f64; n];
-        for row in 0..size {
-            source_data[row * size] = 1.0;
-            ground_data[row * size + (size - 1)] = 1.0;
-        }
-        let output = solve::solve_raster_sources_jacobi(
-            &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Shunt,
-        ).output;
-        assert_eq!(output.voltages.len(), n);
-        assert_eq!(output.current_map.len(), n);
-        let has_current = output.current_map.iter().any(|&v| v > 0.0);
-        assert!(has_current, "Current map should have non-zero values");
-        let has_voltage = output.voltages.iter().any(|&v| v.abs() > 0.0);
-        assert!(has_voltage, "Voltage map should have non-zero values");
-    }
 
-    #[test]
-    fn test_raster_center_source() {
-        let size = 10;
-        let n = size * size;
-        let res_data = vec![1.0f64; n];
-        let mut source_data = vec![0.0f64; n];
-        let mut ground_data = vec![0.0f64; n];
-        source_data[5 * size + 5] = 1.0;
-        for row in 0..size {
-            for col in 0..size {
-                if row == 0 || row == size - 1 || col == 0 || col == size - 1 {
-                    ground_data[row * size + col] = 1.0;
-                }
-            }
-        }
-        let output = solve::solve_raster_sources_jacobi(
-            &res_data, size, size, NODATA_SENTINEL, &source_data, &ground_data,
-            DEFAULT_MAX_ITER, DEFAULT_TOL, true, solve::GroundMode::Shunt,
-        ).output;
-        let center_voltage = output.voltages[5 * size + 5];
-        assert!(
-            center_voltage > 0.0,
-            "Center voltage should be positive for current source"
-        );
-    }
 }

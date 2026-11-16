@@ -46,7 +46,7 @@ impl Input {
             Self::RasterTopography {} => Descriptor::new(Topography, Unit::Metres),
             Self::RasterSurface {} => Descriptor::new(Surface, Unit::Metres),
             Self::RasterRanked {} => Descriptor::new(Ranked, Unit::Dimensionless),
-            Self::VectorDistance {} => Descriptor::new(Distance, Unit::Metres),
+            Self::VectorMask {} => Descriptor::new(Raster, Unit::Dimensionless),
             Self::VectorOccluder {} => Descriptor::new(Occluder, Unit::Metres),
             Self::VectorResistance {} => Descriptor::new(Resistance, Unit::Resistance),
             Self::RaycasterPointSource {} => Descriptor::new(Lights, Unit::None),

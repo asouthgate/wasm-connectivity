@@ -2,7 +2,6 @@ import {
   initSync,
   get_memory,
   __reset,
-  solve_raster_sources_jacobi,
   solve_raster_sources_mg,
   solve_raster_sources_mg_stencil,
   solve_raster_sources_mg_mixed,
@@ -38,10 +37,6 @@ const MAX_ITER = 100_000;
 const TOL = 1e-4;
 const TOL_MIXED = 1e-3;
 
-function solveJacobi(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
-  return solve_raster_sources_jacobi(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
-}
-
 function solveGmg(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
   return solve_raster_sources_mg(resMap, nrows, ncols, nodata, src, gnd, MAX_ITER, TOL, useDirichlet);
 }
@@ -51,7 +46,6 @@ function solveGmgStencil(resMap, nrows, ncols, nodata, src, gnd, useDirichlet) {
 }
 
 const SOLVERS = {
-  jacobi: solveJacobi,
   gmg: solveGmg,
   'gmg-lowmem': solveGmgStencil,
   'gmg-mixedp-lowmem': (res, nr, nc, nd, src, gnd, dirichlet) =>
