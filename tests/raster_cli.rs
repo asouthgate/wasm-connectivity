@@ -173,3 +173,58 @@ fn resistance_output_flows_directly_into_all_current_solver_modes() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("not aligned"));
     assert!(!dir.0.join("invalid.tif").exists());
 }
+
+#[test]
+fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
+    let dir = TestDir::new();
+    let grid = RasterGrid {
+        nrows: 8, ncols: 8, affine: [0.0,1.0,0.0,8.0,0.0,-1.0],
+        crs: Some(SpatialRef::from_epsg(27700).unwrap()),
+    };
+    let data: Vec<f64> = (0..64).map(|i|1.0+(i%4) as f64/4.0).collect();
+    let mut source = vec![0.0;64];source[0]=1.0;
+    let mut ground = vec![0.0;64];ground[63]=1.0;
+    for (name, values) in [("data",data),("source",source),("ground",ground)] {
+        write_raster(&dir.0.join(format!("{name}.tif")),&grid,&values).unwrap();
+    }
+    let model = json!({"name":"samples","inputs":{"data":{"type":"raster_ranked"}},
+        "nodes":{
+            "fixed":{"op":"round","inputs":"inputs.data"},
+            "resistance":{"op":"power_response","inputs":"nodes.fixed","parameters":{
+                "input_range":[1,2],"base_range":[1,2],"exponent":{"sample":{"values":[1,2,3]}},"scale":1,"offset":1
+            }}
+        },"output":"nodes.resistance"});
+    std::fs::write(dir.0.join("model.json"),model.to_string()).unwrap();
+    let run = |directory: &str, save: bool| {
+        let mut command=Command::new(env!("CARGO_BIN_EXE_lmc-resistance"));
+        command.arg("--model").arg(dir.0.join("model.json"))
+            .arg("--data").arg(dir.0.join("data.tif"))
+            .arg("--output-dir").arg(dir.0.join(directory))
+            .args(["--samples","3","--all-layers"])
+            .arg("--current-source").arg(dir.0.join("source.tif"))
+            .arg("--current-ground").arg(dir.0.join("ground.tif"));
+        if save { command.arg("--save-samples"); }
+        let output=command.output().unwrap();
+        assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+    };
+    run("saved",true);
+    for name in ["total_resistance","current"] {
+        let maps: Vec<_>=(0..3).map(|i|read_raster(&dir.0.join(format!("saved/samples/{i:06}/{name}.tif"))).unwrap().data).collect();
+        let mean=read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap();
+        let variance=read_raster(&dir.0.join(format!("saved/{name}_variance.tif"))).unwrap();
+        for i in 0..64 {
+            let expected=maps.iter().map(|m|m[i]).sum::<f64>()/3.0;
+            let expected_variance=maps.iter().map(|m|(m[i]-expected).powi(2)).sum::<f64>()/2.0;
+            assert!((mean.data[i]-expected).abs()<1e-10);
+            assert!((variance.data[i]-expected_variance).abs()<1e-10);
+        }
+    }
+    let fixed_variance=read_raster(&dir.0.join("saved/fixed_variance.tif")).unwrap();
+    assert!(fixed_variance.data.iter().all(|&v|v==0.0));
+    run("statistics-only",false);
+    assert!(!dir.0.join("statistics-only/samples").exists());
+    for name in ["total_resistance","total_resistance_variance","current","current_variance"] {
+        assert_eq!(read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap().data,
+            read_raster(&dir.0.join(format!("statistics-only/{name}.tif"))).unwrap().data);
+    }
+}
