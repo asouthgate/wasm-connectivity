@@ -195,8 +195,6 @@ pub struct InstrumentationProfile {
     pub matvec_lp_bytes: u64,
     /// Source vector `s` (the right-hand side).
     pub source_s_bytes: u64,
-    /// Jacobi diagonal `diag(L)` inverse (Jacobi path only).
-    pub jacobi_diag_bytes: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -354,8 +352,7 @@ impl InstrumentationProfile {
         }
         let mut retained = operators;
         for level in &self.hierarchy { self.level_workspace(&mut retained, level); }
-        add_object(&mut retained, "jacobi.diag_inv", "diagonals", None, self.jacobi_diag_bytes);
-        self.phase(if self.hierarchy.is_empty() { "Jacobi ready" } else { "Hierarchy ready" }, retained.clone(), false);
+        self.phase("Hierarchy ready", retained.clone(), false);
         let mut cg = retained.clone();
         for (name, category, bytes) in [
             ("cg.v", "cg_voltage", self.voltage_v_bytes),
@@ -375,7 +372,6 @@ impl InstrumentationProfile {
             self.phase("V-cycle coarse solve", cg, true);
         }
         // The CG work vectors have been freed; only its returned voltage remains.
-        retained.retain(|object| object.name != "jacobi.diag_inv");
         let mut final_smoothing = retained.clone();
         add_object(&mut final_smoothing, "solution.voltage", "cg_voltage", None, self.voltage_v_bytes);
         if !self.hierarchy.is_empty() { self.phase("Final smoothing", final_smoothing.clone(), false); }
@@ -771,17 +767,6 @@ pub fn record_cg_vectors_typed<F: Real>(n: usize) {
         s.matvec_lp_bytes = bytes;
         s.source_s_bytes = bytes;
     });
-}
-
-#[inline]
-#[allow(unused_variables)]
-pub fn record_jacobi_diag(n: usize) { record_jacobi_diag_typed::<f64>(n) }
-
-#[inline]
-#[allow(unused_variables)]
-pub fn record_jacobi_diag_typed<F: Real>(n: usize) {
-    #[cfg(feature = "instrumentation-profile")]
-    imp::with_profile(|s| s.jacobi_diag_bytes = vec_scalar_bytes::<F>(n));
 }
 
 #[cfg(test)]
