@@ -283,6 +283,7 @@ fn execute(run: &TestRun) -> Result<()> {
         false,
         None,
         None,
+        |_| Ok(()),
     )?;
     Ok(())
 }

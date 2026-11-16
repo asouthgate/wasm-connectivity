@@ -31,6 +31,11 @@ pub(super) struct JsonPipeline {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GridSpec {
+    // Required in JSON, but only file loading uses the coordinate reference system.
+    #[cfg_attr(
+        not(all(feature = "bin", not(target_arch = "wasm32"))),
+        allow(dead_code)
+    )]
     pub crs: String,
     pub bounds: [f64; 4],
     pub cellsize: f64,
@@ -128,6 +133,7 @@ impl Reference {
             output: None,
         }
     }
+    #[cfg(any(test, all(feature = "bin", not(target_arch = "wasm32"))))]
     pub fn selects_node(&self, name: &str, port: &str) -> bool {
         matches!(self, Self::Node { from_node, output } if from_node == name && output.as_deref().unwrap_or("data") == port)
     }

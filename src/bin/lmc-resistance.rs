@@ -1,5 +1,10 @@
 use lm_connect::pipeline::{files::input_names, ExecutionOptions};
-use std::{collections::HashMap, env, fs, io, path::PathBuf};
+use std::{
+    collections::HashMap,
+    env, fs,
+    io::{self, Write},
+    path::PathBuf,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -167,7 +172,8 @@ fn execute(args: &Args) -> Result<()> {
         .filter(|(name, _)| name.as_str() != "--model" && name.as_str() != "--output-dir")
         .map(|(name, path)| (name[2..].to_string(), path.clone()))
         .collect();
-    let warnings = lm_connect::pipeline::files::execute_pipeline_from_files(
+    let mut sample_progress_displayed = false;
+    let execution_result = lm_connect::pipeline::files::execute_pipeline_from_files(
         &args.pipeline_json,
         &paths,
         &args.paths["--output-dir"],
@@ -175,7 +181,24 @@ fn execute(args: &Args) -> Result<()> {
         args.save_samples,
         args.current_source_path.as_deref(),
         args.current_ground_path.as_deref(),
-    )?;
+        |completed_samples| {
+            if args.execution_options.samples > 1 {
+                let mut stderr = io::stderr().lock();
+                write!(
+                    stderr,
+                    "\rCompleted sample {completed_samples}/{}",
+                    args.execution_options.samples
+                )?;
+                sample_progress_displayed = true;
+                stderr.flush()?;
+            }
+            Ok(())
+        },
+    );
+    if sample_progress_displayed {
+        eprintln!();
+    }
+    let warnings = execution_result?;
     for warning in warnings {
         eprintln!("Warning: {warning}");
     }

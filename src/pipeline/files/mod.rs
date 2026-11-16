@@ -429,6 +429,7 @@ pub fn execute_pipeline_from_files(
     save_samples: bool,
     current_source_path: Option<&Path>,
     current_ground_path: Option<&Path>,
+    report_sample_completion: impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<String>> {
     let graph = PipelineGraph::from_json(pipeline_json).map_err(invalid)?;
     execute_pipeline_graph_from_files(
@@ -439,6 +440,7 @@ pub fn execute_pipeline_from_files(
         save_samples,
         current_source_path,
         current_ground_path,
+        report_sample_completion,
     )
 }
 
@@ -450,6 +452,7 @@ fn execute_pipeline_graph_from_files(
     save_samples: bool,
     current_source_path: Option<&Path>,
     current_ground_path: Option<&Path>,
+    mut report_sample_completion: impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<String>> {
     options.statistics = options.samples > 1;
     let loaded = load_inputs(graph, paths)?;
@@ -476,31 +479,34 @@ fn execute_pipeline_graph_from_files(
             options,
             current_solver.as_ref(),
             |sample| {
-                if options.samples > 1 && !save_samples {
-                    return Ok(());
-                }
-                let mut maps = vec![("total_resistance.tif".into(), sample.resistance.as_slice())];
-                if let Some(current) = &sample.current {
-                    maps.push(("current.tif".into(), current));
-                }
-                for (name, outputs) in &sample.layers {
-                    for (port, field) in outputs {
-                        if graph.output.selects_node(name, port) {
-                            continue;
-                        }
-                        if let PipelineData::Raster(values) = field {
-                            maps.push((format!("{}.tif", layer_name(name, port)), values));
+                if options.samples == 1 || save_samples {
+                    let mut maps =
+                        vec![("total_resistance.tif".into(), sample.resistance.as_slice())];
+                    if let Some(current) = &sample.current {
+                        maps.push(("current.tif".into(), current));
+                    }
+                    for (name, outputs) in &sample.layers {
+                        for (port, field) in outputs {
+                            if graph.output.selects_node(name, port) {
+                                continue;
+                            }
+                            if let PipelineData::Raster(values) = field {
+                                maps.push((format!("{}.tif", layer_name(name, port)), values));
+                            }
                         }
                     }
+                    let sample_output_dir = if options.samples == 1 {
+                        output_dir.to_path_buf()
+                    } else {
+                        output_dir
+                            .join("samples")
+                            .join(format!("{:06}", sample.index))
+                    };
+                    write_maps(&sample_output_dir, &loaded.grid, maps)
+                        .map_err(|e| e.to_string())?;
                 }
-                let sample_output_dir = if options.samples == 1 {
-                    output_dir.to_path_buf()
-                } else {
-                    output_dir
-                        .join("samples")
-                        .join(format!("{:06}", sample.index))
-                };
-                write_maps(&sample_output_dir, &loaded.grid, maps).map_err(|e| e.to_string())
+                report_sample_completion(sample.index + 1).map_err(|e| e.to_string())?;
+                Ok(())
             },
         )
         .map_err(invalid)?;

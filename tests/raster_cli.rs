@@ -206,6 +206,9 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
         if save { command.arg("--save-samples"); }
         let output=command.output().unwrap();
         assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("\rCompleted sample 1/3\rCompleted sample 2/3\rCompleted sample 3/3\n"), "{stderr}");
+        assert!(output.stdout.is_empty());
     };
     run("saved",true);
     for name in ["total_resistance","current"] {
