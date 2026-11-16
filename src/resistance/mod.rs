@@ -5,6 +5,5 @@ pub mod surface;
 pub mod landscape;
 pub mod linear;
 pub mod irradiance;
-pub mod pipeline;
 pub mod operations;
 pub mod model;

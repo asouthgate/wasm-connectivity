@@ -1,7 +1,6 @@
 use crate::linalg::real::{Real, scalar};
 use crate::linalg::multigrid::{MgOptions, MgPreconditioner};
 use crate::linalg::operator::{FineOperator, GroundSpec, StencilOperator};
-use crate::linalg::pcg as solver;
 use crate::memory;
 use crate::linalg::timing;
 use serde::Serialize;
@@ -138,48 +137,6 @@ fn final_stencil_residual_error<F: Real>(op: &StencilOperator<'_, F>, b: &[F], x
     let relative = if norm == 0.0 { residual.sqrt() } else { (residual / norm).sqrt() };
     residual_error(relative, tol.to_f64().unwrap())
 }
-
-/// Jacobi-preconditioned raster solve. Rebuilds the circuit for every call
-/// and starts PCG from zero. Nodata cells are filled with high resistance
-/// so the full rectangular system is solved in one shot.
-pub fn solve_raster_sources_jacobi<F: Real>(
-    resistance_data: &[F],
-    nrows: usize,
-    ncols: usize,
-    nodata: F,
-    source_data: &[F],
-    ground_data: &[F],
-    max_iter: usize,
-    tol: F,
-    remove_average: bool,
-    ground_mode: GroundMode,
-) -> AnnotatedOutput<RasterOutput<F>> {
-    let (laplacian, s, cell_to_node) = prepare_explicit_system(
-        resistance_data, nrows, ncols, nodata, source_data, ground_data,
-        remove_average, ground_mode,
-    );
-    memory::record_jacobi_diag_typed::<F>(s.len());
-    let res = solver::cg_solve(&laplacian, &s, max_iter, tol);
-
-    let error = final_residual_error(&laplacian, &s, &res.v, tol);
-    let out = build_raster_output(
-        &res.v,
-        resistance_data,
-        ground_data,
-        &cell_to_node,
-        nrows,
-        ncols,
-        nodata,
-        ground_mode,
-    );
-
-    AnnotatedOutput {
-        output: out,
-        total_iters: res.iters,
-        error,
-    }
-}
-
 
 fn prepare_explicit_system<F: Real>(
     resistance_data: &[F],
@@ -579,7 +536,7 @@ mod tests {
         ground[8..12].copy_from_slice(&[f64::NAN, -2.0, nodata, nodata + 5e-11]);
         ground[nr * nc - 1] = 3.0;
         for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
-            let expected = solve_raster_sources_jacobi(
+            let expected = solve_raster_sources_mg(
                 &resistance, nr, nc, nodata, &source, &ground, 10000, 1e-11, true, mode,
             );
             let actual = solve_raster_sources_mg_stencil_in_place_with_options(
@@ -610,10 +567,6 @@ mod tests {
             }
             for mode in [GroundMode::Shunt, GroundMode::Dirichlet] {
                 let results = [
-                    ("jacobi", solve_raster_sources_jacobi(
-                        &resistance, nr, nc, -9999.0, &source, &ground,
-                        10000, 1e-11, true, mode,
-                    )),
                     ("mg", solve_raster_sources_mg(
                         &resistance, nr, nc, -9999.0, &source, &ground,
                         10000, 1e-11, true, mode,
@@ -699,14 +652,7 @@ mod tests {
                         remove_average,
                         mode,
                     );
-                    let jacobi = solve_raster_sources_jacobi(
-                        &resistance, nrows, ncols, nodata, &source, &grounds,
-                        5000, 1e-9, remove_average, mode,
-                    );
-                    assert!(
-                        explicit.total_iters < 5000 && stencil.total_iters < 5000
-                            && jacobi.total_iters < 5000
-                    );
+                    assert!(explicit.total_iters < 5000 && stencil.total_iters < 5000);
                     let spec = match mode {
                         GroundMode::Shunt => GroundSpec::Shunt(grounds.clone()),
                         GroundMode::Dirichlet => GroundSpec::Dirichlet(
@@ -729,7 +675,7 @@ mod tests {
                         }
                     }
                     let mut product = vec![0.0; n];
-                    for result in [&explicit, &stencil, &jacobi] {
+                    for result in [&explicit, &stencil] {
                         crate::linalg::operator::Operator::matvec(
                             &operator,
                             &result.output.voltages,
@@ -759,11 +705,6 @@ mod tests {
                             &explicit.output.current_map,
                             &stencil.output.current_map,
                         ),
-                        (
-                            "jacobi current",
-                            &explicit.output.current_map,
-                            &jacobi.output.current_map,
-                        ),
                     ] {
                         for (&a, &b) in left.iter().zip(right) {
                             assert!(a.is_finite() && b.is_finite());
@@ -776,5 +717,53 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn test_raster_edge_to_edge() {
+        let size = 10;
+        let n = size * size;
+        let res_data = vec![1.0f64; n];
+        let mut source_data = vec![0.0f64; n];
+        let mut ground_data = vec![0.0f64; n];
+        for row in 0..size {
+            source_data[row * size] = 1.0;
+            ground_data[row * size + (size - 1)] = 1.0;
+        }
+        let output = solve_raster_sources_mg(
+            &res_data, size, size, crate::NODATA_SENTINEL, &source_data, &ground_data,
+            crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, GroundMode::Shunt,
+        ).output;
+        assert_eq!(output.voltages.len(), n);
+        assert_eq!(output.current_map.len(), n);
+        let has_current = output.current_map.iter().any(|&v| v > 0.0);
+        assert!(has_current, "Current map should have non-zero values");
+        let has_voltage = output.voltages.iter().any(|&v| v.abs() > 0.0);
+        assert!(has_voltage, "Voltage map should have non-zero values");
+    }
+
+    #[test]
+    fn test_raster_center_source() {
+        let size = 10;
+        let n = size * size;
+        let res_data = vec![1.0f64; n];
+        let mut source_data = vec![0.0f64; n];
+        let mut ground_data = vec![0.0f64; n];
+        source_data[5 * size + 5] = 1.0;
+        for row in 0..size {
+            for col in 0..size {
+                if row == 0 || row == size - 1 || col == 0 || col == size - 1 {
+                    ground_data[row * size + col] = 1.0;
+                }
+            }
+        }
+        let output = solve_raster_sources_mg(
+            &res_data, size, size, crate::NODATA_SENTINEL, &source_data, &ground_data,
+            crate::DEFAULT_MAX_ITER, crate::DEFAULT_TOL, true, GroundMode::Shunt,
+        ).output;
+        let center_voltage = output.voltages[5 * size + 5];
+        assert!(
+            center_voltage > 0.0,
+            "Center voltage should be positive for current source"
+        );
     }
 }
