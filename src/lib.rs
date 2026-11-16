@@ -12,7 +12,7 @@
 //!
 //! 1. [`geospatial::rasterize_values`] converts GeoJSON features into raster
 //!    values.
-//! 2. [`resistance::model`] computes resistance from aligned input rasters
+//! 2. [`pipeline`] computes resistance from aligned input rasters
 //!    and lamp data.
 //! 3. [`solve`] computes current and voltage maps from the resulting resistance
 //!    raster and the caller's source and ground rasters.
@@ -50,7 +50,7 @@
 //! Solver exports return JSON-encoded results; rasterization exports return
 //! numeric arrays. Resistance exports return [`BrowserResistanceOutput`], whose
 //! rasters are consumed as `f32` arrays through
-//! [`BrowserResistanceOutput::take_raster`].
+//! [`BrowserResistanceOutput::read_raster_and_release`].
 //!
 //! The JavaScript wrappers in `lib/` manage worker calls and Wasm initialization
 //! for rasterization, resistance computation, and current solving. See
@@ -70,6 +70,7 @@ pub mod geospatial;
 pub mod linalg;
 pub mod memory;
 pub mod raster;
+pub mod pipeline;
 pub mod resistance;
 pub mod roost;
 pub mod solve;
@@ -80,6 +81,8 @@ use wasm_bindgen::prelude::*;
 use serde::Serialize;
 use serde_json::json;
 mod wasm_output;
+mod wasm_pipeline;
+pub use wasm_pipeline::{run_resistance_pipeline_browser, BrowserResistanceOutput, NamedInputArrays};
 use wasm_output::{encode_f64_as_f32_base64, json_response, maps_to_f32_reusing_buffers};
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
@@ -432,95 +435,6 @@ pub fn rasterize_geojson_f32(
 ) -> Result<Vec<f32>, String> {
     geospatial::rasterize_values(&geojson_str, nrows, ncols,
         &geospatial::GeoTransform { xmin, ymax, cellsize }, buffer)
-}
-
-/// Named, already-prepared input arrays for the model executor.
-#[wasm_bindgen]
-#[derive(Default)]
-pub struct BrowserResistanceInputs {
-    values: std::collections::HashMap<String, Vec<f64>>,
-}
-
-#[wasm_bindgen]
-impl BrowserResistanceInputs {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Self { Self::default() }
-
-    pub fn insert(&mut self, name: String, values: Vec<f64>) -> Result<(), String> {
-        if self.values.contains_key(&name) {
-            return Err(format!("duplicate model input: {name}"));
-        }
-        self.values.insert(name, values);
-        Ok(())
-    }
-}
-
-/// Execute the same model JSON and prepared input types used by the native CLI.
-/// Vector-mask inputs are feature masks; point sources are pixel x/y/height triples.
-#[wasm_bindgen]
-pub fn run_resistance_pipeline_browser(
-    model_json: String,
-    inputs: &mut BrowserResistanceInputs,
-    nrows: usize,
-    ncols: usize,
-    cellsize: f64,
-) -> Result<BrowserResistanceOutput, String> {
-    use resistance::model::{Grid, Input, Model, PipelineData};
-    use std::sync::Arc;
-
-    let model = Model::from_json(&model_json)?;
-    let graph = model.compile()?;
-    let fields = std::mem::take(&mut inputs.values).into_iter().map(|(name, values)| {
-        let spec = model.inputs.get(&name)
-            .ok_or_else(|| format!("undeclared model input supplied: {name}"))?;
-        let field = match spec {
-            Input::RaycasterPointSource {} => PipelineData::Points(Arc::new(values)),
-            _ => PipelineData::raster(values),
-        };
-        Ok((name, field))
-    }).collect::<Result<_, String>>()?;
-    let (output, layers) = graph.run_with_layers(fields, Grid {
-        nrows, ncols, pixel_width: cellsize,
-    })?;
-    let mut names = Vec::new();
-    let mut rasters = vec![Arc::new(output)];
-    for (node, outputs) in layers {
-        for (port, field) in outputs {
-            if let PipelineData::Raster(values) = field {
-                names.push([node.clone(), port]);
-                rasters.push(values);
-            }
-        }
-    }
-    Ok(BrowserResistanceOutput { names, rasters, nrows, ncols })
-}
-
-#[wasm_bindgen]
-pub struct BrowserResistanceOutput {
-    names: Vec<[String; 2]>,
-    rasters: Vec<std::sync::Arc<Vec<f64>>>,
-    nrows: usize,
-    ncols: usize,
-}
-
-#[wasm_bindgen]
-impl BrowserResistanceOutput {
-    #[wasm_bindgen(getter)]
-    pub fn nrows(&self) -> usize { self.nrows }
-
-    #[wasm_bindgen(getter)]
-    pub fn ncols(&self) -> usize { self.ncols }
-
-    /// Node and port names corresponding to rasters after the selected output.
-    pub fn layer_names(&self) -> String {
-        serde_json::to_string(&self.names).expect("layer names are JSON strings")
-    }
-
-    /// Consume the selected output (index 0) or a named layer, retaining f32 transport.
-    pub fn take_raster(&mut self, index: usize) -> Result<Vec<f32>, String> {
-        let raster = self.rasters.get_mut(index).ok_or("Unknown resistance raster")?;
-        Ok(std::mem::take(raster).iter().map(|&value| value as f32).collect())
-    }
 }
 
 #[derive(Serialize)]
