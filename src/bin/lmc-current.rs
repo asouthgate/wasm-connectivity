@@ -182,17 +182,7 @@ fn run<F: Real + GdalType>(
         eprintln!("error: {error}");
         std::process::exit(1);
     }
-    assert!(
-        result.output.voltages.iter().all(|v| v.is_finite()),
-        "non-finite voltages"
-    );
-    for (value, &res) in result.output.current_map.iter_mut().zip(&resistance.data) {
-        if !res.is_finite() || res <= F::zero() || res == nodata {
-            *value = F::nan();
-        } else {
-            assert!(value.is_finite(), "non-finite current");
-        }
-    }
+    result.output.mask_invalid_current(&resistance.data, nodata)?;
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -238,17 +228,7 @@ fn run_mixed(
         eprintln!("error: {error}");
         std::process::exit(1);
     }
-    assert!(
-        result.output.voltages.iter().all(|v| v.is_finite()),
-        "non-finite voltages"
-    );
-    for (value, &res) in result.output.current_map.iter_mut().zip(&resistance.data) {
-        if !res.is_finite() || res <= 0.0 || res == nodata {
-            *value = f64::NAN;
-        } else {
-            assert!(value.is_finite(), "non-finite current");
-        }
-    }
+    result.output.mask_invalid_current(&resistance.data, nodata)?;
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

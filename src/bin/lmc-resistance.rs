@@ -1,9 +1,9 @@
-use lm_connect::resistance::model::Model;
+use lm_connect::pipeline::{files::input_names, ExecutionOptions};
 use std::{collections::HashMap, env, fs, io, path::PathBuf};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const USAGE: &str = "Usage: lmc-resistance --model model.json --<input-name> FILE ... --output-dir results/ [--all-layers] [-v|--verbose]
+const USAGE: &str = "Usage: lmc-resistance --model model.json --<input-name> FILE ... --output-dir results/ [--all-layers] [--samples N --seed N --save-samples] [--current-source FILE --current-ground FILE] [-v|--verbose]
 
 Raster inputs must be single-band GeoTIFFs with north-up square pixels and a projected CRS in metres.
 An explicit model grid may crop or extend their bounds; CRS, cellsize and cell alignment must match.
@@ -12,27 +12,41 @@ GeoJSON coordinates must already use the grid CRS. GeoPackages must contain one 
 The model defines input names and types. Each input requires a matching --<name> FILE flag.
 File paths are relative to the working directory.
 --all-layers also writes each named raster layer and surface output.
-The final output is total_resistance.tif. Outputs are georeferenced GeoTIFF layers.";
+The final output is total_resistance.tif. Outputs are georeferenced GeoTIFF layers.
+--samples runs complete parameter draws, writing means and sample variances (N-1).
+--save-samples also writes each completed sample under samples/.
+Current inputs append the existing f64 current solver to each sample before accumulation.";
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
 
 struct Args {
-    model: Model,
+    pipeline_json: String,
     paths: HashMap<String, PathBuf>,
-    all_layers: bool,
     verbose: bool,
+    execution_options: ExecutionOptions,
+    save_samples: bool,
+    // Resistance comes from the pipeline; source and ground are read from these files.
+    current_source_path: Option<PathBuf>,
+    current_ground_path: Option<PathBuf>,
 }
 
 fn parse_args(arguments: &[String]) -> Result<Args> {
     let mut paths = HashMap::new();
     let mut verbose = false;
     let mut all_layers = false;
+    let mut save_samples = false;
     let mut i = 0;
     while i < arguments.len() {
         let flag = &arguments[i];
         match flag.as_str() {
+            "--save-samples" => {
+                if save_samples {
+                    return Err(invalid("duplicate --save-samples").into());
+                }
+                save_samples = true;
+            }
             "--all-layers" => {
                 if all_layers {
                     return Err(invalid("duplicate --all-layers").into());
@@ -61,13 +75,52 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
             return Err(invalid(format!("{name} is required")).into());
         }
     }
+    let samples = paths
+        .remove("--samples")
+        .map(|value| {
+            value
+                .to_str()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|&n| n >= 2)
+                .ok_or_else(|| invalid("--samples must be an integer of at least two"))
+        })
+        .transpose()?;
+    let seed = paths
+        .remove("--seed")
+        .map(|value| {
+            value
+                .to_str()
+                .and_then(|v| v.parse::<u64>().ok())
+                .ok_or_else(|| invalid("--seed must be an unsigned integer"))
+        })
+        .transpose()?;
+    let current_source_path = paths.remove("--current-source");
+    let current_ground_path = paths.remove("--current-ground");
+    if current_source_path.is_some() != current_ground_path.is_some() {
+        return Err(
+            invalid("--current-source and --current-ground must be supplied together").into(),
+        );
+    }
+    if samples.is_none() && (seed.is_some() || save_samples || current_source_path.is_some()) {
+        return Err(invalid("--seed, --save-samples, and current inputs require --samples").into());
+    }
     let model_path = &paths["--model"];
-    let model = Model::from_json(&fs::read_to_string(model_path)?)
+    let pipeline_json = fs::read_to_string(model_path)?;
+    let names = input_names(&pipeline_json)
         .map_err(|e| invalid(format!("{}: {e}", model_path.display())))?;
-    for name in model.inputs.keys() {
+    for name in &names {
         if matches!(
             name.as_str(),
-            "model" | "output-dir" | "all-layers" | "verbose" | "help"
+            "model"
+                | "output-dir"
+                | "all-layers"
+                | "verbose"
+                | "help"
+                | "samples"
+                | "seed"
+                | "save-samples"
+                | "current-source"
+                | "current-ground"
         ) {
             return Err(invalid(format!(
                 "input name {name} conflicts with a command-line option"
@@ -79,38 +132,54 @@ fn parse_args(arguments: &[String]) -> Result<Args> {
         .keys()
         .filter(|flag| flag.as_str() != "--model" && flag.as_str() != "--output-dir")
     {
-        if !model.inputs.contains_key(&flag[2..]) {
+        if !names.iter().any(|name| name == &flag[2..]) {
             return Err(invalid(format!("unknown input argument: {flag}")).into());
         }
     }
-    for name in model.inputs.keys() {
+    for name in &names {
         if !paths.contains_key(&format!("--{name}")) {
             return Err(invalid(format!("--{name} is required by model input {name}")).into());
         }
     }
     Ok(Args {
-        model,
+        pipeline_json,
         paths,
-        all_layers,
         verbose,
+        execution_options: ExecutionOptions {
+            samples: samples.unwrap_or(1),
+            seed: seed.unwrap_or(0),
+            all_layers,
+            statistics: samples.is_some(),
+        },
+        save_samples,
+        current_source_path,
+        current_ground_path,
     })
 }
 
 fn execute(args: &Args) -> Result<()> {
     if args.verbose {
-        eprintln!("Evaluating model {}", args.model.name);
+        eprintln!("Evaluating pipeline");
     }
     let paths = args
-        .model
-        .inputs
-        .keys()
-        .map(|name| (name.clone(), args.paths[&format!("--{name}")].clone()))
+        .paths
+        .iter()
+        .filter(|(name, _)| name.as_str() != "--model" && name.as_str() != "--output-dir")
+        .map(|(name, path)| (name[2..].to_string(), path.clone()))
         .collect();
-    let result = lm_connect::resistance::model::files::run_files(&args.model, &paths)?;
-    for warning in &result.warnings {
+    let warnings = lm_connect::pipeline::files::execute_pipeline_from_files(
+        &args.pipeline_json,
+        &paths,
+        &args.paths["--output-dir"],
+        args.execution_options,
+        args.save_samples,
+        args.current_source_path.as_deref(),
+        args.current_ground_path.as_deref(),
+    )?;
+    for warning in warnings {
         eprintln!("Warning: {warning}");
     }
-    result.write(&args.paths["--output-dir"], args.all_layers)
+    Ok(())
 }
 
 fn main() {
@@ -201,6 +270,7 @@ mod tests {
             "type": "raster_ranked"
           }
         });
+        model["output"] = json!("inputs.output-dir");
         fs::write(&path, model.to_string()).unwrap();
         assert!(parse_args(&base)
             .err()
