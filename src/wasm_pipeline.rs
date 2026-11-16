@@ -147,8 +147,8 @@ impl BrowserResistanceOutput {
     }
 
     /// Convert a raster to f32 and release its stored reference; statistics use mean/variance pairs.
-    pub fn read_raster_and_release(&mut self, index: usize) -> Result<Vec<f32>, String> {
-        wasm_output::read_f32_raster_and_release(&mut self.rasters, index)
+    pub fn release_and_convert_f64_raster_to_f32(&mut self, index: usize) -> Result<Vec<f32>, String> {
+        wasm_output::release_and_convert_f64_raster_to_f32(&mut self.rasters, index)
     }
 }
 

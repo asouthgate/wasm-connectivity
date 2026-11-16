@@ -50,7 +50,7 @@
 //! Solver exports return JSON-encoded results; rasterization exports return
 //! numeric arrays. Resistance exports return [`BrowserResistanceOutput`], whose
 //! rasters are consumed as `f32` arrays through
-//! [`BrowserResistanceOutput::read_raster_and_release`].
+//! [`BrowserResistanceOutput::release_and_convert_f64_raster_to_f32`].
 //!
 //! The JavaScript wrappers in `lib/` manage worker calls and Wasm initialization
 //! for rasterization, resistance computation, and current solving. See

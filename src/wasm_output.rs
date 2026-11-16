@@ -120,3 +120,11 @@ mod tests {
         assert!(rounded_current.iter().any(|&v| (v - 1.0).abs() > 0.01));
     }
 }
+
+/// 1. Move out the selected Arc, replacing its slot with an Arc containing an empty vector.
+/// 2. Read the original vector and convert its numbers into a new f32 vector.
+/// 3. Drop the removed Arc, freeing the original vector if no other references remain.
+pub(crate) fn release_and_convert_f64_raster_to_f32(rasters: &mut [std::sync::Arc<Vec<f64>>], index: usize) -> Result<Vec<f32>, String> {
+    let raster = rasters.get_mut(index).ok_or("Unknown raster")?;
+    Ok(std::mem::take(raster).iter().map(|&value| value as f32).collect())
+}
