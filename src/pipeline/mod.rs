@@ -9,16 +9,17 @@ pub use current_solver::CurrentSolver;
 mod execution;
 mod execution_state;
 mod graph;
+mod inputs;
 mod interval;
 mod operations;
 mod sampling;
 mod schema;
-pub use sampling::{MapStatistics, SampleResult, SamplingResult};
+pub use sampling::{ResultSummaryStatistics, SampleResult, SamplingResult};
 
 pub use execution::{ExecutionOptions, NodeOutputs, PipelineData};
 pub(crate) use graph::PipelineGraph;
 pub use schema::Grid;
-pub(crate) use schema::Input;
+use schema::Input;
 use schema::{InputEdges, Operation, Reference};
 
 type Result<T> = std::result::Result<T, String>;

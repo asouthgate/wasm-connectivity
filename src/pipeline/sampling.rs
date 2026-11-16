@@ -135,16 +135,16 @@ pub struct SampleResult {
     pub layers: BTreeMap<String, NodeOutputs>,
 }
 
-pub struct MapStatistics {
+pub struct ResultSummaryStatistics {
     pub mean: Vec<f64>,
     pub variance: Vec<f64>,
 }
 
 pub struct SamplingResult {
     pub samples: usize,
-    pub resistance: MapStatistics,
-    pub current: Option<MapStatistics>,
-    pub layers: BTreeMap<String, BTreeMap<String, MapStatistics>>,
+    pub resistance: ResultSummaryStatistics,
+    pub current: Option<ResultSummaryStatistics>,
+    pub layers: BTreeMap<String, BTreeMap<String, ResultSummaryStatistics>>,
 }
 
 struct Accumulator {
@@ -178,12 +178,12 @@ impl Accumulator {
         }
         Ok(())
     }
-    fn finish(mut self) -> MapStatistics {
+    fn finish(mut self) -> ResultSummaryStatistics {
         let divisor = (self.count - 1) as f64;
         for value in &mut self.m2 {
             *value /= divisor;
         }
-        MapStatistics {
+        ResultSummaryStatistics {
             mean: self.mean,
             variance: self.m2,
         }

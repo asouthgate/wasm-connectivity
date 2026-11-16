@@ -1,6 +1,6 @@
 use super::{
-    ExecutionOptions, Grid as ModelGrid, Input as ModelInput, NodeOutputs, PipelineData,
-    PipelineGraph, Reference, SamplingResult,
+    ExecutionOptions, Grid as ModelGrid, Input as ModelInput, PipelineData, PipelineGraph,
+    Reference, SamplingResult,
 };
 
 use crate::{
@@ -14,7 +14,7 @@ use gdal::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
 };
@@ -23,14 +23,6 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
-}
-
-pub struct FileOutput {
-    pub grid: Grid,
-    pub output: Vec<f64>,
-    pub layers: BTreeMap<String, NodeOutputs>,
-    pub warnings: Vec<String>,
-    output_reference: Reference,
 }
 
 fn require_aligned(reference: &Grid, raster: &Raster, path: &Path) -> Result<()> {
@@ -247,41 +239,6 @@ pub fn input_names(pipeline_json: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-pub fn run_files(pipeline_json: &str, paths: &HashMap<String, PathBuf>) -> Result<FileOutput> {
-    let graph = PipelineGraph::from_json(pipeline_json).map_err(invalid)?;
-    run_files_graph(&graph, paths)
-}
-
-fn run_files_graph(graph: &PipelineGraph, paths: &HashMap<String, PathBuf>) -> Result<FileOutput> {
-    let loaded = load_inputs(&graph, paths)?;
-    let mut result = None;
-    graph
-        .execute(
-            loaded.fields,
-            model_grid(&loaded.grid),
-            ExecutionOptions {
-                samples: 1,
-                seed: 0,
-                all_layers: true,
-                statistics: false,
-            },
-            None,
-            |sample| {
-                result = Some((sample.resistance.as_ref().clone(), sample.layers.clone()));
-                Ok(())
-            },
-        )
-        .map_err(invalid)?;
-    let (output, layers) = result.expect("one execution produces one result");
-    Ok(FileOutput {
-        grid: loaded.grid,
-        output,
-        layers,
-        warnings: loaded.warnings,
-        output_reference: graph.output.clone(),
-    })
-}
-
 fn load_inputs(graph: &PipelineGraph, paths: &HashMap<String, PathBuf>) -> Result<LoadedInputs> {
     for name in graph.inputs.keys() {
         if !paths.contains_key(name) {
@@ -438,32 +395,6 @@ fn model_grid(grid: &Grid) -> ModelGrid {
     }
 }
 
-impl FileOutput {
-    pub fn write(self, output_dir: &Path, all_layers: bool) -> Result<()> {
-        let mut maps = vec![("total_resistance.tif".into(), self.output.as_slice())];
-        if all_layers {
-            for (name, outputs) in &self.layers {
-                for (port, field) in outputs {
-                    if self.output_reference.selects_node(name, port) {
-                        continue;
-                    }
-                    if let PipelineData::Raster(values) = field {
-                        let filename = layer_name(name, port);
-                        if filename == "total_resistance" {
-                            return Err(invalid(
-                                "node total_resistance conflicts with the final output filename",
-                            )
-                            .into());
-                        }
-                        maps.push((format!("{filename}.tif"), values.as_slice()));
-                    }
-                }
-            }
-        }
-        write_maps(output_dir, &self.grid, maps)
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -489,29 +420,53 @@ fn write_maps<'a>(directory: &Path, grid: &Grid, maps: Vec<(String, &'a [f64])>)
     Ok(())
 }
 
-pub fn run_samples_to_directory(
+/// Load pipeline inputs from files, execute, and write maps or summary statistics.
+pub fn execute_pipeline_from_files(
     pipeline_json: &str,
     paths: &HashMap<String, PathBuf>,
     output_dir: &Path,
     options: ExecutionOptions,
     save_samples: bool,
-    current_paths: Option<(&Path, &Path)>,
+    current_source_path: Option<&Path>,
+    current_ground_path: Option<&Path>,
 ) -> Result<Vec<String>> {
     let graph = PipelineGraph::from_json(pipeline_json).map_err(invalid)?;
-    if !options.statistics {
-        return Err(invalid("statistics must be enabled for sampling summaries").into());
-    }
-    let loaded = load_inputs(&graph, paths)?;
-    let current_inputs = current_paths
-        .map(|(source, ground)| -> Result<_> {
+    execute_pipeline_graph_from_files(
+        &graph,
+        paths,
+        output_dir,
+        options,
+        save_samples,
+        current_source_path,
+        current_ground_path,
+    )
+}
+
+fn execute_pipeline_graph_from_files(
+    graph: &PipelineGraph,
+    paths: &HashMap<String, PathBuf>,
+    output_dir: &Path,
+    mut options: ExecutionOptions,
+    save_samples: bool,
+    current_source_path: Option<&Path>,
+    current_ground_path: Option<&Path>,
+) -> Result<Vec<String>> {
+    options.statistics = options.samples > 1;
+    let loaded = load_inputs(graph, paths)?;
+    let current_source_and_ground = match (current_source_path, current_ground_path) {
+        (None, None) => None,
+        (Some(source), Some(ground)) => {
             let source_raster = read_raster(source)?;
             let ground_raster = read_raster(ground)?;
             require_aligned(&loaded.grid, &source_raster, source)?;
             require_aligned(&loaded.grid, &ground_raster, ground)?;
-            Ok((source_raster.data, ground_raster.data))
-        })
-        .transpose()?;
-    let current_solver = current_inputs
+            Some((source_raster.data, ground_raster.data))
+        }
+        _ => {
+            return Err(invalid("current source and ground paths must be supplied together").into())
+        }
+    };
+    let current_solver = current_source_and_ground
         .as_ref()
         .map(|(source, ground)| crate::pipeline::CurrentSolver::new(source, ground));
     let result = graph
@@ -521,7 +476,7 @@ pub fn run_samples_to_directory(
             options,
             current_solver.as_ref(),
             |sample| {
-                if !save_samples {
+                if options.samples > 1 && !save_samples {
                     return Ok(());
                 }
                 let mut maps = vec![("total_resistance.tif".into(), sample.resistance.as_slice())];
@@ -538,19 +493,20 @@ pub fn run_samples_to_directory(
                         }
                     }
                 }
-                write_maps(
-                    &output_dir
+                let sample_output_dir = if options.samples == 1 {
+                    output_dir.to_path_buf()
+                } else {
+                    output_dir
                         .join("samples")
-                        .join(format!("{:06}", sample.index)),
-                    &loaded.grid,
-                    maps,
-                )
-                .map_err(|e| e.to_string())
+                        .join(format!("{:06}", sample.index))
+                };
+                write_maps(&sample_output_dir, &loaded.grid, maps).map_err(|e| e.to_string())
             },
         )
         .map_err(invalid)?;
-    let result = result.expect("statistics were requested");
-    write_statistics(output_dir, &loaded.grid, &graph.output, &result)?;
+    if let Some(statistics) = result {
+        write_statistics(output_dir, &loaded.grid, &graph.output, &statistics)?;
+    }
     Ok(loaded.warnings)
 }
 

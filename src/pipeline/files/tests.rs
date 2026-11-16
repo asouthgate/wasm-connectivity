@@ -270,7 +270,21 @@ struct TestRun {
 }
 fn execute(run: &TestRun) -> Result<()> {
     let graph = PipelineGraph::from_definition(run.model.clone()).map_err(invalid)?;
-    run_files_graph(&graph, &run.paths)?.write(&run.output_dir, run.all_layers)
+    execute_pipeline_graph_from_files(
+        &graph,
+        &run.paths,
+        &run.output_dir,
+        ExecutionOptions {
+            samples: 1,
+            seed: 0,
+            all_layers: run.all_layers,
+            statistics: false,
+        },
+        false,
+        None,
+        None,
+    )?;
+    Ok(())
 }
 fn model_args(path: &Path, output: &Path, inputs: &[(&str, &str)]) -> TestRun {
     TestRun {
