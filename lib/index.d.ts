@@ -81,7 +81,7 @@ export interface ResistanceOutput {
   layers: Record<string, Record<string, Float32Array>>;
 }
 
-/** Inputs use model names: prepared rasters, feature masks for vector_distance, or pixel x/y/height triples. */
+/** Inputs use model names: prepared rasters, feature masks for vector_mask, or pixel x/y/height triples. */
 export function runResistancePipelineBrowserAsync(
   modelJson: string, inputs: Record<string, RasterInput>,
   grid: { nrows: number; ncols: number; cellsize: number },

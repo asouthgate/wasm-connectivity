@@ -21,7 +21,7 @@ the operations defined by your model and returns `output` and named `layers`.
   row/column counts and a positive cell size in metres.
 
 Raster inputs contain `nrows * ncols` values in row-major order, starting at the
-northwest cell. Supply aligned arrays: `vector_distance` inputs contain `1` on
+northwest cell. Supply aligned arrays: `vector_mask` inputs contain `1` on
 features and `0` elsewhere; the model's `distance` operation calculates distances
 in metres. Point-source inputs contain flattened
 `[xPixel, yPixel, heightMetres, ...]` triples, with pixel coordinates measured from

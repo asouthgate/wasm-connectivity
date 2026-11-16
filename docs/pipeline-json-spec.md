@@ -60,10 +60,10 @@ the CLI flags `--dtm`, `--dsm` etc. will be required for the following JSON:
       "type": "vector_occluder"
     },
     "roads": {
-      "type": "vector_distance"
+      "type": "vector_mask"
     },
     "rivers": {
-      "type": "vector_distance"
+      "type": "vector_mask"
     },
     "generic": {
       "type": "vector_resistance"
@@ -82,7 +82,7 @@ The following input types are currently supported:
 | `raster_topography` | Ground elevation raster (DTM). | 
 | `raster_surface` | Surface elevation raster (DSM). | 
 | `raster_ranked` | Land-cover classes or ranks. | 
-| `vector_distance` | Line or polygon geometry; no attributes required. | 
+| `vector_mask` | Line or polygon geometry; no attributes required. |
 | `vector_occluder` | Line or polygon geometry with a finite, nonnegative `height` attribute in metres above terrain. | 
 | `vector_resistance` | Line or polygon geometry with a finite numeric `resistance` attribute. | 
 | `raycaster_point_source` | Point geometry with a finite, nonnegative `height` attribute in metres above terrain. | 
@@ -101,8 +101,8 @@ GeoPackages (`.gpkg`). A GeoPackage must have exactly one layer in the grid CRS.
 GeoJSON coordinates must already be in that CRS.
 
 For occluders and resistance features, overlaps take the maximum attribute value.
-`vector_distance` rasterises geometry as a binary
-mask, and calculates distances to features.
+`vector_mask` rasterises geometry as a binary mask: one on features and zero
+elsewhere. Add a `distance` operation to the model to calculate distances in metres.
 
 ### Light-source files
 

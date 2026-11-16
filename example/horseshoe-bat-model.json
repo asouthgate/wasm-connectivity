@@ -14,10 +14,10 @@
       "type": "vector_occluder"
     },
     "roads": {
-      "type": "vector_distance"
+      "type": "vector_mask"
     },
     "rivers": {
-      "type": "vector_distance"
+      "type": "vector_mask"
     },
     "generic": {
       "type": "vector_resistance"
@@ -38,6 +38,13 @@
     "road_res": {
       "input": "inputs.roads",
       "operations": [
+        {
+          "op": "distance",
+          "parameters": {
+            "units": "metres",
+            "when_empty": "infinity"
+          }
+        },
         {
           "op": "power_response",
           "parameters": {
@@ -60,6 +67,13 @@
     "river_res": {
       "input": "inputs.rivers",
       "operations": [
+        {
+          "op": "distance",
+          "parameters": {
+            "units": "metres",
+            "when_empty": "infinity"
+          }
+        },
         {
           "op": "power_response",
           "parameters": {
