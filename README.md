@@ -56,6 +56,65 @@ To run the `lmc-current` solver on that resistance map in low-memory mixed-preci
 
 See `lmc-current --help` for command-line flags.
 
+### Sampling resistance and current
+
+Copy the example pipeline so its road resistance scale can be sampled:
+
+```sh
+cp example/horseshoe-bat-model.json sampled-model.json
+```
+
+In `sampled-model.json`, replace the `"scale": 10` in
+`nodes.road_res.operations[1].parameters` with:
+
+```json
+"scale": { "sample": { "uniform": [5, 150] } }
+```
+
+Run five samples with seed 42, calculating current from each resistance map and
+saving every sample:
+
+```sh
+./target/release/lmc-resistance \
+  --model sampled-model.json \
+  --dtm example/data/resistance/dtm.tif \
+  --dsm example/data/resistance/dsm.tif \
+  --landcover example/data/resistance/lcm.tif \
+  --buildings example/data/resistance/buildings.gpkg \
+  --roads example/data/resistance/roads.geojson \
+  --rivers example/data/resistance/empty.geojson \
+  --generic example/data/resistance/empty.geojson \
+  --lamps example/data/resistance/empty.geojson \
+  --current-source example/data/resistance/source.tif \
+  --current-ground example/data/resistance/ground.tif \
+  --samples 5 --seed 42 --save-samples \
+  --output-dir results-sampled/
+```
+
+See `results-sampled` for the results.
+
+For the same five samples and summary maps without saving individual samples,
+use the same seed and omit `--save-samples`:
+
+```sh
+./target/release/lmc-resistance \
+  --model sampled-model.json \
+  --dtm example/data/resistance/dtm.tif \
+  --dsm example/data/resistance/dsm.tif \
+  --landcover example/data/resistance/lcm.tif \
+  --buildings example/data/resistance/buildings.gpkg \
+  --roads example/data/resistance/roads.geojson \
+  --rivers example/data/resistance/empty.geojson \
+  --generic example/data/resistance/empty.geojson \
+  --lamps example/data/resistance/empty.geojson \
+  --current-source example/data/resistance/source.tif \
+  --current-ground example/data/resistance/ground.tif \
+  --samples 5 --seed 42 \
+  --output-dir results-summary/
+```
+
+The second run avoids storing individual maps on disk, accumulating pipeline results during sampling.
+
 ## Prerequisites
 
 - CLI and library: [Rust](https://rustup.rs)
