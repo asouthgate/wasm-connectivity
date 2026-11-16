@@ -1,7 +1,5 @@
 use super::interval::Interval;
 use super::*;
-use crate::resistance::distance::distance_generation;
-use crate::resistance::pipeline::{run_resistance_pipeline, ResistanceParams};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -374,9 +372,14 @@ fn model_schema_rejects_unknown_operations_fields_and_policies() {
 }
 
 #[test]
-fn horseshoe_spec_matches_every_existing_resistance_layer() {
+fn horseshoe_spec_matches_reference_resistance_layers() {
     let (m, n) = (13, 17);
     let total = m * n;
+    // Expected resistance layers for the scenarios below; JSON null represents NoData.
+    let snapshots: Vec<BTreeMap<String, Vec<Option<f64>>>> = serde_json::from_str(
+        include_str!("fixtures/reference-resistance.json")
+    ).unwrap();
+    let mut snapshot = snapshots.iter();
     for pixel_width in [1.0, 2.0, 5.0] {
         for scenario in 0..4 {
             let mut dtm = vec![100.0; total];
@@ -417,40 +420,7 @@ fn horseshoe_spec_matches_every_existing_resistance_layer() {
             roads[15] = f64::NAN;
             rivers[16] = f64::NAN;
             generic[17] = f64::NAN;
-            let params = ResistanceParams {
-                road_buffer: 200.0,
-                road_resmax: 10.0,
-                road_xmax: 5.0,
-                river_buffer: 10.0,
-                river_resmax: 2000.0,
-                river_xmax: 4.0,
-                landscape_rankmax: 8.0,
-                landscape_resmax: 100.0,
-                landscape_xmax: 5.0,
-                linear_buffer: 10.0,
-                linear_rankmax: 4.0,
-                linear_resmax: 22000.0,
-                linear_xmax: 3.0,
-                lamp_resmax: 1e8,
-                lamp_xmax: 1.0,
-                lamp_ext: 100.0,
-                pixw: pixel_width,
-                nrows: m,
-                ncols: n,
-            };
-            let expected = run_resistance_pipeline(
-                &roads,
-                &rivers,
-                &buildings,
-                Some(&lcm),
-                &dtm,
-                &dsm,
-                &generic,
-                &lamps,
-                &params,
-                None,
-                None,
-            );
+            let expected = snapshot.next().unwrap();
             let mut fields = HashMap::new();
             for (name, values) in [
                 ("dtm", dtm),
@@ -461,28 +431,13 @@ fn horseshoe_spec_matches_every_existing_resistance_layer() {
                 ("rivers", rivers),
                 ("generic", generic),
             ] {
-                let mut values = values;
-                if name == "roads" || name == "rivers" {
-                    values = distance_generation(&values, m, n, f64::INFINITY);
-                    for value in &mut values {
-                        *value *= pixel_width;
-                    }
-                }
                 let field = PipelineData::raster(values);
                 fields.insert(name.into(), field);
             }
             fields.insert("lamps".into(), PipelineData::Points(Arc::new(lamps)));
             let mut model = example();
-            for (name, expected) in [
-                ("road_res", expected.road_res),
-                ("river_res", expected.river_res),
-                ("landscape_res", expected.landscape_res),
-                ("linear_res", expected.linear_res),
-                ("lamp_res", expected.lamp_res),
-                ("total_res", expected.total_res),
-                ("surfaces.translucent", expected.soft_surf),
-                ("surfaces.opaque", expected.hard_surf),
-            ] {
+            for (name, expected) in expected {
+                let expected: Vec<f64> = expected.iter().map(|v| v.unwrap_or(f64::NAN)).collect();
                 model.output = if let Some((node, port)) = name.split_once('.') {
                     Reference::Node {
                         from_node: node.into(),
@@ -505,6 +460,7 @@ fn horseshoe_spec_matches_every_existing_resistance_layer() {
             }
         }
     }
+    assert!(snapshot.next().is_none());
 }
 #[test]
 fn canonical_nodes_and_compact_chains_execute_the_same_graph() {

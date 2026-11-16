@@ -1,6 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
+import { readFile } from 'node:fs/promises';
 import { Worker as ThreadWorker } from 'node:worker_threads';
 
 // Run the actual browser worker in Node, adapting only module URLs and messaging.
@@ -35,83 +36,158 @@ globalThis.Worker = class {
     instances.push(this);
   }
   postMessage(message, transfer) {
-    this.lastInputTypes = message.args.slice(0, -1).map(input => input.constructor.name);
+    this.lastInputTypes = message.fn === 'run_resistance_pipeline_browser'
+      ? Object.values(message.args[1]).map(input => input.constructor.name) : [];
     this.thread.postMessage(message, transfer);
     assert.ok(transfer.every(buffer => buffer.byteLength === 0), 'Input copies must transfer');
   }
 };
 after(async () => { await Promise.all(instances.map(worker => worker.thread.terminate())); });
-const { rasterizeGeojsonAsync, runResistancePipelineBrowserAsync, runResistancePipelineBrowserWithLightmapAsync } =
+const { rasterizeGeojsonAsync, runResistancePipelineBrowserAsync } =
   await import('../lib/wasm.js');
-const params = {
-  road_buffer: 200, road_resmax: 10, road_xmax: 5, river_buffer: 10, river_resmax: 2000, river_xmax: 4,
-  landscape_rankmax: 8, landscape_resmax: 100, landscape_xmax: 5, linear_buffer: 10, linear_rankmax: 4,
-  linear_resmax: 22000, linear_xmax: 3, lamp_resmax: 1e8, lamp_xmax: 1, lamp_ext: 100,
-  pixw: 1, nrows: 2, ncols: 2,
-};
+const model = JSON.parse(await readFile(new URL('../example/horseshoe-bat-model.json', import.meta.url)));
+const grid = { nrows: 2, ncols: 2, cellsize: 1 };
 function inputs(Type = Float32Array, genericValue = 5) {
-  const zero = new Type(4);
-  return [zero, zero, new Type(4), new Type(4).fill(10), new Type(4).fill(12),
-    new Type(4).fill(genericValue), new Type(0), new Type(4).fill(4)];
+  const noFeatures = new Type(4);
+  return { roads: noFeatures, rivers: noFeatures, buildings: new Type(4),
+    dtm: new Type(4).fill(10), dsm: new Type(4).fill(12),
+    generic: new Type(4).fill(genericValue), lamps: new Type(0), landcover: new Type(4).fill(4) };
+}
+function run(data = inputs(), definition = model, dimensions = grid) {
+  return runResistancePipelineBrowserAsync(JSON.stringify(definition), data, dimensions);
 }
 function check(result, genericValue = 5) {
   assert.equal(result.nrows, 2);
   assert.equal(result.ncols, 2);
-  const expected = { road_res: 0, river_res: 2000, landscape_res: 3.125, linear_res: 9283.25,
-    generic_res: genericValue, lamp_res: 0, soft_surf: 2, hard_surf: 0,
-    total_res: 2000 + 3.125 + 9283.25 + genericValue };
-  assert.equal(Object.keys(result).length, 11);
+  const expected = { road_res: 0, river_res: 2000, landscape_res: 3.125,
+    linear_res: 9283.25, lamp_res: 0, total_res: 11286.375 + genericValue };
   for (const [field, value] of Object.entries(expected)) {
-    assert.ok(result[field] instanceof Float32Array, field);
-    assert.deepEqual([...result[field]], Array(4).fill(Math.fround(value)), field);
+    assert.ok(result.layers[field].data instanceof Float32Array, field);
+    assert.deepEqual([...result.layers[field].data], Array(4).fill(Math.fround(value)), field);
   }
-  assert.equal(instances[0].lastReply.transferCount, 9);
+  assert.deepEqual([...result.layers.surfaces.translucent], [2, 2, 2, 2]);
+  assert.deepEqual([...result.layers.surfaces.opaque], [0, 0, 0, 0]);
+  assert.deepEqual(result.output, result.layers.total_res.data);
+  const rasters = Object.values(result.layers).flatMap(Object.values);
+  assert.equal(instances[0].lastReply.transferCount, rasters.length + 1);
 }
 
-test('transfers f32 copies and all nine results while preserving aliased caller inputs', async () => {
+test('transfers f32 copies and named layers while preserving aliased caller inputs', async () => {
   const data = inputs();
-  const snapshots = data.map(array => array.slice());
-  check(await runResistancePipelineBrowserAsync(...data, JSON.stringify(params)));
-  data.forEach((array, i) => assert.deepEqual(array, snapshots[i]));
+  const snapshots = Object.fromEntries(Object.entries(data).map(([name, array]) => [name, array.slice()]));
+  check(await run(data));
+  for (const name of Object.keys(data)) assert.deepEqual(data[name], snapshots[name]);
   assert.ok(instances[0].lastInputTypes.every(type => type === 'Float32Array'));
 });
 
-test('preserves f64 input support and refreshes f32 memory views across repeated runs', async () => {
+test('preserves f64 input support across repeated runs', async () => {
   for (const value of [11, 17, 23]) {
     const data = inputs(Float64Array, value);
-    check(await runResistancePipelineBrowserAsync(...data, JSON.stringify(params)), value);
-    assert.equal(data[5][0], value);
+    check(await run(data), value);
+    assert.equal(data.generic[0], value);
     assert.ok(instances[0].lastInputTypes.every(type => type === 'Float64Array'));
   }
 });
 
-test('light maps retain f32 output precision and leave the supplied light map usable', async () => {
+test('precomputed irradiance is expressed by the model instead of a separate execution path', async () => {
+  const definition = structuredClone(model);
+  delete definition.inputs.lamps;
+  delete definition.nodes.irradiance;
+  definition.inputs.light = { type: 'raster_ranked' };
+  definition.nodes.lamp_res.input = 'inputs.light';
   const data = inputs();
-  const light = new Float32Array([1, 2, 1, 4]);
-  const result = await runResistancePipelineBrowserWithLightmapAsync(
-    ...data.slice(0, 6), light, data[7], JSON.stringify(params),
-  );
-  assert.deepEqual([...result.lamp_res], [25e6, 50e6, 25e6, 100e6]);
-  assert.deepEqual([...result.total_res], [...result.lamp_res].map(value => Math.fround(value + 11291.375)));
-  assert.deepEqual([...light], [1, 2, 1, 4]);
-  assert.equal(instances[0].lastReply.transferCount, 9);
+  delete data.lamps;
+  data.light = new Float32Array([1, 2, 1, 4]);
+  const result = await run(data, definition);
+  assert.deepEqual([...result.layers.lamp_res.data], [25e6, 50e6, 25e6, 100e6]);
+  assert.deepEqual([...result.output], [...result.layers.lamp_res.data].map(value => Math.fround(value + 11291.375)));
+  assert.deepEqual([...data.light], [1, 2, 1, 4]);
 });
 
 test('missing terrain preserves NaNs in binary outputs', async () => {
   const data = inputs();
-  data[3][0] = NaN;
-  const result = await runResistancePipelineBrowserAsync(...data, JSON.stringify(params));
-  for (const field of ['total_res', 'lamp_res', 'landscape_res', 'linear_res', 'soft_surf', 'hard_surf']) {
-    assert.ok(Number.isNaN(result[field][0]), field);
+  data.dtm[0] = NaN;
+  const result = await run(data);
+  for (const field of ['total_res', 'lamp_res', 'landscape_res', 'linear_res']) {
+    assert.ok(Number.isNaN(result.layers[field].data[0]), field);
   }
-  assert.equal(result.generic_res[0], 5);
-  assert.equal(result.river_res[0], 2000);
+  assert.ok(Number.isNaN(result.layers.surfaces.translucent[0]));
+  assert.ok(Number.isNaN(result.layers.surfaces.opaque[0]));
+  assert.equal(result.layers.river_res.data[0], 2000);
 });
 
-test('parameter errors reject the request and a later valid request still succeeds', async () => {
-  await assert.rejects(runResistancePipelineBrowserAsync(...inputs(), '{'),
-    error => String(error).includes('Invalid params JSON'));
-  check(await runResistancePipelineBrowserAsync(...inputs(), JSON.stringify(params)));
+test('executes arbitrary models, parameter changes, named ports, and direct input outputs', async () => {
+  const definition = { name: 'custom', inputs: { habitat: { type: 'raster_ranked' } },
+    nodes: { changed: { op: 'power_response', inputs: 'inputs.habitat', parameters: {
+      input_range: [0, 4], base_range: [0, 1], exponent: 1, scale: 8, offset: 1,
+    } } }, output: 'nodes.changed' };
+  const data = { habitat: new Float64Array([0, 1, 2, 4]) };
+  assert.deepEqual([...(await run(data, definition)).output], [1, 3, 5, 9]);
+  definition.nodes.changed.parameters.scale = 4;
+  assert.deepEqual([...(await run(data, definition)).output], [1, 2, 3, 5]);
+  definition.output = 'inputs.habitat';
+  assert.deepEqual([...(await run(data, definition)).output], [0, 1, 2, 4]);
+  definition.nodes = {};
+  assert.deepEqual((await run(data, definition)).layers, {});
+  const portModel = structuredClone(model);
+  portModel.output = 'nodes.surfaces.translucent';
+  assert.deepEqual([...(await run(inputs(), portModel)).output], [2, 2, 2, 2]);
+});
+
+test('WASM matches saved native results with lights, distances, masks, and non-unit cells', async () => {
+  const nrows = 13, ncols = 17, size = nrows * ncols, cellsize = 2;
+  const data = {
+    dtm: new Float64Array(size).fill(100),
+    dsm: Float64Array.from({ length: size }, (_, i) => 100 + [0, 1, 2, 3, 4, 6, 8][i % 7]),
+    buildings: new Float64Array(size),
+    landcover: Float64Array.from({ length: size }, (_, i) => i % 23),
+    generic: new Float64Array(size).fill(3),
+    lamps: new Float64Array([4, 5, 8, 12, 8, 5]),
+  };
+  data.buildings.set([5, 4, 2], 10);
+  data.dsm[10] = NaN;
+  data.dtm[11] = NaN;
+  data.landcover[12] = NaN;
+  data.dtm[13] = NaN;
+  data.dsm[14] = NaN;
+  data.generic[17] = NaN;
+  data.roads = new Float64Array(size);
+  data.roads[0] = 1;
+  data.roads[size - 1] = 2;
+  data.rivers = new Float64Array(size);
+  data.rivers[ncols + 2] = 1;
+  data.roads[15] = NaN;
+  data.rivers[16] = NaN;
+  const result = await run(data, model, { nrows, ncols, cellsize });
+  const snapshots = JSON.parse(await readFile(new URL('../src/resistance/model/fixtures/reference-resistance.json', import.meta.url)));
+  // Snapshot 5 is the second scenario at two-metre resolution.
+  for (const [name, expected] of Object.entries(snapshots[5])) {
+    const [node, port = 'data'] = name.split('.');
+    const actual = result.layers[node][port];
+    for (let i = 0; i < size; i++) {
+      if (expected[i] === null) assert.ok(Number.isNaN(actual[i]), `${name}[${i}]`);
+      else assert.equal(actual[i], Math.fround(expected[i]), `${name}[${i}]`);
+    }
+  }
+  assert.deepEqual(result.output, result.layers.total_res.data);
+});
+
+test('model and input errors reject the request and later valid requests still succeed', async () => {
+  await assert.rejects(runResistancePipelineBrowserAsync('{', inputs(), grid),
+    error => String(error).includes('Invalid model JSON'));
+  for (const [data, definition, dimensions, message] of [
+    [{ ...inputs(), extra: new Float32Array(4) }, model, grid, 'undeclared model input'],
+    [{ ...inputs(), roads: new Float32Array(3) }, model, grid, 'dimensions'],
+    [{ ...inputs(), lamps: new Float32Array([1, 2]) }, model, grid, 'dimensions'],
+    [inputs(), { ...model, output: 'nodes.absent' }, grid, 'unknown node'],
+    [inputs(), model, { ...grid, cellsize: 0 }, 'invalid model grid'],
+  ]) {
+    await assert.rejects(run(data, definition, dimensions), error => String(error).includes(message));
+  }
+  const missing = inputs();
+  delete missing.dtm;
+  await assert.rejects(run(missing), error => String(error).includes('missing input: dtm'));
+  check(await run());
 });
 
 
@@ -206,12 +282,12 @@ test('building height rasters use zero outside and a one-metre candidate overrid
   assert.equal(buildings[0], 1);
   assert.equal(buildings[1], 0);
   const data = inputs();
-  data[2] = buildings;
-  data[4][0] = NaN;
-  const result = await runResistancePipelineBrowserAsync(...data, JSON.stringify(params));
-  assert.equal(result.hard_surf[0], 1);
-  assert.equal(result.soft_surf[0], 0);
-  assert.ok(Number.isFinite(result.total_res[0]));
-  assert.equal(result.hard_surf[1], 0);
-  assert.equal(result.soft_surf[1], 2);
+  data.buildings = buildings;
+  data.dsm[0] = NaN;
+  const result = await run(data);
+  assert.equal(result.layers.surfaces.opaque[0], 1);
+  assert.equal(result.layers.surfaces.translucent[0], 0);
+  assert.ok(Number.isFinite(result.output[0]));
+  assert.equal(result.layers.surfaces.opaque[1], 0);
+  assert.equal(result.layers.surfaces.translucent[1], 2);
 });

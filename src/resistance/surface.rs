@@ -1,6 +1,3 @@
-use super::distance::distance_generation;
-use super::operations::ranker;
-
 pub struct SurfaceOutput {
     pub surf: Vec<f64>,
     pub soft_surf: Vec<f64>,
@@ -39,32 +36,6 @@ pub fn calc_surfs(dtm: &[f64], dsm: &[f64], buildings: &[f64], nrows: usize, nco
         soft_surf,
         hard_surf,
     }
-}
-
-// R reference uses ``max_d = 999999999999`` for the "no features" case, so a
-// missing feature class resolves to the far-field resistance rather than NaN.
-const MAX_D: f64 = 1.0e12;
-
-#[derive(Clone, Copy)]
-pub(crate) enum VegetationClass {
-    UnmanagedHedge,
-    Tree,
-    ManagedHedge,
-}
-
-pub(crate) fn vegetation_mask(soft_surf: &[f64], class: VegetationClass) -> Vec<f64> {
-    ranker(soft_surf, |height| {
-        let present = match class {
-            VegetationClass::UnmanagedHedge => height > 3.0 && height < 6.0,
-            VegetationClass::Tree => height >= 6.0,
-            VegetationClass::ManagedHedge => height > 1.0 && height < 3.0,
-        };
-        if present { 1.0 } else { 0.0 }
-    })
-}
-
-pub(crate) fn vegetation_distance(mask: &[f64], nrows: usize, ncols: usize) -> Vec<f64> {
-    distance_generation(mask, nrows, ncols, MAX_D)
 }
 
 #[cfg(test)]
@@ -123,51 +94,4 @@ mod tests {
         assert!((result.soft_surf[0] - 5.0).abs() < 0.01);
     }
 
-    #[test]
-    fn test_lidar_classification() {
-        let mut soft = vec![0.0f64; 25];
-        soft[0] = 0.3;
-        soft[1] = 2.0;
-        soft[2] = 4.0;
-        soft[3] = 7.0;
-        soft[4] = f64::NAN;
-        let managed = vegetation_mask(&soft, VegetationClass::ManagedHedge);
-        let unmanaged = vegetation_mask(&soft, VegetationClass::UnmanagedHedge);
-        let tree = vegetation_mask(&soft, VegetationClass::Tree);
-        assert_eq!(managed[1], 1.0, "2m -> manhedge");
-        assert_eq!(unmanaged[2], 1.0, "4m -> unmanhedge");
-        assert_eq!(tree[3], 1.0, "7m -> tree");
-        assert_eq!(managed[0], 0.0, "0.3m -> not manhedge");
-        assert!(managed[4].is_nan(), "NA soft_surf -> NA manhedge");
-        assert!(tree[4].is_nan(), "NA soft_surf -> NA tree");
-    }
-
-    #[test]
-    fn vegetation_thresholds_and_nonfinite_heights() {
-        let heights = [1.0, 3.0, 6.0, f64::INFINITY, f64::NEG_INFINITY];
-        for (class, expected) in [
-            (VegetationClass::ManagedHedge, [0.0, 0.0, 0.0]),
-            (VegetationClass::UnmanagedHedge, [0.0, 0.0, 0.0]),
-            (VegetationClass::Tree, [0.0, 0.0, 1.0]),
-        ] {
-            let mask = vegetation_mask(&heights, class);
-            assert_eq!(&mask[..3], &expected);
-            assert!(mask[3].is_nan() && mask[4].is_nan());
-        }
-    }
-
-    #[test]
-    fn vegetation_distances_preserve_empty_full_and_missing_cells() {
-        for (mask, expected) in [
-            ([0.0, 0.0, f64::NAN, 0.0], [MAX_D, MAX_D, f64::NAN, MAX_D]),
-            ([1.0, 1.0, f64::NAN, 1.0], [0.0, 0.0, f64::NAN, 0.0]),
-            ([1.0, 0.0, f64::NAN, 0.0], [0.0, 1.0, f64::NAN, 2.0_f64.sqrt()]),
-        ] {
-            let distance = vegetation_distance(&mask, 2, 2);
-            for (actual, expected) in distance.iter().zip(expected) {
-                assert!(*actual == expected || (actual.is_nan() && expected.is_nan()));
-            }
-        }
-        assert!(vegetation_distance(&[f64::NAN; 4], 2, 2).iter().all(|d| d.is_nan()));
-    }
 }
