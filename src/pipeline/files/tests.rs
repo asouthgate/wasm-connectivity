@@ -1,3 +1,4 @@
+use super::super::schema::JsonPipeline;
 
 use super::*;
 use gdal::vector::{Feature, Geometry, LayerOptions, OGRFieldType, OGRwkbGeometryType};
@@ -10,7 +11,7 @@ impl TestDir {
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = env::temp_dir().join(format!(
-            "lmc-resistance-test-{}-{}",
+            "lmc-pipeline-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -61,7 +62,7 @@ fn grid() -> Grid {
     }
 }
 fn model() -> Value {
-    serde_json::from_str(include_str!("../../../../example/horseshoe-bat-model.json")).unwrap()
+    serde_json::from_str(include_str!("../../../example/horseshoe-bat-model.json")).unwrap()
 }
 fn collection() -> Value {
     json!({
@@ -262,17 +263,33 @@ fn integer_landcover_and_nodata_are_read_without_resampling() {
 }
 
 struct TestRun {
-    model: Model,
+    model: JsonPipeline,
     paths: HashMap<String, PathBuf>,
     output_dir: PathBuf,
     all_layers: bool,
 }
 fn execute(run: &TestRun) -> Result<()> {
-    run_files(&run.model, &run.paths)?.write(&run.output_dir, run.all_layers)
+    let graph = PipelineGraph::from_definition(run.model.clone()).map_err(invalid)?;
+    execute_pipeline_graph_from_files(
+        &graph,
+        &run.paths,
+        &run.output_dir,
+        ExecutionOptions {
+            samples: 1,
+            seed: 0,
+            all_layers: run.all_layers,
+            statistics: false,
+        },
+        false,
+        None,
+        None,
+        |_| Ok(()),
+    )?;
+    Ok(())
 }
 fn model_args(path: &Path, output: &Path, inputs: &[(&str, &str)]) -> TestRun {
     TestRun {
-        model: Model::from_json(&fs::read_to_string(path).unwrap()).unwrap(),
+        model: serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap(),
         paths: inputs
             .iter()
             .map(|(name, filename)| (name.to_string(), path.parent().unwrap().join(filename)))

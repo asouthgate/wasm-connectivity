@@ -2,9 +2,25 @@ use super::Result;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+#[derive(Clone, Copy)]
+pub struct Grid {
+    pub nrows: usize,
+    pub ncols: usize,
+    pub pixel_width: f64,
+}
+
+impl Grid {
+    pub(crate) fn contains_point(&self, point: &[f64]) -> bool {
+        point[0] >= 0.0
+            && point[1] >= 0.0
+            && point[0] < self.ncols as f64
+            && point[1] < self.nrows as f64
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Model {
+pub(super) struct JsonPipeline {
     pub name: String,
     pub grid: Option<GridSpec>,
     pub inputs: BTreeMap<String, Input>,
@@ -15,6 +31,11 @@ pub struct Model {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GridSpec {
+    // Required in JSON, but only file loading uses the coordinate reference system.
+    #[cfg_attr(
+        not(all(feature = "bin", not(target_arch = "wasm32"))),
+        allow(dead_code)
+    )]
     pub crs: String,
     pub bounds: [f64; 4],
     pub cellsize: f64,
@@ -112,6 +133,7 @@ impl Reference {
             output: None,
         }
     }
+    #[cfg(any(test, all(feature = "bin", not(target_arch = "wasm32"))))]
     pub fn selects_node(&self, name: &str, port: &str) -> bool {
         matches!(self, Self::Node { from_node, output } if from_node == name && output.as_deref().unwrap_or("data") == port)
     }
@@ -136,6 +158,7 @@ impl InputEdges {
 pub struct Node {
     pub operation: Operation,
     pub inputs: BTreeMap<String, InputEdges>,
+    pub sampling: Option<super::sampling::SampledParameters>,
 }
 impl<'de> Deserialize<'de> for Node {
     fn deserialize<D: serde::Deserializer<'de>>(
@@ -159,9 +182,11 @@ impl<'de> Deserialize<'de> for Node {
         definition
             .parameters
             .insert("op".into(), serde_json::Value::String(definition.op));
+        let mut parameters = serde_json::Value::Object(definition.parameters);
+        let sampling = super::sampling::SampledParameters::extract(&mut parameters)
+            .map_err(serde::de::Error::custom)?;
         let operation: Operation =
-            serde_json::from_value(serde_json::Value::Object(definition.parameters))
-                .map_err(serde::de::Error::custom)?;
+            serde_json::from_value(parameters).map_err(serde::de::Error::custom)?;
         let inputs = match definition.inputs {
             None => BTreeMap::new(),
             Some(value) if operation.ports().len() == 1 && operation.ports()[0].name == "data" => {
@@ -171,15 +196,19 @@ impl<'de> Deserialize<'de> for Node {
             }
             Some(value) => serde_json::from_value(value).map_err(serde::de::Error::custom)?,
         };
-        Ok(Self { operation, inputs })
+        Ok(Self {
+            operation,
+            inputs,
+            sampling,
+        })
     }
 }
 
 /// Parsed JSON definition: either one operation with explicit inputs (`Node`),
-/// or an `input` and `operations` array (`Chain`). Compilation expands the array
+/// or an `input` and `operations` array (`Chain`). Loading expands the array
 /// into connected operation nodes.
 #[derive(Debug, Clone)]
-pub enum NodeSpec {
+pub(super) enum NodeSpec {
     Chain {
         input: Reference,
         operations: Vec<Node>,

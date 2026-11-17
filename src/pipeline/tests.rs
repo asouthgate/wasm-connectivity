@@ -1,4 +1,5 @@
 use super::interval::Interval;
+use super::schema::{JsonPipeline, Node, NodeSpec};
 use super::*;
 use serde_json::{json, Value};
 use std::{
@@ -6,8 +7,8 @@ use std::{
     sync::Arc,
 };
 
-fn example() -> Model {
-    serde_json::from_str(include_str!("../../../example/horseshoe-bat-model.json")).unwrap()
+fn example() -> JsonPipeline {
+    serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap()
 }
 fn grid() -> Grid {
     Grid {
@@ -16,7 +17,7 @@ fn grid() -> Grid {
         pixel_width: 2.0,
     }
 }
-fn small_model(operations: Value) -> Model {
+fn small_model(operations: Value) -> JsonPipeline {
     serde_json::from_value(json!({
       "name": "test",
       "inputs": {
@@ -34,8 +35,45 @@ fn small_model(operations: Value) -> Model {
     }))
     .unwrap()
 }
-fn run_small(model: &Model, values: Vec<f64>) -> Result<Vec<f64>> {
-    model.run(
+pub(super) fn execute_output(
+    graph: &PipelineGraph,
+    inputs: HashMap<String, PipelineData>,
+    grid: Grid,
+) -> Result<Vec<f64>> {
+    let mut output = None;
+    graph.execute(
+        inputs,
+        grid,
+        ExecutionOptions {
+            samples: 1,
+            seed: 0,
+            all_layers: false,
+            statistics: false,
+        },
+        None,
+        |sample| {
+            output = Some(sample.resistance.as_ref().clone());
+            Ok(())
+        },
+    )?;
+    Ok(output.expect("one execution produces one result"))
+}
+
+fn execute_definition(
+    definition: &JsonPipeline,
+    inputs: HashMap<String, PipelineData>,
+    grid: Grid,
+) -> Result<Vec<f64>> {
+    execute_output(
+        &PipelineGraph::from_definition(definition.clone())?,
+        inputs,
+        grid,
+    )
+}
+
+fn run_small(model: &JsonPipeline, values: Vec<f64>) -> Result<Vec<f64>> {
+    execute_definition(
+        model,
         HashMap::from([("data".into(), PipelineData::raster(values))]),
         grid(),
     )
@@ -52,7 +90,7 @@ fn assert_same(actual: &[f64], expected: &[f64]) {
 
 #[test]
 fn raycaster_outside_points_do_not_contribute_or_error() {
-    let model: Model = serde_json::from_value(serde_json::json!({
+    let model: JsonPipeline = serde_json::from_value(serde_json::json!({
         "name": "lights", "inputs": {
             "terrain": {"type": "raster_topography"},
             "buildings": {"type": "vector_occluder"},
@@ -84,13 +122,15 @@ fn raycaster_outside_points_do_not_contribute_or_error() {
         ncols: 2,
         pixel_width: 1.0,
     };
-    assert_eq!(model.run(fields.clone(), grid).unwrap(), vec![0.0; 4]);
+    assert_eq!(
+        execute_definition(&model, fields.clone(), grid).unwrap(),
+        vec![0.0; 4]
+    );
     fields.insert(
         "lights".into(),
         PipelineData::Points(Arc::new(vec![-1.0, 0.0, -3.0])),
     );
-    assert!(model
-        .run(fields, grid)
+    assert!(execute_definition(&model, fields, grid)
         .unwrap_err()
         .contains("invalid point coordinates or height"));
 }
@@ -294,6 +334,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
     model.nodes.insert(
         "result".into(),
         NodeSpec::Node(Node {
+            sampling: None,
             operation: Operation::Sum {},
             inputs: BTreeMap::from([("data".into(), InputEdges::Many(vec![]))]),
         }),
@@ -304,6 +345,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
     model.nodes.insert(
         "result".into(),
         NodeSpec::Node(Node {
+            sampling: None,
             operation: Operation::Round,
             inputs: BTreeMap::new(),
         }),
@@ -312,31 +354,31 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
         .unwrap_err()
         .contains("missing input port data"));
     model = small_model(json!([]));
-    assert!(model
-        .run(
-            HashMap::from([("data".into(), PipelineData::raster(vec![0.0; 5]))]),
-            grid()
-        )
-        .is_err());
+    assert!(execute_definition(
+        &model,
+        HashMap::from([("data".into(), PipelineData::raster(vec![0.0; 5]))]),
+        grid()
+    )
+    .is_err());
     model
         .inputs
         .insert("data".into(), Input::RaycasterPointSource {});
-    assert!(model
-        .run(
-            HashMap::from([("data".into(), PipelineData::Points(Arc::new(vec![])))]),
-            grid()
-        )
-        .is_err());
+    assert!(execute_definition(
+        &model,
+        HashMap::from([("data".into(), PipelineData::Points(Arc::new(vec![])))]),
+        grid()
+    )
+    .is_err());
 }
 
 #[test]
 fn model_schema_rejects_unknown_operations_fields_and_policies() {
     let original: Value =
-        serde_json::from_str(include_str!("../../../example/horseshoe-bat-model.json")).unwrap();
+        serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap();
     for (input, alias) in [("buildings", "value_field"), ("lamps", "height_field")] {
         let mut value = original.clone();
         value["inputs"][input][alias] = json!("value");
-        assert!(serde_json::from_value::<Model>(value).is_err());
+        assert!(serde_json::from_value::<JsonPipeline>(value).is_err());
     }
     for (input, key, setting) in [
         ("roads", "required_fields", json!(["presence"])),
@@ -344,7 +386,7 @@ fn model_schema_rejects_unknown_operations_fields_and_policies() {
     ] {
         let mut value = original.clone();
         value["inputs"][input][key] = setting;
-        assert!(serde_json::from_value::<Model>(value).is_err());
+        assert!(serde_json::from_value::<JsonPipeline>(value).is_err());
     }
     for (pointer, value) in [
         ("/nodes/road_res/operations/0/op", json!("script")),
@@ -365,7 +407,7 @@ fn model_schema_rejects_unknown_operations_fields_and_policies() {
             value_copy["nodes"]["road_res"]["operations"][0]["typo"] = value;
         }
         assert!(
-            serde_json::from_value::<Model>(value_copy).is_err(),
+            serde_json::from_value::<JsonPipeline>(value_copy).is_err(),
             "{pointer}"
         );
     }
@@ -376,9 +418,8 @@ fn horseshoe_spec_matches_reference_resistance_layers() {
     let (m, n) = (13, 17);
     let total = m * n;
     // Expected resistance layers for the scenarios below; JSON null represents NoData.
-    let snapshots: Vec<BTreeMap<String, Vec<Option<f64>>>> = serde_json::from_str(
-        include_str!("fixtures/reference-resistance.json")
-    ).unwrap();
+    let snapshots: Vec<BTreeMap<String, Vec<Option<f64>>>> =
+        serde_json::from_str(include_str!("fixtures/reference-resistance.json")).unwrap();
     let mut snapshot = snapshots.iter();
     for pixel_width in [1.0, 2.0, 5.0] {
         for scenario in 0..4 {
@@ -446,16 +487,16 @@ fn horseshoe_spec_matches_reference_resistance_layers() {
                 } else {
                     Reference::node(name.into())
                 };
-                let actual = model
-                    .run(
-                        fields.clone(),
-                        Grid {
-                            nrows: m,
-                            ncols: n,
-                            pixel_width,
-                        },
-                    )
-                    .unwrap();
+                let actual = execute_definition(
+                    &model,
+                    fields.clone(),
+                    Grid {
+                        nrows: m,
+                        ncols: n,
+                        pixel_width,
+                    },
+                )
+                .unwrap();
                 assert_same(&actual, &expected);
             }
         }
@@ -468,7 +509,7 @@ fn canonical_nodes_and_compact_chains_execute_the_same_graph() {
         {"op":"discrete_map","parameters":{"intervals":{"[0,2]":2,"[3,4]":4},"unmatched":"error"}},
         {"op":"power_response","parameters":{"input_range":[0,4],"base_range":[0,1],"exponent":2,"scale":100,"offset":0}}
     ]));
-    let explicit:Model=serde_json::from_value(json!({
+    let explicit:JsonPipeline=serde_json::from_value(json!({
         "name":"explicit","inputs":{"data":{"type":"raster_ranked"}},
         "nodes":{
             "a_response":{"op":"power_response","inputs":"nodes.z_map",
@@ -481,7 +522,7 @@ fn canonical_nodes_and_compact_chains_execute_the_same_graph() {
     let expected = [25.0, 25.0, 25.0, 100.0, 100.0, f64::NAN];
     assert_same(&run_small(&chain, values.clone()).unwrap(), &expected);
     assert_same(&run_small(&explicit, values).unwrap(), &expected);
-    let graph = chain.compile().unwrap();
+    let graph = PipelineGraph::from_definition(chain.clone()).unwrap();
     assert_eq!(graph.nodes.len(), 2);
     assert_eq!(graph.nodes["result"].inputs.len(), 1);
 }
@@ -490,8 +531,7 @@ fn canonical_nodes_and_compact_chains_execute_the_same_graph() {
 fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
     let mut model = example();
     model.output = Reference::node("surfaces".into());
-    assert!(model
-        .compile()
+    assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("select a declared output port"));
@@ -499,13 +539,12 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
         from_node: "surfaces".into(),
         output: Some("opaque".into()),
     };
-    assert!(model.compile().is_ok());
+    assert!(PipelineGraph::from_definition(model.clone()).is_ok());
     model.output = Reference::Node {
         from_node: "surfaces".into(),
         output: Some("missing".into()),
     };
-    assert!(model
-        .compile()
+    assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("has no output missing"));
@@ -519,8 +558,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             from_input: "dtm".into(),
         }),
     );
-    assert!(model
-        .compile()
+    assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("point_sources must be raycaster_point_source"));
@@ -539,11 +577,15 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             },
         ]),
     );
-    assert!(model.compile().err().unwrap().contains("same units"));
+    assert!(PipelineGraph::from_definition(model.clone())
+        .err()
+        .unwrap()
+        .contains("same units"));
     let mut model = small_model(json!([]));
     model.nodes.insert(
         "result".into(),
         NodeSpec::Node(Node {
+            sampling: None,
             operation: Operation::Round,
             inputs: BTreeMap::from([(
                 "data".into(),
@@ -553,14 +595,14 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             )]),
         }),
     );
-    assert!(model
-        .compile()
+    assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("expects one reference"));
     model.nodes.insert(
         "result".into(),
         NodeSpec::Node(Node {
+            sampling: None,
             operation: Operation::Round,
             inputs: BTreeMap::from([
                 (
@@ -578,8 +620,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             ]),
         }),
     );
-    assert!(model
-        .compile()
+    assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("unknown input port typo"));
@@ -597,8 +638,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             operations: vec![],
         },
     );
-    assert!(model
-        .compile()
+    assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("cyclic node reference"));
@@ -653,8 +693,7 @@ fn references_and_parameters_are_not_ambiguous_strings_or_flat_options() {
     let model = small_model(
         json!([{"op":"power_response","parameters":{"input_range":[0,0],"base_range":[0,1],"exponent":2,"scale":1,"offset":0}}]),
     );
-    assert!(model
-        .compile()
+    assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("invalid power response parameters"));

@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 pub mod current;
 pub mod mixed;
+mod output;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum GroundMode {

@@ -1,4 +1,8 @@
-use super::{Grid as ModelGrid, Input as ModelInput, Model, NodeOutputs, PipelineData, Reference};
+use super::{
+    ExecutionOptions, Grid as ModelGrid, Input as ModelInput, PipelineData, PipelineGraph,
+    Reference, SamplingResult,
+};
+
 use crate::{
     geospatial::{rasterize_field, GeoTransform},
     raster::io::{read_raster, write_raster as write_tiff, Raster, RasterGrid as Grid},
@@ -10,7 +14,7 @@ use gdal::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
 };
@@ -19,14 +23,6 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
-}
-
-pub struct FileOutput {
-    pub grid: Grid,
-    pub output: Vec<f64>,
-    pub layers: BTreeMap<String, NodeOutputs>,
-    pub warnings: Vec<String>,
-    output_reference: Reference,
 }
 
 fn require_aligned(reference: &Grid, raster: &Raster, path: &Path) -> Result<()> {
@@ -227,18 +223,33 @@ fn raster_on_grid(grid: &Grid, raster: Raster, path: &Path) -> Result<Vec<f64>> 
     Ok(values)
 }
 
-pub fn run_files(model: &Model, paths: &HashMap<String, PathBuf>) -> Result<FileOutput> {
-    for name in model.inputs.keys() {
+struct LoadedInputs {
+    grid: Grid,
+    fields: HashMap<String, PipelineData>,
+    warnings: Vec<String>,
+}
+
+/// Return the input names declared by validated pipeline JSON.
+pub fn input_names(pipeline_json: &str) -> Result<Vec<String>> {
+    Ok(PipelineGraph::from_json(pipeline_json)
+        .map_err(invalid)?
+        .inputs()
+        .keys()
+        .cloned()
+        .collect())
+}
+
+fn load_inputs(graph: &PipelineGraph, paths: &HashMap<String, PathBuf>) -> Result<LoadedInputs> {
+    for name in graph.inputs.keys() {
         if !paths.contains_key(name) {
             return Err(invalid(format!("missing input path: {name}")).into());
         }
     }
-    if paths.keys().any(|name| !model.inputs.contains_key(name)) {
+    if paths.keys().any(|name| !graph.inputs.contains_key(name)) {
         return Err(invalid("undeclared model input path supplied").into());
     }
     let mut warnings = Vec::new();
-    let graph = model.compile().map_err(invalid)?;
-    for (name, input) in &model.inputs {
+    for (name, input) in &graph.inputs {
         if input.is_raster() {
             let path = &paths[name];
             let extension = path
@@ -255,7 +266,7 @@ pub fn run_files(model: &Model, paths: &HashMap<String, PathBuf>) -> Result<File
         }
     }
     let mut fields = HashMap::new();
-    let grid = if let Some(spec) = &model.grid {
+    let grid = if let Some(spec) = &graph.grid {
         let (nrows, ncols) = spec.dimensions().map_err(invalid)?;
         let crs = SpatialRef::from_definition(&spec.crs)?;
         if !crs.is_projected() || (crs.linear_units() - 1.0).abs() > 1e-9 {
@@ -275,7 +286,7 @@ pub fn run_files(model: &Model, paths: &HashMap<String, PathBuf>) -> Result<File
             ],
         }
     } else {
-        let name = model
+        let name = graph
             .inputs
             .iter()
             .find_map(
@@ -296,7 +307,7 @@ pub fn run_files(model: &Model, paths: &HashMap<String, PathBuf>) -> Result<File
         reference.grid
     };
     let grid = &grid;
-    for (name, input) in &model.inputs {
+    for (name, input) in &graph.inputs {
         if fields.contains_key(name) {
             continue;
         }
@@ -306,7 +317,7 @@ pub fn run_files(model: &Model, paths: &HashMap<String, PathBuf>) -> Result<File
             | ModelInput::RasterSurface {}
             | ModelInput::RasterRanked {} => {
                 let raster = read_raster(&path)?;
-                let values = if model.grid.is_some() {
+                let values = if graph.grid.is_some() {
                     raster_on_grid(grid, raster, &path)?
                 } else {
                     require_aligned(grid, &raster, &path)?;
@@ -369,15 +380,10 @@ pub fn run_files(model: &Model, paths: &HashMap<String, PathBuf>) -> Result<File
         };
         fields.insert(name.clone(), field);
     }
-    let (output, layers) = graph
-        .run_with_layers(fields, model_grid(grid))
-        .map_err(invalid)?;
-    Ok(FileOutput {
+    Ok(LoadedInputs {
         grid: grid.clone(),
-        output,
-        layers,
+        fields,
         warnings,
-        output_reference: model.output.clone(),
     })
 }
 
@@ -389,48 +395,156 @@ fn model_grid(grid: &Grid) -> ModelGrid {
     }
 }
 
-impl FileOutput {
-    pub fn write(self, output_dir: &Path, all_layers: bool) -> Result<()> {
-        let mut extra_layers = Vec::new();
-        if all_layers {
-            for (name, outputs) in self.layers {
-                for (port, field) in outputs {
-                    if self.output_reference.selects_node(&name, &port) {
-                        continue;
-                    }
-                    if let PipelineData::Raster(values) = field {
-                        let filename = if port == "data" {
-                            name.clone()
-                        } else {
-                            format!("{name}.{port}")
-                        };
-                        extra_layers.push((filename, values));
-                    }
-                }
-            }
-            if extra_layers
-                .iter()
-                .any(|(name, _)| name == "total_resistance")
-            {
-                return Err(invalid(
-                    "node total_resistance conflicts with the final output filename",
-                )
-                .into());
-            }
-        }
-        // All validation and calculations complete before creating any output files.
-        fs::create_dir_all(output_dir)?;
-        write_tiff(
-            &output_dir.join("total_resistance.tif"),
-            &self.grid,
-            &self.output,
-        )?;
-        for (name, values) in extra_layers {
-            write_tiff(&output_dir.join(format!("{name}.tif")), &self.grid, &values)?;
-        }
-        Ok(())
+#[cfg(test)]
+mod tests;
+
+fn layer_name(name: &str, output: &str) -> String {
+    if output == "data" {
+        name.into()
+    } else {
+        format!("{name}.{output}")
     }
 }
 
-#[cfg(test)]
-mod tests;
+fn write_maps<'a>(directory: &Path, grid: &Grid, maps: Vec<(String, &'a [f64])>) -> Result<()> {
+    let mut names = std::collections::HashSet::new();
+    for (name, _) in &maps {
+        if !names.insert(name) {
+            return Err(invalid(format!("duplicate output filename: {name}")).into());
+        }
+    }
+    fs::create_dir_all(directory)?;
+    for (name, values) in maps {
+        write_tiff(&directory.join(name), grid, values)?;
+    }
+    Ok(())
+}
+
+/// Load pipeline inputs from files, execute, and write maps or summary statistics.
+pub fn execute_pipeline_from_files(
+    pipeline_json: &str,
+    paths: &HashMap<String, PathBuf>,
+    output_dir: &Path,
+    options: ExecutionOptions,
+    save_samples: bool,
+    current_source_path: Option<&Path>,
+    current_ground_path: Option<&Path>,
+    report_sample_completion: impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<String>> {
+    let graph = PipelineGraph::from_json(pipeline_json).map_err(invalid)?;
+    execute_pipeline_graph_from_files(
+        &graph,
+        paths,
+        output_dir,
+        options,
+        save_samples,
+        current_source_path,
+        current_ground_path,
+        report_sample_completion,
+    )
+}
+
+fn execute_pipeline_graph_from_files(
+    graph: &PipelineGraph,
+    paths: &HashMap<String, PathBuf>,
+    output_dir: &Path,
+    mut options: ExecutionOptions,
+    save_samples: bool,
+    current_source_path: Option<&Path>,
+    current_ground_path: Option<&Path>,
+    mut report_sample_completion: impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<String>> {
+    options.statistics = options.samples > 1;
+    let loaded = load_inputs(graph, paths)?;
+    let current_source_and_ground = match (current_source_path, current_ground_path) {
+        (None, None) => None,
+        (Some(source), Some(ground)) => {
+            let source_raster = read_raster(source)?;
+            let ground_raster = read_raster(ground)?;
+            require_aligned(&loaded.grid, &source_raster, source)?;
+            require_aligned(&loaded.grid, &ground_raster, ground)?;
+            Some((source_raster.data, ground_raster.data))
+        }
+        _ => {
+            return Err(invalid("current source and ground paths must be supplied together").into())
+        }
+    };
+    let current_solver = current_source_and_ground
+        .as_ref()
+        .map(|(source, ground)| crate::pipeline::CurrentSolver::new(source, ground));
+    let result = graph
+        .execute(
+            loaded.fields,
+            model_grid(&loaded.grid),
+            options,
+            current_solver.as_ref(),
+            |sample| {
+                if options.samples == 1 || save_samples {
+                    let mut maps =
+                        vec![("total_resistance.tif".into(), sample.resistance.as_slice())];
+                    if let Some(current) = &sample.current {
+                        maps.push(("current.tif".into(), current));
+                    }
+                    for (name, outputs) in &sample.layers {
+                        for (port, field) in outputs {
+                            if graph.output.selects_node(name, port) {
+                                continue;
+                            }
+                            if let PipelineData::Raster(values) = field {
+                                maps.push((format!("{}.tif", layer_name(name, port)), values));
+                            }
+                        }
+                    }
+                    let sample_output_dir = if options.samples == 1 {
+                        output_dir.to_path_buf()
+                    } else {
+                        output_dir
+                            .join("samples")
+                            .join(format!("{:06}", sample.index))
+                    };
+                    write_maps(&sample_output_dir, &loaded.grid, maps)
+                        .map_err(|e| e.to_string())?;
+                }
+                report_sample_completion(sample.index + 1).map_err(|e| e.to_string())?;
+                Ok(())
+            },
+        )
+        .map_err(invalid)?;
+    if let Some(statistics) = result {
+        write_statistics(output_dir, &loaded.grid, &graph.output, &statistics)?;
+    }
+    Ok(loaded.warnings)
+}
+
+fn write_statistics(
+    directory: &Path,
+    grid: &Grid,
+    output: &Reference,
+    result: &SamplingResult,
+) -> Result<()> {
+    let mut maps = vec![
+        (
+            "total_resistance.tif".into(),
+            result.resistance.mean.as_slice(),
+        ),
+        (
+            "total_resistance_variance.tif".into(),
+            result.resistance.variance.as_slice(),
+        ),
+    ];
+    if let Some(current) = &result.current {
+        maps.push(("current.tif".into(), current.mean.as_slice()));
+        maps.push(("current_variance.tif".into(), current.variance.as_slice()));
+    }
+    for (name, outputs) in &result.layers {
+        for (port, stats) in outputs {
+            if output.selects_node(name, port) {
+                continue;
+            }
+            let name = layer_name(name, port);
+            maps.push((format!("{name}.tif"), stats.mean.as_slice()));
+            maps.push((format!("{name}_variance.tif"), stats.variance.as_slice()));
+        }
+    }
+    write_maps(directory, grid, maps)
+}

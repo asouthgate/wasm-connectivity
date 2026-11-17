@@ -78,6 +78,7 @@ export interface ResistanceOutput {
   nrows: number;
   ncols: number;
   output: Float32Array;
+  current?: Float32Array;
   layers: Record<string, Record<string, Float32Array>>;
 }
 
@@ -85,7 +86,43 @@ export interface ResistanceOutput {
 export function runResistancePipelineBrowserAsync(
   modelJson: string, inputs: Record<string, RasterInput>,
   grid: { nrows: number; ncols: number; cellsize: number },
+  options?: ResistanceExecutionOptions & { samples?: 1 },
 ): Promise<ResistanceOutput>;
+
+export interface ResultSummaryStatistics {
+  mean: Float32Array;
+  /** Sample variance, divided by samples - 1. */
+  variance: Float32Array;
+}
+
+export interface ResistanceExecutionOptions {
+  /** Defaults to 1; values above 1 return means and variances. */
+  samples?: number;
+  seed?: number;
+  allLayers?: boolean;
+  currentSolverOptions?: {
+    source: RasterInput;
+    ground: RasterInput;
+    maxIter?: number;
+    tol?: number;
+    useDirichletGround?: boolean;
+  };
+}
+
+export interface ResistanceSamplingResult {
+  nrows: number;
+  ncols: number;
+  samples: number;
+  resistance: ResultSummaryStatistics;
+  current?: ResultSummaryStatistics;
+  layers: Record<string, Record<string, ResultSummaryStatistics>>;
+}
+
+export function runResistancePipelineBrowserAsync(
+  modelJson: string, inputs: Record<string, RasterInput>,
+  grid: { nrows: number; ncols: number; cellsize: number },
+  options: ResistanceExecutionOptions,
+): Promise<ResistanceOutput | ResistanceSamplingResult>;
 
 export function roostFinderComputeAsync(
   detectorsCsv: string, masterCsv: string, sunsetCsv: string,

@@ -6,4 +6,3 @@ pub mod landscape;
 pub mod linear;
 pub mod irradiance;
 pub mod operations;
-pub mod model;

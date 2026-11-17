@@ -13,7 +13,7 @@ cli:
 
 bench:
 	node benchmarks/scenarios/prepare.mjs
-	cargo build --release --features bin --bin lmc-current
+	cargo build --release --features bin --bin lmc
 
 test:
 	cargo test

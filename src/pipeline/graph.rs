@@ -1,9 +1,10 @@
+use super::schema::NodeSpec;
 use super::{
     interval::{parse_interval_mappings, Interval},
     schema::*,
     Result,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -215,7 +216,7 @@ impl Operation {
 }
 
 impl Operation {
-    fn validate_parameters(&self) -> Result<()> {
+    pub(super) fn validate_parameters(&self) -> Result<()> {
         match self {
             Self::DiscreteMap {
                 intervals,
@@ -278,13 +279,29 @@ impl Operation {
     }
 }
 
-pub struct Graph<'a> {
-    pub(super) model: &'a Model,
+#[derive(Debug, Clone)]
+pub(crate) struct PipelineGraph {
+    pub(super) _name: String,
+    pub(super) grid: Option<GridSpec>,
+    pub(super) inputs: BTreeMap<String, Input>,
+    pub(super) output: Reference,
     pub(super) nodes: BTreeMap<String, Node>,
+    pub(super) named_nodes: BTreeSet<String>,
+    pub(super) order: Vec<String>,
 }
-impl Model {
-    pub fn compile(&self) -> Result<Graph<'_>> {
-        for name in self.inputs.keys().chain(self.nodes.keys()) {
+impl PipelineGraph {
+    pub fn from_json(json: &str) -> Result<Self> {
+        let definition =
+            serde_json::from_str(json).map_err(|error| format!("Invalid model JSON: {error}"))?;
+        Self::from_definition(definition)
+    }
+
+    pub fn inputs(&self) -> &BTreeMap<String, Input> {
+        &self.inputs
+    }
+
+    pub(super) fn from_definition(definition: super::schema::JsonPipeline) -> Result<Self> {
+        for name in definition.inputs.keys().chain(definition.nodes.keys()) {
             if name.is_empty()
                 || !name
                     .chars()
@@ -293,23 +310,27 @@ impl Model {
                 return Err(format!("invalid input/node name: {name}"));
             }
         }
-        if self.inputs.keys().any(|name| self.nodes.contains_key(name)) {
+        if definition
+            .inputs
+            .keys()
+            .any(|name| definition.nodes.contains_key(name))
+        {
             return Err("input/node name collision".into());
         }
         let validate_ref = |reference: &Reference| -> Result<()> {
             match reference {
-                Reference::Input { from_input } if !self.inputs.contains_key(from_input) => {
+                Reference::Input { from_input } if !definition.inputs.contains_key(from_input) => {
                     Err(format!("unknown input: {from_input}"))
                 }
-                Reference::Node { from_node, .. } if !self.nodes.contains_key(from_node) => {
+                Reference::Node { from_node, .. } if !definition.nodes.contains_key(from_node) => {
                     Err(format!("unknown node: {from_node}"))
                 }
                 _ => Ok(()),
             }
         };
-        validate_ref(&self.output)?;
+        validate_ref(&definition.output)?;
         let mut nodes = BTreeMap::new();
-        for (name, spec) in &self.nodes {
+        for (name, spec) in &definition.nodes {
             let definitions: &[Node] = match spec {
                 NodeSpec::Node(node) => std::slice::from_ref(node),
                 NodeSpec::Chain { input, operations } => {
@@ -334,6 +355,7 @@ impl Model {
                             name.clone(),
                             Node {
                                 operation: Operation::Identity,
+                                sampling: None,
                                 inputs: BTreeMap::from([(
                                     "data".into(),
                                     InputEdges::One(input.clone()),
@@ -373,39 +395,47 @@ impl Model {
                 }
             }
         }
-        let graph = Graph { model: self, nodes };
+        let order = topological_order(&nodes)?;
+        let graph = PipelineGraph {
+            _name: definition.name,
+            grid: definition.grid,
+            inputs: definition.inputs,
+            output: definition.output,
+            named_nodes: definition.nodes.keys().cloned().collect(),
+            nodes,
+            order,
+        };
         let mut checker = TypeChecker {
             graph: &graph,
-            active: HashSet::new(),
             outputs: HashMap::new(),
         };
-        for name in graph.nodes.keys() {
+        for name in &graph.order {
             checker.node(name)?;
         }
-        if !checker.reference(&self.output)?.is_raster() {
+        if !checker.reference(&graph.output)?.is_raster() {
             return Err("model output must be a raster".into());
         }
         Ok(graph)
     }
 }
 
-struct TypeChecker<'a, 'm> {
-    graph: &'a Graph<'m>,
-    active: HashSet<String>,
+struct TypeChecker<'a> {
+    graph: &'a PipelineGraph,
     outputs: HashMap<String, BTreeMap<String, Descriptor>>,
 }
-impl TypeChecker<'_, '_> {
+impl TypeChecker<'_> {
     fn reference(&mut self, reference: &Reference) -> Result<Descriptor> {
         match reference {
             Reference::Input { from_input } => self
                 .graph
-                .model
                 .inputs
                 .get(from_input)
                 .map(Input::descriptor)
                 .ok_or_else(|| format!("unknown input: {from_input}")),
             Reference::Node { from_node, output } => self
-                .node(from_node)?
+                .outputs
+                .get(from_node)
+                .ok_or_else(|| format!("node {from_node} has not been checked"))?
                 .get(output.as_deref().unwrap_or("data"))
                 .copied()
                 .ok_or_else(|| {
@@ -425,9 +455,6 @@ impl TypeChecker<'_, '_> {
             .nodes
             .get(name)
             .ok_or_else(|| format!("unknown node: {name}"))?;
-        if !self.active.insert(name.into()) {
-            return Err(format!("cyclic node reference: {name}"));
-        }
         let result = (|| {
             node.operation.validate_parameters()?;
             let ports = node.operation.ports();
@@ -478,9 +505,49 @@ impl TypeChecker<'_, '_> {
             node.operation.output_types(&inputs)
         })()
         .map_err(|error| format!("node {name}: {error}"));
-        self.active.remove(name);
         let outputs = result?;
         self.outputs.insert(name.into(), outputs.clone());
         Ok(outputs)
     }
+}
+
+fn topological_order(nodes: &BTreeMap<String, Node>) -> Result<Vec<String>> {
+    let mut remaining = BTreeMap::new();
+    let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (name, node) in nodes {
+        let dependencies: BTreeSet<_> = node
+            .inputs
+            .values()
+            .flat_map(InputEdges::references)
+            .filter_map(|reference| match reference {
+                Reference::Node { from_node, .. } => Some(from_node.as_str()),
+                _ => None,
+            })
+            .collect();
+        remaining.insert(name.as_str(), dependencies.len());
+        for dependency in dependencies {
+            dependents.entry(dependency).or_default().push(name);
+        }
+    }
+    let mut ready: BTreeSet<_> = remaining
+        .iter()
+        .filter_map(|(&name, &count)| (count == 0).then_some(name))
+        .collect();
+    let mut order = Vec::with_capacity(nodes.len());
+    while let Some(name) = ready.pop_first() {
+        order.push(name.to_owned());
+        if let Some(children) = dependents.get(name) {
+            for child in children {
+                let count = remaining.get_mut(child).ok_or("unknown dependent node")?;
+                *count -= 1;
+                if *count == 0 {
+                    ready.insert(child);
+                }
+            }
+        }
+    }
+    if order.len() != nodes.len() {
+        return Err("cyclic node reference".into());
+    }
+    Ok(order)
 }

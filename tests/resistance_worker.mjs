@@ -159,7 +159,7 @@ test('WASM matches saved native results with lights, distances, masks, and non-u
   data.roads[15] = NaN;
   data.rivers[16] = NaN;
   const result = await run(data, model, { nrows, ncols, cellsize });
-  const snapshots = JSON.parse(await readFile(new URL('../src/resistance/model/fixtures/reference-resistance.json', import.meta.url)));
+  const snapshots = JSON.parse(await readFile(new URL('../src/pipeline/fixtures/reference-resistance.json', import.meta.url)));
   // Snapshot 5 is the second scenario at two-metre resolution.
   for (const [name, expected] of Object.entries(snapshots[5])) {
     const [node, port = 'data'] = name.split('.');
@@ -290,4 +290,47 @@ test('building height rasters use zero outside and a one-metre candidate overrid
   assert.ok(Number.isFinite(result.output[0]));
   assert.equal(result.layers.surfaces.opaque[1], 0);
   assert.equal(result.layers.surfaces.translucent[1], 2);
+});
+
+test('sampled browser runs return resistance and current statistics without retaining samples', async () => {
+  const { runResistancePipelineBrowserAsync, solveCurrentAsync } = await import('../lib/index.js');
+  const definition = { name: 'sampled', inputs: { data: { type: 'raster_ranked' } },
+    nodes: { resistance: { op: 'power_response', inputs: 'inputs.data', parameters: {
+      input_range: [1, 4], base_range: [1, 4],
+      exponent: { sample: { values: [1, 2, 3] } }, scale: 1, offset: 0,
+    } } }, output: 'nodes.resistance' };
+  const source = new Float64Array([1, 0, 0]);
+  const ground = new Float64Array([0, 1, 1]);
+  const data = new Float64Array([1, 2, 4]);
+  const options = { samples: 3, allLayers: true, currentSolverOptions: { source, ground } };
+  const result = await runResistancePipelineBrowserAsync(JSON.stringify(definition), { data },
+    { nrows: 1, ncols: 3, cellsize: 1 }, options);
+  assert.equal(result.samples, 3);
+  assert.deepEqual([...result.resistance.mean], [1, Math.fround(14 / 3), 28]);
+  assert.deepEqual([...result.resistance.variance], [0, Math.fround(28 / 3), 1008]);
+  assert.deepEqual(result.layers.resistance.data.mean, result.resistance.mean);
+  const currents = [];
+  for (const exponent of [1, 2, 3]) {
+    const resistance = Float64Array.from(data, v => v ** exponent);
+    const solved = await solveCurrentAsync(resistance, 1, 3, -9999, source, ground, { tol: 1e-4 });
+    assert.ok(!solved.error, solved.error);
+    currents.push(solved.output.current_map);
+  }
+  for (let i = 0; i < 3; i++) {
+    const mean = currents.reduce((sum, map) => sum + map[i], 0) / 3;
+    const variance = currents.reduce((sum, map) => sum + (map[i] - mean) ** 2, 0) / 2;
+    assert.equal(result.current.mean[i], Math.fround(mean));
+    assert.equal(result.current.variance[i], Math.fround(variance));
+  }
+  assert.deepEqual([...source], [1, 0, 0]);
+  assert.deepEqual([...ground], [0, 1, 1]);
+  assert.deepEqual([...data], [1, 2, 4]);
+  definition.nodes.resistance.parameters.exponent = { sample: { values: [2] } };
+  const single = await runResistancePipelineBrowserAsync(JSON.stringify(definition), { data },
+    { nrows: 1, ncols: 3, cellsize: 1 }, { samples: 1, allLayers: false, currentSolverOptions: { source, ground } });
+  assert.deepEqual([...single.output], [1, 4, 16]);
+  assert.deepEqual(single.current, Float32Array.from(currents[1]));
+  assert.deepEqual(single.layers, {});
+  await assert.rejects(runResistancePipelineBrowserAsync(JSON.stringify(definition), { data },
+    { nrows: 1, ncols: 3, cellsize: 1 }, { samples: 0 }), /positive integer/);
 });
