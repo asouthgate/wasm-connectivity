@@ -69,7 +69,8 @@ fn resistance_output_flows_directly_into_all_current_solver_modes() {
     });
     fs::create_dir(dir.0.join("models")).unwrap();
     fs::write(dir.0.join("models/model.json"), model.to_string()).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_lmc-resistance"))
+    let output = Command::new(env!("CARGO_BIN_EXE_lmc"))
+        .arg("resistance")
         .current_dir(&dir.0)
         .args([
             "--model",
@@ -104,7 +105,8 @@ fn resistance_output_flows_directly_into_all_current_solver_modes() {
         let mut outputs = Vec::new();
         for extension in ["tif", "asc"] {
             let result_file = format!("current-{precision}-{explicit}.{extension}");
-            let mut command = Command::new(env!("CARGO_BIN_EXE_lmc-current"));
+            let mut command = Command::new(env!("CARGO_BIN_EXE_lmc"));
+            command.arg("current");
             command.current_dir(&dir.0).args([
                 "--resistance",
                 if extension == "tif" {
@@ -151,11 +153,32 @@ fn resistance_output_flows_directly_into_all_current_solver_modes() {
             );
         }
     }
+    // Full mode with one sample must match solving its resistance output directly.
+    let full = Command::new(env!("CARGO_BIN_EXE_lmc"))
+        .current_dir(&dir.0)
+        .args(["full", "--model", "models/model.json", "--base", "resistance.tif",
+            "--source", "source.tif", "--ground", "ground.tif", "--output-dir", "full"])
+        .output().unwrap();
+    assert!(full.status.success(), "{}", String::from_utf8_lossy(&full.stderr));
+    assert!(full.stderr.is_empty());
+    let direct = Command::new(env!("CARGO_BIN_EXE_lmc"))
+        .current_dir(&dir.0)
+        .args(["current", "--resistance", "full/total_resistance.tif", "--source", "source.tif",
+            "--ground", "ground.tif", "--output", "direct.tif"])
+        .output().unwrap();
+    assert!(direct.status.success(), "{}", String::from_utf8_lossy(&direct.stderr));
+    let full_current = read_raster(&dir.0.join("full/current.tif")).unwrap();
+    let direct_current = read_raster(&dir.0.join("direct.tif")).unwrap();
+    for (&full, &direct) in full_current.data.iter().zip(&direct_current.data) {
+        assert!(full.is_nan() && direct.is_nan() || full == direct);
+    }
+    assert!(!dir.0.join("full/current_variance.tif").exists());
     // A shifted ground must fail at file validation, before solving or writing.
     let mut shifted = grid.clone();
     shifted.affine[0] += 1.0;
     write_raster(&dir.0.join("shifted.tif"), &shifted, &ground).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_lmc-current"))
+    let output = Command::new(env!("CARGO_BIN_EXE_lmc"))
+        .arg("current")
         .current_dir(&dir.0)
         .args([
             "--resistance",
@@ -195,14 +218,16 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
             }}
         },"output":"nodes.resistance"});
     std::fs::write(dir.0.join("model.json"),model.to_string()).unwrap();
-    let run = |directory: &str, save: bool| {
-        let mut command=Command::new(env!("CARGO_BIN_EXE_lmc-resistance"));
-        command.arg("--model").arg(dir.0.join("model.json"))
+    let run = |mode: &str, directory: &str, save: bool| {
+        let mut command=Command::new(env!("CARGO_BIN_EXE_lmc"));
+        command.arg(mode).arg("--model").arg(dir.0.join("model.json"))
             .arg("--data").arg(dir.0.join("data.tif"))
             .arg("--output-dir").arg(dir.0.join(directory))
-            .args(["--samples","3","--all-layers"])
-            .arg("--current-source").arg(dir.0.join("source.tif"))
-            .arg("--current-ground").arg(dir.0.join("ground.tif"));
+            .args(["--samples","3","--all-layers"]);
+        if mode == "full" {
+            command.arg("--source").arg(dir.0.join("source.tif"))
+                .arg("--ground").arg(dir.0.join("ground.tif"));
+        }
         if save { command.arg("--save-samples"); }
         let output=command.output().unwrap();
         assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
@@ -210,7 +235,7 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
         assert!(stderr.contains("\rCompleted sample 1/3\rCompleted sample 2/3\rCompleted sample 3/3\n"), "{stderr}");
         assert!(output.stdout.is_empty());
     };
-    run("saved",true);
+    run("full","saved",true);
     for name in ["total_resistance","current"] {
         let maps: Vec<_>=(0..3).map(|i|read_raster(&dir.0.join(format!("saved/samples/{i:06}/{name}.tif"))).unwrap().data).collect();
         let mean=read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap();
@@ -224,10 +249,23 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
     }
     let fixed_variance=read_raster(&dir.0.join("saved/fixed_variance.tif")).unwrap();
     assert!(fixed_variance.data.iter().all(|&v|v==0.0));
-    run("statistics-only",false);
+    run("full","statistics-only",false);
     assert!(!dir.0.join("statistics-only/samples").exists());
     for name in ["total_resistance","total_resistance_variance","current","current_variance"] {
         assert_eq!(read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap().data,
             read_raster(&dir.0.join(format!("statistics-only/{name}.tif"))).unwrap().data);
     }
+    run("resistance", "resistance-only", true);
+    assert!(!dir.0.join("resistance-only/current.tif").exists());
+    for name in ["total_resistance", "total_resistance_variance"] {
+        assert_eq!(read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap().data,
+            read_raster(&dir.0.join(format!("resistance-only/{name}.tif"))).unwrap().data);
+    }
+    for index in 0..3 {
+        let relative = format!("samples/{index:06}/total_resistance.tif");
+        assert_eq!(read_raster(&dir.0.join("saved").join(&relative)).unwrap().data,
+            read_raster(&dir.0.join("resistance-only").join(relative)).unwrap().data);
+        assert!(!dir.0.join(format!("resistance-only/samples/{index:06}/current.tif")).exists());
+    }
+
 }

@@ -23,20 +23,16 @@ csv = "1"
 tiff = { version = "0.9", optional = true }
 gdal = { version = "0.18", optional = true }
 image = { version = "0.24", default-features = false, features = ["png"], optional = true }
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "string"], optional = true }
 
 [features]
-bin = ["tiff", "image", "gdal"]
+bin = ["dep:tiff", "dep:image", "dep:gdal", "dep:clap"]
 instrumentation-profile = []
 developer = ["bin", "instrumentation-profile"]
 
 [[bin]]
-name = "lmc-resistance"
-path = "src/bin/lmc-resistance.rs"
-required-features = ["bin"]
-
-[[bin]]
-name = "lmc-current"
-path = "src/bin/lmc-current.rs"
+name = "lmc"
+path = "src/bin/lmc/main.rs"
 required-features = ["bin"]
 
 [[bin]]

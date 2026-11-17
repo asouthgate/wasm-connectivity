@@ -11,10 +11,14 @@ To build and use the command-line application:
 cargo build --release --features bin --bins
 ```
 
-To run the `lmc-current` solver on example datasets, run
+Use `lmc resistance` to generate resistance, `lmc current` to solve an existing
+resistance raster, or `lmc full` to generate resistance and solve current in one run.
+See `lmc --help` and `lmc <command> --help` for options.
+
+To run the `lmc current` solver on example datasets, run
 
 ```sh
-./target/release/lmc-current \
+./target/release/lmc current \
   --resistance example/public/geodata/base_resistance_500.asc \
   --source example/public/geodata/source_500.asc \
   --ground example/public/geodata/ground_500.asc \
@@ -27,7 +31,7 @@ We use a simple DAG system to define configurable process pipelines specified vi
 See [Resistance pipeline JSON specification](docs/pipeline-json-spec.md) for details.
 
 ```sh
-./target/release/lmc-resistance \
+./target/release/lmc resistance \
   --model example/horseshoe-bat-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -41,12 +45,12 @@ See [Resistance pipeline JSON specification](docs/pipeline-json-spec.md) for det
   --output-dir results/
 ```
 
-See `lmc-resistance --help` for command-line flags.
+See `lmc resistance --help` for command-line flags.
 
-To run the `lmc-current` solver on that resistance map in low-memory mixed-precision mode:
+To run the `lmc current` solver on that resistance map in low-memory mixed-precision mode:
 
 ```sh
-./target/release/lmc-current \
+./target/release/lmc current \
   --resistance results/total_resistance.tif \
   --source example/data/resistance/source.tif \
   --ground example/data/resistance/ground.tif \
@@ -54,28 +58,52 @@ To run the `lmc-current` solver on that resistance map in low-memory mixed-preci
   --output current.tif
 ```
 
-See `lmc-current --help` for command-line flags.
+See `lmc current --help` for command-line flags.
 
 ### Sampling resistance and current
 
-Copy the example pipeline so its road resistance scale can be sampled:
+Copy the example pipeline to sample road resistance with a narrow buffer:
 
 ```sh
 cp example/horseshoe-bat-model.json sampled-model.json
 ```
 
-In `sampled-model.json`, replace the `"scale": 10` in
-`nodes.road_res.operations[1].parameters` with:
+In `sampled-model.json`, replace the entire `nodes.road_res` object with:
 
 ```json
-"scale": { "sample": { "uniform": [5, 150] } }
+{
+  "input": "inputs.roads",
+  "operations": [
+    {
+      "op": "distance",
+      "parameters": {
+        "units": "metres",
+        "when_empty": "infinity"
+      }
+    },
+    {
+      "op": "power_response",
+      "parameters": {
+        "input_range": [0, 10],
+        "base_range": [1, 0],
+        "exponent": 1,
+        "scale": { "sample": { "log_uniform": [10, 1000000] } },
+        "offset": 0,
+        "above": 0
+      }
+    }
+  ]
+}
 ```
+
+Each sample draws a peak road resistance between 10 and 1,000,000, with equal
+probability across powers of ten.
 
 Run five samples with seed 42, calculating current from each resistance map and
 saving every sample:
 
 ```sh
-./target/release/lmc-resistance \
+./target/release/lmc full \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -85,8 +113,8 @@ saving every sample:
   --rivers example/data/resistance/empty.geojson \
   --generic example/data/resistance/empty.geojson \
   --lamps example/data/resistance/empty.geojson \
-  --current-source example/data/resistance/source.tif \
-  --current-ground example/data/resistance/ground.tif \
+  --source example/data/resistance/source.tif \
+  --ground example/data/resistance/ground.tif \
   --samples 5 --seed 42 --save-samples \
   --output-dir results-sampled/
 ```
@@ -97,7 +125,7 @@ For the same five samples and summary maps without saving individual samples,
 use the same seed and omit `--save-samples`:
 
 ```sh
-./target/release/lmc-resistance \
+./target/release/lmc full \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -107,8 +135,8 @@ use the same seed and omit `--save-samples`:
   --rivers example/data/resistance/empty.geojson \
   --generic example/data/resistance/empty.geojson \
   --lamps example/data/resistance/empty.geojson \
-  --current-source example/data/resistance/source.tif \
-  --current-ground example/data/resistance/ground.tif \
+  --source example/data/resistance/source.tif \
+  --ground example/data/resistance/ground.tif \
   --samples 5 --seed 42 \
   --output-dir results-summary/
 ```
@@ -138,7 +166,7 @@ To build the CLI utiliies:
 make cli
 ```
 
-To also build the scenario/benchmark extras (the `lmc-current` binary and
+To also build the scenario/benchmark extras (the `lmc` executable and
 the prepared scenario rasters), run:
 
 ```

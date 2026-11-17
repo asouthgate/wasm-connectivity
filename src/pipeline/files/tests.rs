@@ -11,7 +11,7 @@ impl TestDir {
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = env::temp_dir().join(format!(
-            "lmc-resistance-test-{}-{}",
+            "lmc-pipeline-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
