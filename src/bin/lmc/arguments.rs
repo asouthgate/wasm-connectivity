@@ -65,6 +65,14 @@ fn build_pipeline_subcommand(
                 .help("Directory for output GeoTIFF maps"),
         )
         .arg(
+            Arg::new("threads")
+                .long("threads")
+                .short('t')
+                .value_parser(positive_integer)
+                .default_value("1")
+                .help("Number of worker threads for pipeline tasks"),
+        )
+        .arg(
             Arg::new("samples")
                 .long("samples")
                 .value_parser(positive_integer)
@@ -84,7 +92,7 @@ fn build_pipeline_subcommand(
             Arg::new("save-samples")
                 .long("save-samples")
                 .action(ArgAction::SetTrue)
-                .help("Also write each sample under samples/; requires at least two samples"),
+                .help("Write all layer summaries and individual samples under samples/; requires at least two samples"),
         )
         .arg(
             Arg::new("all-layers")
@@ -408,11 +416,14 @@ pub(super) fn parse(arguments: Vec<OsString>) -> Result<SubcommandArguments, cla
         input_paths,
         output_directory: required_path(matches, "output-dir"),
         execution_options: ExecutionOptions {
+            threads: *matches
+                .get_one::<usize>("threads")
+                .expect("missing --threads after parsing; our CLI defines a default"),
             samples,
             seed: *matches
                 .get_one::<u64>("seed")
                 .expect("missing --seed after parsing; our CLI defines a default"),
-            all_layers: matches.get_flag("all-layers"),
+            all_layers: matches.get_flag("all-layers") || save_samples,
             statistics: samples > 1,
         },
         save_samples,

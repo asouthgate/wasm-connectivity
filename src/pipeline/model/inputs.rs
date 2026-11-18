@@ -1,4 +1,5 @@
-use super::{Input, PipelineData, PipelineGraph, Result};
+use super::{graph::PipelineGraph, schema::Input};
+use crate::pipeline::{PipelineData, Result};
 use std::{collections::HashMap, sync::Arc};
 
 impl PipelineGraph {

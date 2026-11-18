@@ -218,12 +218,14 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
             }}
         },"output":"nodes.resistance"});
     std::fs::write(dir.0.join("model.json"),model.to_string()).unwrap();
-    let run = |mode: &str, directory: &str, save: bool| {
+    let run = |mode: &str, directory: &str, save: bool, all_layers: bool, threads: usize| {
         let mut command=Command::new(env!("CARGO_BIN_EXE_lmc"));
         command.arg(mode).arg("--model").arg(dir.0.join("model.json"))
             .arg("--data").arg(dir.0.join("data.tif"))
             .arg("--output-dir").arg(dir.0.join(directory))
-            .args(["--samples","3","--all-layers"]);
+            .args(["--samples","3"])
+            .arg("--threads").arg(threads.to_string());
+        if all_layers { command.arg("--all-layers"); }
         if mode == "full" {
             command.arg("--source").arg(dir.0.join("source.tif"))
                 .arg("--ground").arg(dir.0.join("ground.tif"));
@@ -235,7 +237,7 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
         assert!(stderr.contains("\rCompleted sample 1/3\rCompleted sample 2/3\rCompleted sample 3/3\n"), "{stderr}");
         assert!(output.stdout.is_empty());
     };
-    run("full","saved",true);
+    run("full","saved",true, true, 1);
     for name in ["total_resistance","current"] {
         let maps: Vec<_>=(0..3).map(|i|read_raster(&dir.0.join(format!("saved/samples/{i:06}/{name}.tif"))).unwrap().data).collect();
         let mean=read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap();
@@ -249,17 +251,33 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
     }
     let fixed_variance=read_raster(&dir.0.join("saved/fixed_variance.tif")).unwrap();
     assert!(fixed_variance.data.iter().all(|&v|v==0.0));
-    run("full","statistics-only",false);
+    run("full","statistics-only",false, true, 1);
     assert!(!dir.0.join("statistics-only/samples").exists());
     for name in ["total_resistance","total_resistance_variance","current","current_variance"] {
         assert_eq!(read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap().data,
             read_raster(&dir.0.join(format!("statistics-only/{name}.tif"))).unwrap().data);
     }
-    run("resistance", "resistance-only", true);
+    run("resistance", "resistance-only", true, true, 1);
     assert!(!dir.0.join("resistance-only/current.tif").exists());
     for name in ["total_resistance", "total_resistance_variance"] {
         assert_eq!(read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap().data,
             read_raster(&dir.0.join(format!("resistance-only/{name}.tif"))).unwrap().data);
+    }
+    run("full", "save-implies-all-layers", true, false, 3);
+    assert!(dir.0.join("save-implies-all-layers/fixed.tif").exists());
+    assert!(dir.0.join("save-implies-all-layers/fixed_variance.tif").exists());
+    for index in 0..3 {
+        assert!(dir.0.join(format!("save-implies-all-layers/samples/{index:06}/fixed.tif")).exists());
+    }
+    run("full", "default-summaries", false, false, 3);
+    assert!(!dir.0.join("default-summaries/samples").exists());
+    assert!(!dir.0.join("default-summaries/fixed.tif").exists());
+    for name in ["total_resistance", "total_resistance_variance", "current", "current_variance"] {
+        let actual = read_raster(&dir.0.join(format!("default-summaries/{name}.tif"))).unwrap().data;
+        let expected = read_raster(&dir.0.join(format!("saved/{name}.tif"))).unwrap().data;
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
     }
     for index in 0..3 {
         let relative = format!("samples/{index:06}/total_resistance.tif");

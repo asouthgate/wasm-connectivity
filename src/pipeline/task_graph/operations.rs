@@ -1,7 +1,5 @@
-use super::{
-    execution_state::Evaluator,
-    interval::{parse_interval_mappings, Interval},
-    schema::*,
+use crate::pipeline::{
+    model::{interval::{parse_interval_mappings, Interval}, schema::*},
     NodeOutputs, PipelineData, Result,
 };
 use crate::resistance::{
@@ -10,7 +8,11 @@ use crate::resistance::{
 };
 use std::collections::BTreeMap;
 
-impl Evaluator<'_> {
+pub(super) struct OperationEvaluator {
+    pub(super) grid: Grid,
+}
+
+impl OperationEvaluator {
     pub(super) fn apply(
         &self,
         op: &Operation,
@@ -20,6 +22,15 @@ impl Evaluator<'_> {
         let one = |name| input_data(inputs, name);
         let raster = || -> Result<Vec<f64>> { Ok(one("data")?.values()?.to_vec()) };
         let field = match op {
+            Current { current_solver_settings } => {
+                let source = one("source")?;
+                let ground = one("ground")?;
+                let resistance = one("resistance")?;
+                let current_solver = current_solver_settings.with_inputs(source.values()?, ground.values()?);
+                PipelineData::raster(current_solver.solve_current(
+                    resistance.values()?, self.grid.nrows, self.grid.ncols,
+                )?)
+            }
             Identity => one("data")?.clone(),
             Round => PipelineData::raster(raster()?.into_iter().map(f64::round).collect()),
             DiscreteMap {

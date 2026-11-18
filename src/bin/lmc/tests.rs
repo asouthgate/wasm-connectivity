@@ -68,6 +68,7 @@ fn input_flags_come_from_the_model_regardless_of_argument_order() {
         PathBuf::from("height.tif")
     );
     assert_eq!(arguments.execution_options.samples, 1);
+    assert_eq!(arguments.execution_options.threads, 1);
     assert!(arguments.current_source_path.is_none());
 
     let model_option = format!("--model={}", model.path);
@@ -128,6 +129,7 @@ fn help_lists_commands_and_model_specific_inputs() {
     assert!(error.to_string().contains("--habitat"));
     assert!(error.to_string().contains("--source"));
     assert!(error.to_string().contains("--ground"));
+    assert!(error.to_string().contains("--threads"));
     assert_eq!(
         parse(&["lmc", "current", "--help"]).err().unwrap().kind(),
         ErrorKind::DisplayHelp
@@ -161,18 +163,36 @@ fn full_requires_both_current_inputs_and_supports_one_or_many_samples() {
         arguments.current_source_path.unwrap(),
         PathBuf::from("source.tif")
     );
-    values.extend(["--samples", "5", "--seed", "42", "--save-samples"]);
+    values.extend([
+        "--samples",
+        "5",
+        "--seed",
+        "42",
+        "--save-samples",
+        "--threads",
+        "4",
+    ]);
     let SubcommandArguments::Full(arguments) = parse(&values).unwrap() else {
         panic!("wrong command");
     };
     assert_eq!(arguments.execution_options.samples, 5);
+    assert_eq!(arguments.execution_options.threads, 4);
     assert_eq!(arguments.execution_options.seed, 42);
     assert!(arguments.execution_options.statistics);
     assert!(arguments.save_samples);
+    assert!(arguments.execution_options.all_layers);
 }
 
 #[test]
 fn reserved_input_names_are_checked_for_the_selected_mode() {
+    let model = TestModel::new("threads");
+    assert_eq!(
+        parse(&["lmc", "resistance", "--model", &model.path, "--help"])
+            .err()
+            .unwrap()
+            .kind(),
+        ErrorKind::ArgumentConflict
+    );
     let model = TestModel::new("output-dir");
     let error = parse(&["lmc", "resistance", "--model", &model.path, "--help"])
         .err()
@@ -269,6 +289,9 @@ fn invalid_sampling_options_are_rejected() {
     ];
     for extra in [
         vec!["--samples", "0"],
+        vec!["--threads", "0"],
+        vec!["--threads", "not-a-number"],
+        vec!["-t", "0"],
         vec!["--samples", "not-a-number"],
         vec!["--seed", "negative"],
         vec!["--save-samples"],
@@ -276,5 +299,29 @@ fn invalid_sampling_options_are_rejected() {
         let mut values = base.to_vec();
         values.extend(extra);
         assert!(parse(&values).is_err());
+    }
+}
+
+#[test]
+fn resistance_accepts_both_thread_flag_spellings_without_sampling() {
+    let model = TestModel::new("base");
+    for flag in ["--threads", "-t"] {
+        let SubcommandArguments::Resistance(arguments) = parse(&[
+            "lmc",
+            "resistance",
+            "--model",
+            &model.path,
+            "--base",
+            "data.tif",
+            "--output-dir",
+            "results",
+            flag,
+            "3",
+        ])
+        .unwrap() else {
+            panic!("wrong command");
+        };
+        assert_eq!(arguments.execution_options.threads, 3);
+        assert_eq!(arguments.execution_options.samples, 1);
     }
 }

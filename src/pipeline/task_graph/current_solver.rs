@@ -1,7 +1,41 @@
+use crate::linalg::multigrid::MgOptions;
 use crate::solve::{
     solve_raster_sources_mg_stencil_with_options, solve_raster_sources_mg_with_options, GroundMode,
 };
-use crate::linalg::multigrid::MgOptions;
+
+/// Solver configuration carried by a current operation, independent of its inputs.
+#[derive(Clone, Copy, Debug)]
+pub struct CurrentSolverSettings {
+    max_iter: usize,
+    tolerance: f64,
+    ground_mode: GroundMode,
+    explicit: bool,
+    multigrid: MgOptions,
+}
+
+impl CurrentSolverSettings {
+    pub(super) fn with_inputs<'a>(
+        &self,
+        source: &'a [f64],
+        ground: &'a [f64],
+    ) -> CurrentSolver<'a> {
+        CurrentSolver {
+            source,
+            ground,
+            max_iter: self.max_iter,
+            tolerance: self.tolerance,
+            ground_mode: self.ground_mode,
+            explicit: self.explicit,
+            multigrid: self.multigrid,
+        }
+    }
+}
+
+impl Default for CurrentSolverSettings {
+    fn default() -> Self {
+        CurrentSolver::new(&[], &[]).settings()
+    }
+}
 
 /// Current solver with borrowed source/ground arrays and solver settings.
 pub struct CurrentSolver<'a> {
@@ -23,6 +57,15 @@ impl<'a> CurrentSolver<'a> {
             ground_mode: GroundMode::Shunt,
             explicit: false,
             multigrid: MgOptions::default(),
+        }
+    }
+    pub(in crate::pipeline) fn settings(&self) -> CurrentSolverSettings {
+        CurrentSolverSettings {
+            max_iter: self.max_iter,
+            tolerance: self.tolerance,
+            ground_mode: self.ground_mode,
+            explicit: self.explicit,
+            multigrid: self.multigrid,
         }
     }
     pub fn validate(&self, size: usize) -> Result<(), String> {

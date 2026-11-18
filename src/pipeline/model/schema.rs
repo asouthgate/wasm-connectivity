@@ -1,4 +1,4 @@
-use super::Result;
+use crate::pipeline::Result;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -20,12 +20,12 @@ impl Grid {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct JsonPipeline {
+pub(in crate::pipeline) struct JsonPipeline {
     pub name: String,
     pub grid: Option<GridSpec>,
     pub inputs: BTreeMap<String, Input>,
     pub nodes: BTreeMap<String, NodeSpec>,
-    pub output: Reference,
+    pub output: PipelineDataReference,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,7 +87,7 @@ impl Input {
 }
 
 #[derive(Debug, Clone)]
-pub enum Reference {
+pub enum PipelineDataReference {
     Input {
         from_input: String,
     },
@@ -96,7 +96,7 @@ pub enum Reference {
         output: Option<String>,
     },
 }
-impl<'de> Deserialize<'de> for Reference {
+impl<'de> Deserialize<'de> for PipelineDataReference {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
@@ -126,14 +126,13 @@ impl<'de> Deserialize<'de> for Reference {
         }
     }
 }
-impl Reference {
-    pub(super) fn node(name: String) -> Self {
+impl PipelineDataReference {
+    pub(in crate::pipeline) fn node(name: String) -> Self {
         Self::Node {
             from_node: name,
             output: None,
         }
     }
-    #[cfg(any(test, all(feature = "bin", not(target_arch = "wasm32"))))]
     pub fn selects_node(&self, name: &str, port: &str) -> bool {
         matches!(self, Self::Node { from_node, output } if from_node == name && output.as_deref().unwrap_or("data") == port)
     }
@@ -142,11 +141,11 @@ impl Reference {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum InputEdges {
-    One(Reference),
-    Many(Vec<Reference>),
+    One(PipelineDataReference),
+    Many(Vec<PipelineDataReference>),
 }
 impl InputEdges {
-    pub(super) fn references(&self) -> &[Reference] {
+    pub(in crate::pipeline) fn references(&self) -> &[PipelineDataReference] {
         match self {
             Self::One(value) => std::slice::from_ref(value),
             Self::Many(values) => values,
@@ -158,7 +157,7 @@ impl InputEdges {
 pub struct Node {
     pub operation: Operation,
     pub inputs: BTreeMap<String, InputEdges>,
-    pub sampling: Option<super::sampling::SampledParameters>,
+    pub sampling: Option<super::parameters::SampledParameters>,
 }
 impl<'de> Deserialize<'de> for Node {
     fn deserialize<D: serde::Deserializer<'de>>(
@@ -183,7 +182,7 @@ impl<'de> Deserialize<'de> for Node {
             .parameters
             .insert("op".into(), serde_json::Value::String(definition.op));
         let mut parameters = serde_json::Value::Object(definition.parameters);
-        let sampling = super::sampling::SampledParameters::extract(&mut parameters)
+        let sampling = super::parameters::SampledParameters::extract(&mut parameters)
             .map_err(serde::de::Error::custom)?;
         let operation: Operation =
             serde_json::from_value(parameters).map_err(serde::de::Error::custom)?;
@@ -208,9 +207,9 @@ impl<'de> Deserialize<'de> for Node {
 /// or an `input` and `operations` array (`Chain`). Loading expands the array
 /// into connected operation nodes.
 #[derive(Debug, Clone)]
-pub(super) enum NodeSpec {
+pub(in crate::pipeline) enum NodeSpec {
     Chain {
-        input: Reference,
+        input: PipelineDataReference,
         operations: Vec<Node>,
     },
     Node(Node),
@@ -228,7 +227,7 @@ impl<'de> Deserialize<'de> for NodeSpec {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
             struct Chain {
-                input: Reference,
+                input: PipelineDataReference,
                 operations: Vec<Node>,
             }
             let chain: Chain = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
@@ -243,6 +242,10 @@ impl<'de> Deserialize<'de> for NodeSpec {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    Current {
+        #[serde(skip)]
+        current_solver_settings: crate::pipeline::task_graph::current_solver::CurrentSolverSettings,
+    },
     Round,
     DiscreteMap {
         intervals: BTreeMap<String, f64>,

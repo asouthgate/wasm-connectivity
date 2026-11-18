@@ -159,7 +159,7 @@ test('WASM matches saved native results with lights, distances, masks, and non-u
   data.roads[15] = NaN;
   data.rivers[16] = NaN;
   const result = await run(data, model, { nrows, ncols, cellsize });
-  const snapshots = JSON.parse(await readFile(new URL('../src/pipeline/fixtures/reference-resistance.json', import.meta.url)));
+  const snapshots = JSON.parse(await readFile(new URL('../src/pipeline/model/fixtures/reference-resistance.json', import.meta.url)));
   // Snapshot 5 is the second scenario at two-metre resolution.
   for (const [name, expected] of Object.entries(snapshots[5])) {
     const [node, port = 'data'] = name.split('.');

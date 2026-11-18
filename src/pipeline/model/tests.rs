@@ -1,6 +1,6 @@
 use super::interval::Interval;
-use super::schema::{JsonPipeline, Node, NodeSpec};
-use super::*;
+use super::schema::{Input, InputEdges, JsonPipeline, Node, NodeSpec, Operation};
+use crate::pipeline::*;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -8,7 +8,7 @@ use std::{
 };
 
 fn example() -> JsonPipeline {
-    serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap()
+    serde_json::from_str(include_str!("../../../example/horseshoe-bat-model.json")).unwrap()
 }
 fn grid() -> Grid {
     Grid {
@@ -35,7 +35,7 @@ fn small_model(operations: Value) -> JsonPipeline {
     }))
     .unwrap()
 }
-pub(super) fn execute_output(
+pub(in crate::pipeline) fn execute_output(
     graph: &PipelineGraph,
     inputs: HashMap<String, PipelineData>,
     grid: Grid,
@@ -45,14 +45,17 @@ pub(super) fn execute_output(
         inputs,
         grid,
         ExecutionOptions {
+            threads: 1,
             samples: 1,
             seed: 0,
             all_layers: false,
             statistics: false,
         },
         None,
-        |sample| {
-            output = Some(sample.resistance.as_ref().clone());
+        |result| {
+            if result.layer == OutputLayer::Resistance {
+                output = Some(result.outputs["data"].values()?.to_vec());
+            }
             Ok(())
         },
     )?;
@@ -312,7 +315,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
     model.nodes.insert(
         "result".into(),
         NodeSpec::Chain {
-            input: Reference::Input {
+            input: PipelineDataReference::Input {
                 from_input: "missing".into(),
             },
             operations: vec![],
@@ -324,7 +327,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
     model.nodes.insert(
         "result".into(),
         NodeSpec::Chain {
-            input: Reference::node("result".into()),
+            input: PipelineDataReference::node("result".into()),
             operations: vec![],
         },
     );
@@ -374,7 +377,7 @@ fn invalid_responses_references_cycles_and_types_are_errors() {
 #[test]
 fn model_schema_rejects_unknown_operations_fields_and_policies() {
     let original: Value =
-        serde_json::from_str(include_str!("../../example/horseshoe-bat-model.json")).unwrap();
+        serde_json::from_str(include_str!("../../../example/horseshoe-bat-model.json")).unwrap();
     for (input, alias) in [("buildings", "value_field"), ("lamps", "height_field")] {
         let mut value = original.clone();
         value["inputs"][input][alias] = json!("value");
@@ -480,12 +483,12 @@ fn horseshoe_spec_matches_reference_resistance_layers() {
             for (name, expected) in expected {
                 let expected: Vec<f64> = expected.iter().map(|v| v.unwrap_or(f64::NAN)).collect();
                 model.output = if let Some((node, port)) = name.split_once('.') {
-                    Reference::Node {
+                    PipelineDataReference::Node {
                         from_node: node.into(),
                         output: Some(port.into()),
                     }
                 } else {
-                    Reference::node(name.into())
+                    PipelineDataReference::node(name.into())
                 };
                 let actual = execute_definition(
                     &model,
@@ -530,17 +533,17 @@ fn canonical_nodes_and_compact_chains_execute_the_same_graph() {
 #[test]
 fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
     let mut model = example();
-    model.output = Reference::node("surfaces".into());
+    model.output = PipelineDataReference::node("surfaces".into());
     assert!(PipelineGraph::from_definition(model.clone())
         .err()
         .unwrap()
         .contains("select a declared output port"));
-    model.output = Reference::Node {
+    model.output = PipelineDataReference::Node {
         from_node: "surfaces".into(),
         output: Some("opaque".into()),
     };
     assert!(PipelineGraph::from_definition(model.clone()).is_ok());
-    model.output = Reference::Node {
+    model.output = PipelineDataReference::Node {
         from_node: "surfaces".into(),
         output: Some("missing".into()),
     };
@@ -554,7 +557,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
     };
     node.inputs.insert(
         "point_sources".into(),
-        InputEdges::One(Reference::Input {
+        InputEdges::One(PipelineDataReference::Input {
             from_input: "dtm".into(),
         }),
     );
@@ -569,10 +572,10 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
     node.inputs.insert(
         "data".into(),
         InputEdges::Many(vec![
-            Reference::Input {
+            PipelineDataReference::Input {
                 from_input: "roads".into(),
             },
-            Reference::Input {
+            PipelineDataReference::Input {
                 from_input: "generic".into(),
             },
         ]),
@@ -589,7 +592,7 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             operation: Operation::Round,
             inputs: BTreeMap::from([(
                 "data".into(),
-                InputEdges::Many(vec![Reference::Input {
+                InputEdges::Many(vec![PipelineDataReference::Input {
                     from_input: "data".into(),
                 }]),
             )]),
@@ -607,13 +610,13 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
             inputs: BTreeMap::from([
                 (
                     "data".into(),
-                    InputEdges::One(Reference::Input {
+                    InputEdges::One(PipelineDataReference::Input {
                         from_input: "data".into(),
                     }),
                 ),
                 (
                     "typo".into(),
-                    InputEdges::One(Reference::Input {
+                    InputEdges::One(PipelineDataReference::Input {
                         from_input: "data".into(),
                     }),
                 ),
@@ -627,14 +630,14 @@ fn graph_checks_named_ports_types_units_and_cycles_without_loading_data() {
     model.nodes.insert(
         "result".into(),
         NodeSpec::Chain {
-            input: Reference::node("other".into()),
+            input: PipelineDataReference::node("other".into()),
             operations: vec![],
         },
     );
     model.nodes.insert(
         "other".into(),
         NodeSpec::Chain {
-            input: Reference::node("result".into()),
+            input: PipelineDataReference::node("result".into()),
             operations: vec![],
         },
     );
@@ -662,7 +665,7 @@ fn references_and_parameters_are_not_ambiguous_strings_or_flat_options() {
         "other.roads",
     ] {
         assert!(
-            serde_json::from_value::<Reference>(json!(invalid)).is_err(),
+            serde_json::from_value::<PipelineDataReference>(json!(invalid)).is_err(),
             "{invalid}"
         );
     }
@@ -670,17 +673,17 @@ fn references_and_parameters_are_not_ambiguous_strings_or_flat_options() {
         json!({"from_input": "roads"}),
         json!({"from_node": "road_res"}),
     ] {
-        assert!(serde_json::from_value::<Reference>(invalid).is_err());
+        assert!(serde_json::from_value::<PipelineDataReference>(invalid).is_err());
     }
-    let reference: Reference = serde_json::from_value(json!("nodes.surfaces.opaque")).unwrap();
+    let reference: PipelineDataReference = serde_json::from_value(json!("nodes.surfaces.opaque")).unwrap();
     assert!(reference.selects_node("surfaces", "opaque"));
-    let reference: Reference = serde_json::from_value(json!("nodes.road_res")).unwrap();
+    let reference: PipelineDataReference = serde_json::from_value(json!("nodes.road_res")).unwrap();
     assert!(reference.selects_node("road_res", "data"));
     assert!(
-        matches!(serde_json::from_value::<Reference>(json!("inputs.roads")).unwrap(), Reference::Input { from_input } if from_input == "roads")
+        matches!(serde_json::from_value::<PipelineDataReference>(json!("inputs.roads")).unwrap(), PipelineDataReference::Input { from_input } if from_input == "roads")
     );
     assert!(
-        serde_json::from_value::<Reference>(json!({"from_input":"data","from_node":"other"}))
+        serde_json::from_value::<PipelineDataReference>(json!({"from_input":"data","from_node":"other"}))
             .is_err()
     );
     assert!(

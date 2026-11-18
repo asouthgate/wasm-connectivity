@@ -1,8 +1,8 @@
 use super::schema::NodeSpec;
+use crate::pipeline::Result;
 use super::{
     interval::{parse_interval_mappings, Interval},
     schema::*,
-    Result,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -17,6 +17,7 @@ enum Kind {
     Height,
     Resistance,
     Irradiance,
+    Current,
     Lights,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,7 @@ enum Unit {
     Dimensionless,
     Resistance,
     RelativeIrradiance,
+    Current,
     None,
 }
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +57,7 @@ impl Input {
     }
 }
 #[derive(Clone, Copy)]
-enum Accept {
+enum InputTypes {
     Any,
     Raster,
     Topography,
@@ -64,7 +66,7 @@ enum Accept {
     Height,
     Lights,
 }
-impl Accept {
+impl InputTypes {
     fn accepts(self, descriptor: Descriptor) -> bool {
         match self {
             Self::Any => true,
@@ -88,15 +90,39 @@ impl Accept {
         }
     }
 }
-pub(super) struct Port {
-    pub(super) name: &'static str,
-    accepts: Accept,
-    pub(super) many: bool,
+pub(in crate::pipeline) struct Port {
+    pub(in crate::pipeline) name: &'static str,
+    accepts: InputTypes,
+    pub(in crate::pipeline) many: bool,
 }
 impl Operation {
-    pub(super) fn ports(&self) -> &'static [Port] {
-        use Accept::*;
+    pub(in crate::pipeline) fn output_names(&self) -> &'static [&'static str] {
         match self {
+            Self::SurfaceHeights {} => &["translucent", "opaque"],
+            _ => &["data"],
+        }
+    }
+
+    pub(in crate::pipeline) fn ports(&self) -> &'static [Port] {
+        use InputTypes::*;
+        match self {
+            Self::Current { .. } => &[
+                Port {
+                    name: "resistance",
+                    accepts: Raster,
+                    many: false,
+                },
+                Port {
+                    name: "source",
+                    accepts: Raster,
+                    many: false,
+                },
+                Port {
+                    name: "ground",
+                    accepts: Raster,
+                    many: false,
+                },
+            ],
             Self::Identity => &[Port {
                 name: "data",
                 accepts: Any,
@@ -185,6 +211,7 @@ impl Operation {
         let data = || inputs["data"][0];
         let descriptor = match self {
             Self::Identity | Self::Round | Self::Override { .. } | Self::MaskNa {} => data(),
+            Self::Current { .. } => Descriptor::new(Current, Unit::Current),
             Self::DiscreteMap { .. } => Descriptor::new(Ranked, Unit::Dimensionless),
             Self::Distance { .. } => Descriptor::new(Distance, Unit::Metres),
             Self::PowerResponse { .. } => Descriptor::new(Resistance, Unit::Resistance),
@@ -216,7 +243,7 @@ impl Operation {
 }
 
 impl Operation {
-    pub(super) fn validate_parameters(&self) -> Result<()> {
+    pub(in crate::pipeline) fn validate_parameters(&self) -> Result<()> {
         match self {
             Self::DiscreteMap {
                 intervals,
@@ -281,13 +308,13 @@ impl Operation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PipelineGraph {
-    pub(super) _name: String,
-    pub(super) grid: Option<GridSpec>,
-    pub(super) inputs: BTreeMap<String, Input>,
-    pub(super) output: Reference,
-    pub(super) nodes: BTreeMap<String, Node>,
-    pub(super) named_nodes: BTreeSet<String>,
-    pub(super) order: Vec<String>,
+    pub(in crate::pipeline) _name: String,
+    pub(in crate::pipeline) grid: Option<GridSpec>,
+    pub(in crate::pipeline) inputs: BTreeMap<String, Input>,
+    pub(in crate::pipeline) output: PipelineDataReference,
+    pub(in crate::pipeline) nodes: BTreeMap<String, Node>,
+    pub(in crate::pipeline) named_nodes: BTreeSet<String>,
+    pub(in crate::pipeline) order: Vec<String>,
 }
 impl PipelineGraph {
     pub fn from_json(json: &str) -> Result<Self> {
@@ -300,7 +327,7 @@ impl PipelineGraph {
         &self.inputs
     }
 
-    pub(super) fn from_definition(definition: super::schema::JsonPipeline) -> Result<Self> {
+    pub(in crate::pipeline) fn from_definition(definition: super::schema::JsonPipeline) -> Result<Self> {
         for name in definition.inputs.keys().chain(definition.nodes.keys()) {
             if name.is_empty()
                 || !name
@@ -317,12 +344,12 @@ impl PipelineGraph {
         {
             return Err("input/node name collision".into());
         }
-        let validate_ref = |reference: &Reference| -> Result<()> {
+        let validate_ref = |reference: &PipelineDataReference| -> Result<()> {
             match reference {
-                Reference::Input { from_input } if !definition.inputs.contains_key(from_input) => {
+                PipelineDataReference::Input { from_input } if !definition.inputs.contains_key(from_input) => {
                     Err(format!("unknown input: {from_input}"))
                 }
-                Reference::Node { from_node, .. } if !definition.nodes.contains_key(from_node) => {
+                PipelineDataReference::Node { from_node, .. } if !definition.nodes.contains_key(from_node) => {
                     Err(format!("unknown node: {from_node}"))
                 }
                 _ => Ok(()),
@@ -389,7 +416,7 @@ impl PipelineGraph {
                         } else {
                             format!("{name}#{index}")
                         };
-                        previous = Reference::node(id.clone());
+                        previous = PipelineDataReference::node(id.clone());
                         nodes.insert(id, step);
                     }
                 }
@@ -424,15 +451,15 @@ struct TypeChecker<'a> {
     outputs: HashMap<String, BTreeMap<String, Descriptor>>,
 }
 impl TypeChecker<'_> {
-    fn reference(&mut self, reference: &Reference) -> Result<Descriptor> {
+    fn reference(&mut self, reference: &PipelineDataReference) -> Result<Descriptor> {
         match reference {
-            Reference::Input { from_input } => self
+            PipelineDataReference::Input { from_input } => self
                 .graph
                 .inputs
                 .get(from_input)
                 .map(Input::descriptor)
                 .ok_or_else(|| format!("unknown input: {from_input}")),
-            Reference::Node { from_node, output } => self
+            PipelineDataReference::Node { from_node, output } => self
                 .outputs
                 .get(from_node)
                 .ok_or_else(|| format!("node {from_node} has not been checked"))?
@@ -520,7 +547,7 @@ fn topological_order(nodes: &BTreeMap<String, Node>) -> Result<Vec<String>> {
             .values()
             .flat_map(InputEdges::references)
             .filter_map(|reference| match reference {
-                Reference::Node { from_node, .. } => Some(from_node.as_str()),
+                PipelineDataReference::Node { from_node, .. } => Some(from_node.as_str()),
                 _ => None,
             })
             .collect();

@@ -1,4 +1,4 @@
-use super::super::schema::JsonPipeline;
+use super::super::model::schema::JsonPipeline;
 
 use super::*;
 use gdal::vector::{Feature, Geometry, LayerOptions, OGRFieldType, OGRwkbGeometryType};
@@ -275,6 +275,7 @@ fn execute(run: &TestRun) -> Result<()> {
         &run.paths,
         &run.output_dir,
         ExecutionOptions {
+            threads: 1,
             samples: 1,
             seed: 0,
             all_layers: run.all_layers,

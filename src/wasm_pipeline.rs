@@ -59,7 +59,7 @@ pub fn run_resistance_pipeline_browser(
     ground: Vec<f64>,
 ) -> Result<BrowserResistanceOutput, String> {
     use pipeline::{CurrentSolver, ExecutionOptions, Grid, PipelineData, PipelineGraph};
-    use std::sync::Arc;
+    use std::collections::BTreeMap;
 
     let graph = PipelineGraph::from_json(&model_json)?;
     let options: PipelineExecutionJsonOptions = serde_json::from_str(&options_json)
@@ -78,41 +78,31 @@ pub fn run_resistance_pipeline_browser(
     let statistics = options.samples > 1;
     let named_arrays = std::mem::take(&mut inputs.values);
     let pipeline_inputs = graph.convert_named_arrays_to_pipeline_inputs(named_arrays)?;
-    let result = graph.execute(
+    let mut completed_layers = BTreeMap::new();
+    graph.execute(
         pipeline_inputs,
         Grid { nrows, ncols, pixel_width: cellsize },
         ExecutionOptions {
+            threads: 1,
             samples: options.samples, seed: options.seed,
             all_layers: options.all_layers, statistics,
         },
         current_solver.as_ref(),
-        |sample| {
-            if statistics { return Ok(()); }
-            output.rasters.push(sample.resistance.clone());
-            if let Some(current) = &sample.current {
-                output.rasters.push(Arc::new(current.clone()));
-            }
-            for (node, outputs) in &sample.layers {
-                for (name, field) in outputs {
-                    if let PipelineData::Raster(values) = field {
-                        output.names.push([node.clone(), name.clone()]);
-                        output.rasters.push(values.clone());
-                    }
-                }
+        |result| {
+            if result.sample.is_none() == statistics {
+                completed_layers.insert(result.layer, result.outputs);
             }
             Ok(())
         },
     )?;
-    if let Some(result) = result {
-        output.rasters.extend([Arc::new(result.resistance.mean), Arc::new(result.resistance.variance)]);
-        if let Some(current) = result.current {
-            output.rasters.extend([Arc::new(current.mean), Arc::new(current.variance)]);
+    for (layer, outputs) in completed_layers {
+        if let pipeline::OutputLayer::Intermediate { node_name, port_name } = layer {
+            output.names.push([node_name, port_name]);
         }
-        for (node, outputs) in result.layers {
-            for (name, stats) in outputs {
-                output.names.push([node.clone(), name]);
-                output.rasters.extend([Arc::new(stats.mean), Arc::new(stats.variance)]);
-            }
+        let ports: &[&str] = if statistics { &["mean", "variance"] } else { &["data"] };
+        for port in ports {
+            let field = outputs.get(*port).ok_or_else(|| format!("missing output {port}"))?;
+            if let PipelineData::Raster(values) = field { output.rasters.push(values.clone()); }
         }
     }
     Ok(output)

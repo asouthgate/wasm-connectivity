@@ -32,6 +32,7 @@ See [Resistance pipeline JSON specification](docs/pipeline-json-spec.md) for det
 
 ```sh
 ./target/release/lmc resistance \
+  --threads 4 \
   --model example/horseshoe-bat-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -104,6 +105,7 @@ saving every sample:
 
 ```sh
 ./target/release/lmc full \
+  --threads 4 \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -126,6 +128,7 @@ use the same seed and omit `--save-samples`:
 
 ```sh
 ./target/release/lmc full \
+  --threads 4 \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \

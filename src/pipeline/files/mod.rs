@@ -1,6 +1,6 @@
 use super::{
-    ExecutionOptions, Grid as ModelGrid, Input as ModelInput, PipelineData, PipelineGraph,
-    Reference, SamplingResult,
+    ExecutionOptions, Grid as ModelGrid, model::schema::Input as ModelInput, NodeResult, OutputLayer,
+    PipelineData, PipelineGraph,
 };
 
 use crate::{
@@ -455,6 +455,7 @@ fn execute_pipeline_graph_from_files(
     mut report_sample_completion: impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<String>> {
     options.statistics = options.samples > 1;
+    options.all_layers |= save_samples;
     let loaded = load_inputs(graph, paths)?;
     let current_source_and_ground = match (current_source_path, current_ground_path) {
         (None, None) => None,
@@ -472,79 +473,63 @@ fn execute_pipeline_graph_from_files(
     let current_solver = current_source_and_ground
         .as_ref()
         .map(|(source, ground)| crate::pipeline::CurrentSolver::new(source, ground));
-    let result = graph
+    let mut completed_samples = 0;
+    graph
         .execute(
             loaded.fields,
             model_grid(&loaded.grid),
             options,
             current_solver.as_ref(),
-            |sample| {
-                if options.samples == 1 || save_samples {
-                    let mut maps =
-                        vec![("total_resistance.tif".into(), sample.resistance.as_slice())];
-                    if let Some(current) = &sample.current {
-                        maps.push(("current.tif".into(), current));
-                    }
-                    for (name, outputs) in &sample.layers {
-                        for (port, field) in outputs {
-                            if graph.output.selects_node(name, port) {
-                                continue;
-                            }
-                            if let PipelineData::Raster(values) = field {
-                                maps.push((format!("{}.tif", layer_name(name, port)), values));
-                            }
-                        }
-                    }
-                    let sample_output_dir = if options.samples == 1 {
-                        output_dir.to_path_buf()
-                    } else {
-                        output_dir
-                            .join("samples")
-                            .join(format!("{:06}", sample.index))
-                    };
-                    write_maps(&sample_output_dir, &loaded.grid, maps)
-                        .map_err(|e| e.to_string())?;
+            |result| {
+                if result.sample.is_none() || options.samples == 1 || save_samples {
+                    write_node_result(output_dir, &loaded.grid, options.samples, &result)
+                        .map_err(|error| error.to_string())?;
                 }
-                report_sample_completion(sample.index + 1).map_err(|e| e.to_string())?;
+                let is_final_map = if current_solver.is_some() {
+                    result.layer == OutputLayer::Current
+                } else {
+                    result.layer == OutputLayer::Resistance
+                };
+                if result.sample.is_some() && is_final_map {
+                    completed_samples += 1;
+                    report_sample_completion(completed_samples)
+                        .map_err(|error| error.to_string())?;
+                }
                 Ok(())
             },
         )
         .map_err(invalid)?;
-    if let Some(statistics) = result {
-        write_statistics(output_dir, &loaded.grid, &graph.output, &statistics)?;
-    }
     Ok(loaded.warnings)
 }
 
-fn write_statistics(
+fn write_node_result(
     directory: &Path,
     grid: &Grid,
-    output: &Reference,
-    result: &SamplingResult,
+    samples: usize,
+    result: &NodeResult,
 ) -> Result<()> {
-    let mut maps = vec![
-        (
-            "total_resistance.tif".into(),
-            result.resistance.mean.as_slice(),
-        ),
-        (
-            "total_resistance_variance.tif".into(),
-            result.resistance.variance.as_slice(),
-        ),
-    ];
-    if let Some(current) = &result.current {
-        maps.push(("current.tif".into(), current.mean.as_slice()));
-        maps.push(("current_variance.tif".into(), current.variance.as_slice()));
-    }
-    for (name, outputs) in &result.layers {
-        for (port, stats) in outputs {
-            if output.selects_node(name, port) {
-                continue;
-            }
-            let name = layer_name(name, port);
-            maps.push((format!("{name}.tif"), stats.mean.as_slice()));
-            maps.push((format!("{name}_variance.tif"), stats.variance.as_slice()));
+    let name = match &result.layer {
+        OutputLayer::Resistance => "total_resistance".into(),
+        OutputLayer::Current => "current".into(),
+        OutputLayer::Intermediate {
+            node_name,
+            port_name,
+        } => layer_name(node_name, port_name),
+    };
+    let output_directory = match result.sample {
+        Some(sample) if samples > 1 => directory.join("samples").join(format!("{sample:06}")),
+        _ => directory.to_path_buf(),
+    };
+    let mut maps = Vec::new();
+    for (port, field) in &result.outputs {
+        if let PipelineData::Raster(values) = field {
+            let filename = if port == "variance" {
+                format!("{name}_variance.tif")
+            } else {
+                format!("{name}.tif")
+            };
+            maps.push((filename, values.as_slice()));
         }
     }
-    write_maps(directory, grid, maps)
+    write_maps(&output_directory, grid, maps)
 }
