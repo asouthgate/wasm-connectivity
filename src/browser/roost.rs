@@ -17,8 +17,7 @@ struct RoostFinderOutput {
     x: f64,
     y: f64,
     loss: f64,
-    /// Loss surface as base64-encoded little-endian `f32`, row-major with row 0
-    /// at the north edge (matching the shared frontend plotter).
+    /// Loss surface as base64-encoded little-endian `f32`, row-major from south to north.
     surface_base64: String,
     /// Number of grid points per axis.
     grid_size: usize,
@@ -144,13 +143,7 @@ fn run_roost_finder(
     let ymin = agg.y.iter().cloned().fold(f64::INFINITY, f64::min);
     let ymax = agg.y.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
-    // `surface` is south-first (iy = 0 -> ymin); the shared plotter expects
-    // row 0 at the north edge, so flip the rows before encoding.
-    let mut north_first = Vec::with_capacity(surface.len());
-    for iy in (0..grid_size).rev() {
-        north_first.extend_from_slice(&surface[iy * grid_size..(iy + 1) * grid_size]);
-    }
-    let surface_base64 = encode_f64_as_f32_base64(&north_first);
+    let surface_base64 = encode_f64_as_f32_base64(&surface);
 
     Ok(RoostFinderOutput {
         x: result.x,
