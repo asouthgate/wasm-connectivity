@@ -6,7 +6,7 @@
 //! Diagnostics go to stderr.
 
 use geojson::{FeatureCollection, GeoJson};
-use lm_connect::geospatial::{rasterize_values, GeoTransform};
+use lm_connect::raster::rasterize::{rasterize_values, GeoTransform};
 use lm_connect::linalg::real::{scalar, Real};
 use std::fs;
 

@@ -10,7 +10,7 @@
 //!
 //! Rasterization, resistance modelling, and current solving are separate steps:
 //!
-//! 1. [`geospatial::rasterize_values`] converts GeoJSON features into raster
+//! 1. [`raster::rasterize::rasterize_values`] converts GeoJSON features into raster
 //!    values.
 //! 2. [`pipeline`] computes resistance from aligned input rasters
 //!    and lamp data.
@@ -65,7 +65,6 @@
 //! `developer` feature enables the `lmc-profile` executable and its dependencies.
 
 pub mod current;
-pub mod geospatial;
 pub mod pipeline;
 pub mod raster;
 pub mod resistance;
@@ -74,6 +73,7 @@ pub mod roost;
 pub use current as solve;
 pub use current::{circuit, linalg, memory};
 pub use numeric::real;
+pub use raster::rasterize as geospatial;
 
 pub use circuit::build_circuit_model;
 

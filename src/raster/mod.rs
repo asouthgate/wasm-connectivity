@@ -1,5 +1,6 @@
 #[cfg(all(feature = "bin", not(target_arch = "wasm32")))]
 pub mod io;
+pub mod rasterize;
 
 use serde::Serialize;
 

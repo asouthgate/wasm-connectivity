@@ -1,4 +1,7 @@
-use super::GeoTransform;
+mod grid;
+
+pub use grid::GeoTransform;
+
 use crate::real::{Real, scalar};
 use geojson::GeoJson;
 use geo::{
@@ -265,3 +268,6 @@ fn rasterize_numeric<F: Real>(
     }
     Ok(raster)
 }
+
+#[cfg(test)]
+mod tests;

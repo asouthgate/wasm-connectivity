@@ -1,5 +1,5 @@
 use super::output::json_response;
-use crate::{geospatial, raster};
+use crate::raster::{self, rasterize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -29,8 +29,8 @@ pub fn rasterize_geojson(
     geojson_str: String, nrows: usize, ncols: usize,
     xmin: f64, ymax: f64, cellsize: f64, buffer: f64,
 ) -> Result<Vec<f64>, String> {
-    geospatial::rasterize_values(&geojson_str, nrows, ncols,
-        &geospatial::GeoTransform { xmin, ymax, cellsize }, buffer)
+    rasterize::rasterize_values(&geojson_str, nrows, ncols,
+        &rasterize::GeoTransform { xmin, ymax, cellsize }, buffer)
 }
 
 #[wasm_bindgen]
@@ -38,6 +38,6 @@ pub fn rasterize_geojson_f32(
     geojson_str: String, nrows: usize, ncols: usize,
     xmin: f64, ymax: f64, cellsize: f64, buffer: f64,
 ) -> Result<Vec<f32>, String> {
-    geospatial::rasterize_values(&geojson_str, nrows, ncols,
-        &geospatial::GeoTransform { xmin, ymax, cellsize }, buffer)
+    rasterize::rasterize_values(&geojson_str, nrows, ncols,
+        &rasterize::GeoTransform { xmin, ymax, cellsize }, buffer)
 }

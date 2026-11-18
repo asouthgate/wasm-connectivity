@@ -3,7 +3,7 @@ use crate::pipeline::{
     model::schema::Input as ModelInput, Grid as ModelGrid, PipelineData, PipelineGraph,
 };
 use crate::{
-    geospatial::{rasterize_field, GeoTransform},
+    raster::rasterize::{rasterize_field, rasterize_mask, GeoTransform},
     raster::io::{read_raster, Raster, RasterGrid as Grid},
 };
 use gdal::{
@@ -328,7 +328,7 @@ pub(super) fn load_inputs(
                     ymax: grid.affine[3],
                     cellsize: grid.affine[1],
                 };
-                let mask = crate::geospatial::rasterize_mask(
+                let mask = rasterize_mask(
                     &collection.to_string(),
                     grid.nrows,
                     grid.ncols,
