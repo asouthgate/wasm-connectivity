@@ -1,13 +1,13 @@
 use crate::pipeline::{NodeOutputs, PipelineData, Result};
 use std::collections::BTreeMap;
 
-pub(super) struct StatisticsAccumulator {
+pub(in crate::pipeline::task_graph) struct StatisticsAccumulator {
     count: usize,
     mean: Vec<f64>,
     m2: Vec<f64>,
 }
 impl StatisticsAccumulator {
-    pub(super) fn create() -> Box<dyn super::scheduler::StreamingNode> {
+    pub(in crate::pipeline::task_graph) fn create() -> Box<dyn super::super::graph::StreamingNode> {
         Box::new(Self {
             count: 0,
             mean: Vec::new(),
@@ -38,7 +38,7 @@ impl StatisticsAccumulator {
     }
 }
 
-impl super::scheduler::StreamingNode for StatisticsAccumulator {
+impl super::super::graph::StreamingNode for StatisticsAccumulator {
     fn update(&mut self, inputs: &BTreeMap<String, Vec<PipelineData>>) -> Result<()> {
         let values = inputs
             .get("data")

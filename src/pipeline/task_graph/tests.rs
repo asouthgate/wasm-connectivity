@@ -45,18 +45,18 @@ fn run(
     current_solver: Option<&CurrentSolver<'_>>,
 ) -> Vec<NodeResult> {
     let mut results = Vec::new();
-    graph
-        .execute(
-            HashMap::from([("data".into(), PipelineData::raster(vec![1.0, 2.0, 4.0]))]),
-            grid(),
-            options,
-            current_solver,
-            |result| {
-                results.push(result);
-                Ok(())
-            },
-        )
-        .unwrap();
+    crate::pipeline::execute_graph(
+        graph,
+        HashMap::from([("data".into(), PipelineData::raster(vec![1.0, 2.0, 4.0]))]),
+        grid(),
+        options,
+        current_solver,
+        |result| {
+            results.push(result);
+            Ok(())
+        },
+    )
+    .unwrap();
     results
 }
 
@@ -193,16 +193,15 @@ fn seeded_draws_do_not_depend_on_thread_count() {
 fn errors_stop_execution_without_replacing_invalid_samples() {
     let graph = model(json!({"sample":{"values":[1,-1,2]}}));
     let inputs = || HashMap::from([("data".into(), PipelineData::raster(vec![1.0, 2.0, 4.0]))]);
-    let error = graph
-        .execute(inputs(), grid(), options(3), None, |_| Ok(()))
-        .unwrap_err();
+    let error =
+        crate::pipeline::execute_graph(&graph, inputs(), grid(), options(3), None, |_| Ok(()))
+            .unwrap_err();
     assert!(error.contains("sample 1, node resistance"));
     let graph = model(json!({"sample":{"values":[1,2,3]}}));
-    let error = graph
-        .execute(inputs(), grid(), options(3), None, |_| {
-            Err("write failed".into())
-        })
-        .unwrap_err();
+    let error = crate::pipeline::execute_graph(&graph, inputs(), grid(), options(3), None, |_| {
+        Err("write failed".into())
+    })
+    .unwrap_err();
     assert!(error.contains("write failed"));
     for invalid in [
         ExecutionOptions {
@@ -222,9 +221,15 @@ fn errors_stop_execution_without_replacing_invalid_samples() {
             ..options(1)
         },
     ] {
-        assert!(graph
-            .execute(inputs(), grid(), invalid, None, |_| Ok(()))
-            .is_err());
+        assert!(crate::pipeline::execute_graph(
+            &graph,
+            inputs(),
+            grid(),
+            invalid,
+            None,
+            |_| Ok(())
+        )
+        .is_err());
     }
 }
 
@@ -241,28 +246,28 @@ fn ordinary_runs_preserve_infinity_without_allocating_statistics() {
     )
     .unwrap();
     let mut count = 0;
-    graph
-        .execute(
-            HashMap::from([("data".into(), PipelineData::raster(vec![0.0; 3]))]),
-            grid(),
-            ExecutionOptions {
-                samples: 1,
-                statistics: false,
-                all_layers: false,
-                ..options(2)
-            },
-            None,
-            |result| {
-                assert_eq!(result.sample, Some(0));
-                assert!(result.outputs["data"]
-                    .values()?
-                    .iter()
-                    .all(|value| value.is_infinite()));
-                count += 1;
-                Ok(())
-            },
-        )
-        .unwrap();
+    crate::pipeline::execute_graph(
+        &graph,
+        HashMap::from([("data".into(), PipelineData::raster(vec![0.0; 3]))]),
+        grid(),
+        ExecutionOptions {
+            samples: 1,
+            statistics: false,
+            all_layers: false,
+            ..options(2)
+        },
+        None,
+        |result| {
+            assert_eq!(result.sample, Some(0));
+            assert!(result.outputs["data"]
+                .values()?
+                .iter()
+                .all(|value| value.is_infinite()));
+            count += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
     assert_eq!(count, 1);
 }
 
@@ -283,25 +288,25 @@ fn current_operation_can_feed_another_calculation() {
         .solve_current(&resistance, 1, 3)
         .unwrap();
     let mut results = Vec::new();
-    graph
-        .execute(
-            HashMap::from([
-                (
-                    "resistance".into(),
-                    PipelineData::raster(resistance.to_vec()),
-                ),
-                ("source".into(), PipelineData::raster(source.to_vec())),
-                ("ground".into(), PipelineData::raster(ground.to_vec())),
-            ]),
-            grid(),
-            options(3),
-            None,
-            |result| {
-                results.push(result);
-                Ok(())
-            },
-        )
-        .unwrap();
+    crate::pipeline::execute_graph(
+        &graph,
+        HashMap::from([
+            (
+                "resistance".into(),
+                PipelineData::raster(resistance.to_vec()),
+            ),
+            ("source".into(), PipelineData::raster(source.to_vec())),
+            ("ground".into(), PipelineData::raster(ground.to_vec())),
+        ]),
+        grid(),
+        options(3),
+        None,
+        |result| {
+            results.push(result);
+            Ok(())
+        },
+    )
+    .unwrap();
     for result in results
         .iter()
         .filter(|result| result.layer == OutputLayer::Resistance && result.sample.is_some())
@@ -347,21 +352,21 @@ fn long_paths_execute_without_recursion() {
 fn missing_cells_remain_missing_and_equal_draw_bounds_have_zero_variance() {
     let graph = model(json!({"sample":{"log_uniform":[2,2]}}));
     let mut results = Vec::new();
-    graph
-        .execute(
-            HashMap::from([(
-                "data".into(),
-                PipelineData::raster(vec![1.0, f64::NAN, 4.0]),
-            )]),
-            grid(),
-            options(3),
-            None,
-            |result| {
-                results.push(result);
-                Ok(())
-            },
-        )
-        .unwrap();
+    crate::pipeline::execute_graph(
+        &graph,
+        HashMap::from([(
+            "data".into(),
+            PipelineData::raster(vec![1.0, f64::NAN, 4.0]),
+        )]),
+        grid(),
+        options(3),
+        None,
+        |result| {
+            results.push(result);
+            Ok(())
+        },
+    )
+    .unwrap();
     let summary = results
         .iter()
         .find(|result| result.layer == OutputLayer::Resistance && result.sample.is_none())

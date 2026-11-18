@@ -8,6 +8,8 @@ use sprs::CsMat;
 use std::collections::HashSet;
 
 pub mod current;
+mod current_solver;
+pub use current_solver::{CurrentSolver, CurrentSolverSettings};
 pub mod mixed;
 mod output;
 

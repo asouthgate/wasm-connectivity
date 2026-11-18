@@ -1,3 +1,4 @@
+use crate::pipeline::operations::Operation;
 use crate::pipeline::Result;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -237,83 +238,4 @@ impl<'de> Deserialize<'de> for NodeSpec {
             })
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Operation {
-    Current {
-        #[serde(skip)]
-        current_solver_settings: crate::pipeline::task_graph::current_solver::CurrentSolverSettings,
-    },
-    Round,
-    DiscreteMap {
-        intervals: BTreeMap<String, f64>,
-        unmatched: Unmatched,
-    },
-    Distance {
-        units: DistanceUnits,
-        when_empty: EmptyDistance,
-    },
-    PowerResponse {
-        input_range: [f64; 2],
-        base_range: [f64; 2],
-        exponent: f64,
-        scale: f64,
-        offset: f64,
-        above: Option<f64>,
-    },
-    Override {
-        interval: String,
-        value: f64,
-    },
-    MaskNa {},
-    Normalise {
-        method: Normalisation,
-        when_zero: f64,
-    },
-    SurfaceHeights {},
-    Maximum {},
-    Sum {},
-    Irradiance {
-        cutoff_metres: f64,
-        sensor_height_metres: f64,
-        absorption: f64,
-    },
-    #[serde(skip)]
-    Identity,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DistanceUnits {
-    Metres,
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Normalisation {
-    PositiveMaximum,
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum EmptyDistance {
-    Number(f64),
-    Named(Infinity),
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Infinity {
-    Infinity,
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum Unmatched {
-    Number(f64),
-    Named(UnmatchedAction),
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UnmatchedAction {
-    Nodata,
-    Error,
 }

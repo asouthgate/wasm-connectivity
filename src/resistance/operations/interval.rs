@@ -1,14 +1,14 @@
-use crate::pipeline::Result;
 use std::collections::BTreeMap;
+type Result<T> = std::result::Result<T, String>;
 
-pub(in crate::pipeline) struct Interval {
+pub(crate) struct Interval {
     min: f64,
     max: f64,
     include_min: bool,
     include_max: bool,
 }
 impl Interval {
-    pub(in crate::pipeline) fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> Result<Self> {
         let text = text.trim();
         if text.len() < 5 || !text.is_ascii() {
             return Err(format!("invalid interval: {text}"));
@@ -48,12 +48,12 @@ impl Interval {
         }
         Ok(interval)
     }
-    pub(in crate::pipeline) fn contains(&self, v: f64) -> bool {
+    pub(crate) fn contains(&self, v: f64) -> bool {
         v.is_finite()
             && (v > self.min || (self.include_min && v == self.min))
             && (v < self.max || (self.include_max && v == self.max))
     }
-    pub(in crate::pipeline) fn overlaps(&self, other: &Self) -> bool {
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
         !(self.max < other.min
             || other.max < self.min
             || (self.max == other.min && !(self.include_max && other.include_min))
@@ -61,7 +61,7 @@ impl Interval {
     }
 }
 
-pub(in crate::pipeline) fn parse_interval_mappings(
+pub(crate) fn parse_interval_mappings(
     intervals: &BTreeMap<String, f64>,
 ) -> Result<Vec<(Interval, f64)>> {
     let mut rules: Vec<(Interval, f64)> = Vec::new();

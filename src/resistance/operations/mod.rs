@@ -1,8 +1,28 @@
+pub(crate) mod interval;
+mod mapping;
+mod raster;
+mod response;
+
+pub(crate) use mapping::apply_discrete_map;
+pub use mapping::{Unmatched, UnmatchedAction};
+pub(crate) use raster::{
+    mask_values, maximum_rasters, normalise_positive_maximum, override_values, round_values,
+    sum_rasters,
+};
+pub(crate) use response::apply_power_response;
+
 /// Apply a class/attribute ranking rule, preserving missing input cells.
 pub fn ranker(values: &[f64], classify: impl Fn(f64) -> f64) -> Vec<f64> {
-    values.iter().map(|&value| {
-        if value.is_finite() { classify(value) } else { f64::NAN }
-    }).collect()
+    values
+        .iter()
+        .map(|&value| {
+            if value.is_finite() {
+                classify(value)
+            } else {
+                f64::NAN
+            }
+        })
+        .collect()
 }
 
 /// Scale a normalised distance, rank, or intensity through a power curve.

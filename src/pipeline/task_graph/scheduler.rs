@@ -1,65 +1,12 @@
-// This contains code for the scheduler that executes a pipeline DAG with sampling.
-// We first build a bigger graph: nodes whose results stay the same across samples
-// appear once, and nodes whose results change appear once for each sample.
-// We then connect those nodes and sort them by dependency.
-// For this bigger graph, we refer to TaskNodes and TaskNodeEdges, and the graph is a NodeTaskList.
-//
-// Threads execute nodes when their input data is ready. Connections keep data
-// available until every node that reads it has finished, after which it can be freed.
-// Requested results are saved when the operation producing them finishes.
-//
-// There are three types of nodes: input nodes, calculation nodes, and streaming nodes.
-// Input nodes hold supplied data. Calculation nodes run an operation once.
-// Streaming nodes retain their state and process one available input at a time,
-// returning the worker thread after each update. Statistics use streaming nodes
-// to update means and variances without retaining every sample map.
-use super::{operations::OperationEvaluator, statistics::StatisticsAccumulator};
-use crate::pipeline::{
-    model::{parameters::SampledParameters, schema::{Node, Operation}},
-    ExecutionOptions, Grid, NodeOutputs, NodeResult, OutputLayer, PipelineData,
-    PipelineDataReference, PipelineGraph, Result,
+// Execute the task graph built by builder.rs. Graph structures live in graph.rs.
+use super::{
+    graph::{NodeOperation, NodeTaskList, StreamingNode, TaskNode},
+    operations::OperationEvaluator,
+    results::emit_node_results,
+    sampling::sample_operation,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-
-pub(super) trait StreamingNode: Send {
-    fn update(&mut self, inputs: &BTreeMap<String, Vec<PipelineData>>) -> Result<()>;
-    fn finish(self: Box<Self>) -> Result<NodeOutputs>;
-}
-
-#[derive(Clone, Copy)]
-enum NodeOperation<'a> {
-    Input,
-    Calculate {
-        operation: &'a Operation,
-        sampled_parameters: Option<&'a SampledParameters>,
-    },
-    Streaming {
-        create: fn() -> Box<dyn StreamingNode>,
-    },
-}
-
-struct TaskNode<'a> {
-    name: String,
-    sample: usize,
-    is_shared: bool,
-    operation: NodeOperation<'a>,
-    input_edges: Vec<usize>,
-    output_edges: Vec<usize>,
-    initial_outputs: NodeOutputs,
-    result_layers: BTreeMap<String, OutputLayer>,
-}
-
-struct NodeEdge {
-    source_node: usize,
-    destination_node: usize,
-    output_port: String,
-    input_port: String,
-}
-
-pub(in crate::pipeline) struct NodeTaskList<'a> {
-    nodes: Vec<TaskNode<'a>>,
-    edges: Vec<NodeEdge>,
-}
+use crate::pipeline::{ExecutionOptions, Grid, NodeOutputs, NodeResult, PipelineData, Result};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, PartialEq)]
 enum NodeStatus {
@@ -85,46 +32,6 @@ struct NodeRunInputs {
 struct NodeUpdate {
     outputs: NodeOutputs,
     streaming_node: Option<Box<dyn StreamingNode>>,
-}
-
-/// Create nodes whose results stay the same across samples once, and create the
-/// other nodes for each sample. Connect the nodes and sort them by dependency.
-pub(in crate::pipeline) fn build_node_task_list<'a>(
-    graph: &'a PipelineGraph,
-    inputs: HashMap<String, PipelineData>,
-    options: ExecutionOptions,
-    current_output: Option<PipelineDataReference>,
-) -> Result<NodeTaskList<'a>> {
-    let mut task_list = NodeTaskList {
-        nodes: Vec::new(),
-        edges: Vec::new(),
-    };
-    let mut node_indices = HashMap::new();
-    let varying_nodes = graph.sample_dependent_nodes();
-    task_list.add_input_nodes(graph, inputs, &mut node_indices)?;
-    let (constant_node_names, varying_node_names): (Vec<_>, Vec<_>) = graph
-        .order
-        .iter()
-        .partition(|name| !varying_nodes.contains(*name));
-    task_list.add_calculation_nodes(graph, &constant_node_names, 0, true, &mut node_indices);
-    for sample in 0..options.samples {
-        task_list.add_calculation_nodes(
-            graph,
-            &varying_node_names,
-            sample,
-            false,
-            &mut node_indices,
-        );
-    }
-    task_list.connect_calculation_inputs(graph, &varying_nodes, &node_indices);
-    task_list.connect_results_and_statistics(
-        graph,
-        options,
-        current_output.as_ref(),
-        &varying_nodes,
-        &node_indices,
-    );
-    sort_nodes_topologically(task_list)
 }
 
 /// Run ready nodes. Each streaming update owns its state until that update finishes.
@@ -184,243 +91,6 @@ pub(in crate::pipeline) fn execute_node_task_list(
         options,
         &mut on_node_result,
     )
-}
-
-impl<'a> NodeTaskList<'a> {
-    fn add_node(
-        &mut self,
-        name: &str,
-        sample: usize,
-        is_shared: bool,
-        operation: NodeOperation<'a>,
-        initial_outputs: NodeOutputs,
-    ) -> usize {
-        let index = self.nodes.len();
-        self.nodes.push(TaskNode {
-            name: name.into(),
-            sample,
-            is_shared,
-            operation,
-            input_edges: Vec::new(),
-            output_edges: Vec::new(),
-            initial_outputs,
-            result_layers: BTreeMap::new(),
-        });
-        index
-    }
-
-    fn add_edge(
-        &mut self,
-        source_node: usize,
-        destination_node: usize,
-        output_port: String,
-        input_port: String,
-    ) {
-        let index = self.edges.len();
-        self.edges.push(NodeEdge {
-            source_node,
-            destination_node,
-            output_port,
-            input_port,
-        });
-        self.nodes[source_node].output_edges.push(index);
-        self.nodes[destination_node].input_edges.push(index);
-    }
-
-    fn add_input_nodes(
-        &mut self,
-        graph: &PipelineGraph,
-        mut inputs: HashMap<String, PipelineData>,
-        node_indices: &mut HashMap<(usize, String), usize>,
-    ) -> Result<()> {
-        for name in graph.inputs.keys() {
-            let value = inputs
-                .remove(name)
-                .ok_or_else(|| format!("missing input: {name}"))?;
-            let index = self.add_node(
-                name,
-                0,
-                true,
-                NodeOperation::Input,
-                BTreeMap::from([("data".into(), value)]),
-            );
-            node_indices.insert((0, name.clone()), index);
-        }
-        Ok(())
-    }
-
-    fn add_calculation_nodes(
-        &mut self,
-        graph: &'a PipelineGraph,
-        node_names: &[&String],
-        sample: usize,
-        is_shared: bool,
-        node_indices: &mut HashMap<(usize, String), usize>,
-    ) {
-        for name in node_names {
-            let Node {
-                operation,
-                sampling,
-                ..
-            } = &graph.nodes[*name];
-            let index = self.add_node(
-                name,
-                sample,
-                is_shared,
-                NodeOperation::Calculate {
-                    operation,
-                    sampled_parameters: sampling.as_ref(),
-                },
-                BTreeMap::new(),
-            );
-            node_indices.insert((sample, (*name).clone()), index);
-        }
-    }
-
-    fn connect_calculation_inputs(
-        &mut self,
-        graph: &PipelineGraph,
-        varying_nodes: &BTreeSet<String>,
-        node_indices: &HashMap<(usize, String), usize>,
-    ) {
-        for node_index in graph.inputs.len()..self.nodes.len() {
-            let name = self.nodes[node_index].name.clone();
-            let sample = self.nodes[node_index].sample;
-            for (input_port, connection) in &graph.nodes[&name].inputs {
-                for reference in connection.references() {
-                    let (source, port) =
-                        resolve_model_connection(reference, sample, varying_nodes, node_indices);
-                    self.add_edge(source, node_index, port, input_port.clone());
-                }
-            }
-        }
-    }
-
-    fn connect_results_and_statistics(
-        &mut self,
-        graph: &PipelineGraph,
-        options: ExecutionOptions,
-        current_output: Option<&PipelineDataReference>,
-        varying_nodes: &BTreeSet<String>,
-        node_indices: &HashMap<(usize, String), usize>,
-    ) {
-        let mut layers = vec![(OutputLayer::Resistance, graph.output.clone())];
-        if let Some(reference) = current_output {
-            layers.push((OutputLayer::Current, reference.clone()));
-        }
-        if options.all_layers {
-            for name in &graph.named_nodes {
-                for &port in graph.nodes[name].operation.output_names() {
-                    if graph.output.selects_node(name, port) {
-                        continue;
-                    }
-                    layers.push((
-                        OutputLayer::Intermediate {
-                            node_name: name.clone(),
-                            port_name: port.into(),
-                        },
-                        PipelineDataReference::Node {
-                            from_node: name.clone(),
-                            output: Some(port.into()),
-                        },
-                    ));
-                }
-            }
-        }
-        for (layer, reference) in layers {
-            let streaming_node = options.statistics.then(|| {
-                let index = self.add_node(
-                    "statistics",
-                    0,
-                    false,
-                    NodeOperation::Streaming {
-                        create: StatisticsAccumulator::create,
-                    },
-                    BTreeMap::new(),
-                );
-                self.nodes[index]
-                    .result_layers
-                    .insert("data".into(), layer.clone());
-                index
-            });
-            for sample in 0..options.samples {
-                let (source, port) =
-                    resolve_model_connection(&reference, sample, varying_nodes, node_indices);
-                self.nodes[source]
-                    .result_layers
-                    .insert(port.clone(), layer.clone());
-                if let Some(destination) = streaming_node {
-                    self.add_edge(source, destination, port, "data".into());
-                }
-            }
-        }
-    }
-}
-
-fn resolve_model_connection(
-    reference: &PipelineDataReference,
-    sample: usize,
-    varying_nodes: &BTreeSet<String>,
-    node_indices: &HashMap<(usize, String), usize>,
-) -> (usize, String) {
-    match reference {
-        PipelineDataReference::Input { from_input } => {
-            (node_indices[&(0, from_input.clone())], "data".into())
-        }
-        PipelineDataReference::Node { from_node, output } => {
-            let sample = if varying_nodes.contains(from_node) {
-                sample
-            } else {
-                0
-            };
-            (
-                node_indices[&(sample, from_node.clone())],
-                output.as_deref().unwrap_or("data").into(),
-            )
-        }
-    }
-}
-
-fn sort_nodes_topologically(mut task_list: NodeTaskList<'_>) -> Result<NodeTaskList<'_>> {
-    let mut remaining_inputs: Vec<_> = task_list
-        .nodes
-        .iter()
-        .map(|node| node.input_edges.len())
-        .collect();
-    let mut ready_nodes: VecDeque<_> = (0..task_list.nodes.len())
-        .filter(|&index| remaining_inputs[index] == 0)
-        .collect();
-    let mut sorted_indices = Vec::new();
-    while let Some(node_index) = ready_nodes.pop_front() {
-        sorted_indices.push(node_index);
-        for &edge_index in &task_list.nodes[node_index].output_edges {
-            let destination = task_list.edges[edge_index].destination_node;
-            remaining_inputs[destination] -= 1;
-            if remaining_inputs[destination] == 0 {
-                ready_nodes.push_back(destination);
-            }
-        }
-    }
-    if sorted_indices.len() != task_list.nodes.len() {
-        return Err("expanded task graph contains a cycle".into());
-    }
-    let mut new_indices = vec![0; task_list.nodes.len()];
-    let mut old_nodes: Vec<_> = task_list.nodes.into_iter().map(Some).collect();
-    task_list.nodes = sorted_indices
-        .into_iter()
-        .enumerate()
-        .map(|(new_index, old_index)| {
-            new_indices[old_index] = new_index;
-            old_nodes[old_index]
-                .take()
-                .expect("node appears once in topological order")
-        })
-        .collect();
-    for edge in &mut task_list.edges {
-        edge.source_node = new_indices[edge.source_node];
-        edge.destination_node = new_indices[edge.destination_node];
-    }
-    Ok(task_list)
 }
 
 fn initial_node_states(task_list: &mut NodeTaskList<'_>) -> Vec<NodeExecutionState> {
@@ -559,17 +229,20 @@ fn run_node(
     grid: Grid,
     seed: u64,
 ) -> Result<NodeUpdate> {
-    let outputs = match node.operation {
+    let outputs = match &node.operation {
         NodeOperation::Calculate {
             operation,
             sampled_parameters,
         } => {
             let sampled = sampled_parameters
-                .map(|parameters| parameters.operation(&node.name, node.sample, seed))
+                .map(|parameters| sample_operation(parameters, &node.name, node.sample, seed))
                 .transpose()
                 .map_err(|error| format!("sample {}, node {}: {error}", node.sample, node.name))?;
             OperationEvaluator { grid }
-                .apply(sampled.as_ref().unwrap_or(operation), &inputs.data_by_port)
+                .apply(
+                    sampled.as_ref().unwrap_or(operation.as_ref()),
+                    &inputs.data_by_port,
+                )
                 .map_err(|error| format!("sample {}, node {}: {error}", node.sample, node.name))?
         }
         NodeOperation::Streaming { .. } => {
@@ -591,40 +264,6 @@ fn run_node(
         outputs,
         streaming_node: inputs.streaming_node,
     })
-}
-
-fn emit_node_results(
-    node: &TaskNode<'_>,
-    outputs: &NodeOutputs,
-    options: ExecutionOptions,
-    on_node_result: &mut impl FnMut(NodeResult) -> Result<()>,
-) -> Result<()> {
-    for (port, layer) in &node.result_layers {
-        if matches!(node.operation, NodeOperation::Streaming { .. }) {
-            on_node_result(NodeResult {
-                sample: None,
-                layer: layer.clone(),
-                outputs: outputs.clone(),
-            })?;
-        } else {
-            let value = outputs
-                .get(port)
-                .ok_or_else(|| format!("missing result port {port}"))?;
-            let samples = if node.is_shared {
-                0..options.samples
-            } else {
-                node.sample..node.sample + 1
-            };
-            for sample in samples {
-                on_node_result(NodeResult {
-                    sample: Some(sample),
-                    layer: layer.clone(),
-                    outputs: BTreeMap::from([("data".into(), value.clone())]),
-                })?;
-            }
-        }
-    }
-    Ok(())
 }
 
 fn finish_node_run(
@@ -751,8 +390,11 @@ fn execute_with_workers(
 
 #[cfg(test)]
 mod tests {
+    use super::super::builder::build_node_task_list;
     use super::*;
+    use crate::pipeline::{OutputLayer, PipelineGraph};
     use serde_json::json;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn options() -> ExecutionOptions {
@@ -785,35 +427,6 @@ mod tests {
             .to_string(),
         )
         .unwrap()
-    }
-
-    #[test]
-    fn graph_is_sorted_and_has_one_streaming_node_per_requested_layer() {
-        let graph = graph();
-        let task_list = build_node_task_list(
-            &graph,
-            HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]),
-            options(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            task_list
-                .nodes
-                .iter()
-                .filter(|node| matches!(node.operation, NodeOperation::Streaming { .. }))
-                .count(),
-            1
-        );
-        for (edge_index, edge) in task_list.edges.iter().enumerate() {
-            assert!(edge.source_node < edge.destination_node);
-            assert!(task_list.nodes[edge.source_node]
-                .output_edges
-                .contains(&edge_index));
-            assert!(task_list.nodes[edge.destination_node]
-                .input_edges
-                .contains(&edge_index));
-        }
     }
 
     #[test]

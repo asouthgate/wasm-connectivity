@@ -3,7 +3,7 @@ use crate::solve::{
     solve_raster_sources_mg_stencil_with_options, solve_raster_sources_mg_with_options, GroundMode,
 };
 
-/// Solver configuration carried by a current operation, independent of its inputs.
+/// Current solver settings, independent of source and ground arrays.
 #[derive(Clone, Copy, Debug)]
 pub struct CurrentSolverSettings {
     pub max_iter: usize,

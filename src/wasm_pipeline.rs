@@ -79,7 +79,8 @@ pub fn run_resistance_pipeline_browser(
     let named_arrays = std::mem::take(&mut inputs.values);
     let pipeline_inputs = graph.convert_named_arrays_to_pipeline_inputs(named_arrays)?;
     let mut completed_layers = BTreeMap::new();
-    graph.execute(
+    crate::pipeline::execute_graph(
+        &graph,
         pipeline_inputs,
         Grid { nrows, ncols, pixel_width: cellsize },
         ExecutionOptions {

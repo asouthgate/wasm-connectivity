@@ -1,6 +1,7 @@
-use super::interval::Interval;
-use super::schema::{Input, InputEdges, JsonPipeline, Node, NodeSpec, Operation};
+use crate::resistance::operations::interval::Interval;
+use super::schema::{Input, InputEdges, JsonPipeline, Node, NodeSpec};
 use crate::pipeline::*;
+use crate::pipeline::operations::Operation;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -41,7 +42,8 @@ pub(in crate::pipeline) fn execute_output(
     grid: Grid,
 ) -> Result<Vec<f64>> {
     let mut output = None;
-    graph.execute(
+    crate::pipeline::execute_graph(
+        graph,
         inputs,
         grid,
         ExecutionOptions {
