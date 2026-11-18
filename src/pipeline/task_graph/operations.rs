@@ -23,14 +23,13 @@ impl OperationEvaluator {
         inputs: &BTreeMap<String, Vec<PipelineData>>,
     ) -> Result<NodeOutputs> {
         use Operation::*;
-        let one = |name| input_data(inputs, name);
         let field = match op {
             Current {
                 current_solver_settings,
             } => {
-                let source = one("source")?;
-                let ground = one("ground")?;
-                let resistance = one("resistance")?;
+                let source = get_input(inputs, "source")?;
+                let ground = get_input(inputs, "ground")?;
+                let resistance = get_input(inputs, "resistance")?;
                 let current_solver = crate::pipeline::CurrentSolver::new(
                     source.values()?,
                     ground.values()?,
@@ -42,9 +41,9 @@ impl OperationEvaluator {
                     self.grid.ncols,
                 )?)
             }
-            Identity => one("data")?.clone(),
+            Identity => get_input(inputs, "data")?.clone(),
             Round => PipelineData::raster(
-                one("data")?
+                get_input(inputs, "data")?
                     .values()?
                     .iter()
                     .map(|value| value.round())
@@ -54,7 +53,7 @@ impl OperationEvaluator {
                 intervals,
                 unmatched,
             } => PipelineData::raster(apply_discrete_map(
-                one("data")?.values()?,
+                get_input(inputs, "data")?.values()?,
                 intervals,
                 unmatched,
             )?),
@@ -62,7 +61,7 @@ impl OperationEvaluator {
                 units: DistanceUnits::Metres,
                 when_empty,
             } => PipelineData::raster(distances_in_metres(
-                one("data")?.values()?,
+                get_input(inputs, "data")?.values()?,
                 self.grid,
                 when_empty,
             )?),
@@ -74,7 +73,7 @@ impl OperationEvaluator {
                 offset,
                 above,
             } => PipelineData::raster(apply_power_response(
-                one("data")?.values()?,
+                get_input(inputs, "data")?.values()?,
                 *input_range,
                 *base_range,
                 *exponent,
@@ -84,8 +83,8 @@ impl OperationEvaluator {
             )?),
             Override { interval, value } => {
                 let interval = Interval::parse(interval)?;
-                let mask = one("where")?;
-                let values = one("data")?.values()?;
+                let mask = get_input(inputs, "where")?;
+                let values = get_input(inputs, "data")?.values()?;
                 let output = values
                     .iter()
                     .zip(mask.values()?)
@@ -100,7 +99,7 @@ impl OperationEvaluator {
                 PipelineData::raster(output)
             }
             MaskNa {} => {
-                let values = one("data")?.values()?;
+                let values = get_input(inputs, "data")?.values()?;
                 let masks = inputs["mask"]
                     .iter()
                     .map(PipelineData::values)
@@ -122,7 +121,7 @@ impl OperationEvaluator {
                 method: Normalisation::PositiveMaximum,
                 when_zero,
             } => PipelineData::raster(normalise_positive_maximum(
-                one("data")?.values()?,
+                get_input(inputs, "data")?.values()?,
                 *when_zero,
             )?),
             SurfaceHeights {} => return self.surface_heights(inputs),
@@ -142,9 +141,9 @@ impl OperationEvaluator {
     }
 
     fn surface_heights(&self, inputs: &BTreeMap<String, Vec<PipelineData>>) -> Result<NodeOutputs> {
-        let topography = input_data(inputs, "topography")?;
-        let surface = input_data(inputs, "surface")?;
-        let occluders = input_data(inputs, "occluders")?;
+        let topography = get_input(inputs, "topography")?;
+        let surface = get_input(inputs, "surface")?;
+        let occluders = get_input(inputs, "occluders")?;
         let output = calc_surfs(
             topography.values()?,
             surface.values()?,
@@ -165,12 +164,12 @@ impl OperationEvaluator {
         sensor_height_metres: f64,
         absorption: f64,
     ) -> Result<Vec<f64>> {
-        let PipelineData::Points(points) = input_data(inputs, "point_sources")? else {
+        let PipelineData::Points(points) = get_input(inputs, "point_sources")? else {
             return Err("irradiance requires raycaster_point_source data".into());
         };
-        let topography = input_data(inputs, "topography")?;
-        let translucent = input_data(inputs, "translucent_surface")?;
-        let opaque = input_data(inputs, "opaque_surface")?;
+        let topography = get_input(inputs, "topography")?;
+        let translucent = get_input(inputs, "translucent_surface")?;
+        let opaque = get_input(inputs, "opaque_surface")?;
         Ok(irradiance_run(
             points,
             translucent.values()?,
@@ -186,7 +185,7 @@ impl OperationEvaluator {
     }
 }
 
-fn input_data<'a>(
+fn get_input<'a>(
     inputs: &'a BTreeMap<String, Vec<PipelineData>>,
     name: &str,
 ) -> Result<&'a PipelineData> {
