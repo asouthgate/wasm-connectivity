@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Cargo test
         run: cargo test
@@ -37,6 +37,7 @@ jobs:
         run: make build
 
       - name: Resistance worker tests
+        timeout-minutes: 1
         run: node tests/resistance_worker.mjs
 
       - name: Build example
