@@ -118,38 +118,14 @@ fn solver_f64() {
 
 #[test]
 fn rasterization_keeps_f64_geometry_and_writes_f32_rasters() {
-    let json = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"layer":"buildings"},"geometry":{"type":"Polygon","coordinates":[[[286100,78550],[286100.002,78550],[286100.002,78550.002],[286100,78550.002],[286100,78550]]]}}]}"#;
-    let params = r#"{"buildings":{"resistance":7.25,"width":0}}"#;
-    let (a, masks_a, _) = lm_connect::geospatial::prepare_geospatial_layers(
-        &[1.0_f32; 16],
-        4,
-        4,
-        json,
-        params,
-        286100.0,
-        78550.004,
-        0.001,
-    );
-    let (b, masks_b, _) = lm_connect::geospatial::prepare_geospatial_layers(
-        &[1.0_f64; 16],
-        4,
-        4,
-        json,
-        params,
-        286100.0,
-        78550.004,
-        0.001,
-    );
-    assert_eq!(a.iter().filter(|&&v| v == 7.25).count(), 4);
-    assert_eq!(a.iter().map(|&v| v as f64).collect::<Vec<_>>(), b);
-    assert_eq!(
-        masks_a[0]
-            .data
-            .iter()
-            .map(|&v| v as f64)
-            .collect::<Vec<_>>(),
-        masks_b[0].data
-    );
+    use lm_connect::geospatial::{rasterize_values, GeoTransform};
+
+    let json = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"value":7.25},"geometry":{"type":"Polygon","coordinates":[[[286100,78550],[286100.002,78550],[286100.002,78550.002],[286100,78550.002],[286100,78550]]]}}]}"#;
+    let transform = GeoTransform { xmin: 286100.0, ymax: 78550.004, cellsize: 0.001 };
+    let single = rasterize_values::<f32>(json, 4, 4, &transform, 0.0).unwrap();
+    let double = rasterize_values::<f64>(json, 4, 4, &transform, 0.0).unwrap();
+    assert_eq!(single.iter().filter(|&&value| value == 7.25).count(), 4);
+    assert_eq!(single.into_iter().map(f64::from).collect::<Vec<_>>(), double);
 }
 
 #[cfg(feature = "instrumentation-profile")]

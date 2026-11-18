@@ -1,0 +1,47 @@
+{
+  "name": "chudleigh_browser_example",
+  "inputs": {
+    "base": { "type": "raster_ranked" },
+    "roads": { "type": "vector_mask" },
+    "rivers": { "type": "vector_mask" },
+    "buildings": { "type": "vector_mask" }
+  },
+  "nodes": {
+    "terrain": {
+      "op": "power_response",
+      "inputs": "inputs.base",
+      "parameters": {
+        "input_range": [0, 32],
+        "base_range": [0, 32],
+        "exponent": 1,
+        "scale": 100,
+        "offset": 0
+      }
+    },
+    "road_resistance": {
+      "op": "power_response",
+      "inputs": "inputs.roads",
+      "parameters": { "input_range": [0, 1], "base_range": [0, 1], "exponent": 1, "scale": 5, "offset": 0 }
+    },
+    "river_resistance": {
+      "op": "power_response",
+      "inputs": "inputs.rivers",
+      "parameters": { "input_range": [0, 1], "base_range": [0, 1], "exponent": 1, "scale": 0.5, "offset": 0 }
+    },
+    "building_resistance": {
+      "op": "power_response",
+      "inputs": "inputs.buildings",
+      "parameters": { "input_range": [0, 1], "base_range": [0, 1], "exponent": 1, "scale": 500, "offset": 0 }
+    },
+    "resistance": {
+      "op": "maximum",
+      "inputs": [
+        "nodes.terrain",
+        "nodes.road_resistance",
+        "nodes.river_resistance",
+        "nodes.building_resistance"
+      ]
+    }
+  },
+  "output": "nodes.resistance"
+}

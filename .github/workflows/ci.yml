@@ -22,10 +22,13 @@ jobs:
         with:
           tool: wasm-pack
 
+      - name: Install Rust nightly for threaded Wasm
+        run: rustup toolchain install nightly-2025-11-15 --profile minimal --component rust-src --target wasm32-unknown-unknown
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Cargo test
         run: cargo test
@@ -34,6 +37,7 @@ jobs:
         run: make build
 
       - name: Resistance worker tests
+        timeout-minutes: 1
         run: node tests/resistance_worker.mjs
 
       - name: Build example

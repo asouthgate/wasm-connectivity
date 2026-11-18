@@ -1,17 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
-import { rasterizeGeojsonAsync, runGeospatialPipelineMgAsync, runGeospatialPipelineMgStencilAsync } from 'lmConnect';
-import { renderMap } from '../render';
+import { useState, useEffect } from 'react';
+import { rasterizeGeojsonAsync, runResistancePipelineBrowserAsync, solveCurrentAsync } from 'lmConnect';
 import RasterView from '../components/RasterView';
 import { StatusBar } from '../components/StatusBar';
-import { loadExampleData } from '../data';
-
-function LayerMaskCanvas({ data, nrows, ncols }) {
-  const canvasRef = useRef(null);
-  useEffect(() => {
-    if (canvasRef.current && data) renderMap(canvasRef.current, data, nrows, ncols, -1, false);
-  }, [data, nrows, ncols]);
-  return <canvas ref={canvasRef} className="map-canvas" />;
-}
+import { exampleDefaults, exampleFeatureMasks, exampleModel, loadExampleData } from '../data';
+import modelTemplate from '../../chudleigh-model.json';
 
 export default function Example() {
   const [resolution, setResolution] = useState('500');
@@ -21,10 +13,7 @@ export default function Example() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('Loading Chudleigh data...');
   const [error, setError] = useState(false);
-  const [params, setParams] = useState({
-    terrainRes: 100, roadRes: 5, roadWidth: 3,
-    riverRes: 0.5, riverWidth: 4, buildRes: 500,
-  });
+  const [params, setParams] = useState(() => exampleDefaults(modelTemplate));
   const [dirichlet, setDirichlet] = useState(true);
   const [precision, setPrecision] = useState('f64');
   const [lowMem, setLowMem] = useState(false);
@@ -35,7 +24,6 @@ export default function Example() {
     try {
       const loaded = await loadExampleData(res);
       setData(loaded);
-      const nc = loaded.baseData.reduce((c, v) => v !== loaded.baseMeta.nodata && v > 0 ? c + 1 : c, 0);
       setStatus(`loaded Chudleigh ${res}x${res}`);
     } catch (err) {
       setError(true); setStatus(`error: ${err.message}`);
@@ -53,43 +41,21 @@ export default function Example() {
     const t0 = performance.now();
     try {
       const { baseData, baseMeta, srcData, gndData, geojsonStr } = data;
-      const { terrainRes, roadRes, roadWidth, riverRes, riverWidth, buildRes } = params;
-      const nd = baseMeta.nodata ?? -9999;
-      const scaledBase = baseData.map(v => v !== nd ? v * terrainRes : v);
-      const layers = {
-        roads: { value: roadRes, buffer: roadWidth },
-        rivers: { value: riverRes, buffer: riverWidth },
-        buildings: { value: buildRes, buffer: 0 },
-      };
-      const ymax = baseMeta.yllcorner + baseMeta.nrows * baseMeta.cellsize;
-      const collection = JSON.parse(geojsonStr);
-      for (const [layer, { value, buffer }] of Object.entries(layers)) {
-        const features = {
-          type: 'FeatureCollection',
-          features: collection.features
-            .filter(feature => feature.properties.layer === layer)
-            .map(feature => ({
-              type: 'Feature',
-              geometry: feature.geometry,
-              properties: { value },
-            })),
-        };
-        const values = await rasterizeGeojsonAsync(features, {
-          nrows: baseMeta.nrows, ncols: baseMeta.ncols,
-          xmin: baseMeta.xllcorner, ymax, cellsize: baseMeta.cellsize, buffer,
-        });
-        for (let i = 0; i < scaledBase.length; i++) {
-          if (values[i] !== 0 && values[i] > scaledBase[i]) scaledBase[i] = values[i];
-        }
-      }
-      const solve = (lowMem || precision === 'mixed') ? runGeospatialPipelineMgStencilAsync : runGeospatialPipelineMgAsync;
-      const r = JSON.parse(await solve(
-        scaledBase, baseMeta.nrows, baseMeta.ncols, nd,
-        baseMeta.xllcorner, ymax, baseMeta.cellsize,
-        srcData, gndData || new Float64Array(baseMeta.nrows * baseMeta.ncols),
-        { maxIter: 100_000, useDirichletGround: dirichlet, precision },
-      ));
-      if (r.error) throw new Error(r.error);
+      const { nrows, ncols, cellsize, nodata, xllcorner, yllcorner } = baseMeta;
+      const grid = { nrows, ncols, cellsize };
+      const featureGrid = { ...grid, xmin: xllcorner, ymax: yllcorner + nrows * cellsize };
+      const masks = exampleFeatureMasks(geojsonStr, featureGrid, params, rasterizeGeojsonAsync);
+      const layers = await Promise.all(masks.map(async ([name, mask]) => [name, await mask]));
+      const inputs = { base: baseData, ...Object.fromEntries(layers) };
+      const { output: resistance } = await runResistancePipelineBrowserAsync(
+        exampleModel(modelTemplate, params), inputs, grid, { allLayers: false, outputPrecision: 'f64' },
+      );
+      const solved = await solveCurrentAsync(
+        resistance, nrows, ncols, nodata, srcData, gndData,
+        { maxIter: 100_000, useDirichletGround: dirichlet, precision, lowMemory: lowMem },
+      );
+      if (solved.error) throw new Error(solved.error);
+      const r = { ...solved.output, resistance_map: resistance, total_iters: solved.total_iters };
       setResult(r);
       setStatus(`${((performance.now() - t0) / 1000).toFixed(2)}s · ${r.total_iters || 0} iters`);
     } catch (err) {
@@ -156,16 +122,10 @@ export default function Example() {
               {[
                 ['res', result.resistance_map, data.baseMeta.nodata],
                 ['cur', result.current_map, 0],
-                ['volt', result.voltage_map, 0],
+                ['volt', result.voltages, 0],
               ].map(([type, values, nodata]) => <RasterView key={type} type={type} data={values}
                 meta={{ nrows: result.nrows, ncols: result.ncols, nodata }}
                 quantileScale={scales[type] === 'quantile'} onToggleScale={scale => setScales({ ...scales, [type]: scale })} />)}
-            </div>
-            <div className="maps">
-              {(result.layer_masks || []).map(m => <div key={m.name} className="map-view">
-                <div className="map-header">{m.name} mask {result.ncols}×{result.nrows}</div>
-                <LayerMaskCanvas data={m.data} nrows={result.nrows} ncols={result.ncols} />
-              </div>)}
             </div>
           </>}
         </div>

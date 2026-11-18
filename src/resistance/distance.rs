@@ -259,3 +259,14 @@ mod tests {
             vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0]);
     }
 }
+
+
+pub(crate) fn distances_in_metres(values: &[f64], nrows: usize, ncols: usize,
+    pixel_width: f64, when_empty: f64) -> Result<Vec<f64>, String> {
+    if when_empty.is_nan() || when_empty < 0.0 {
+        return Err("empty distance must be nonnegative".into());
+    }
+    let mut distances = distance_generation(values, nrows, ncols, when_empty / pixel_width);
+    for distance in &mut distances { *distance *= pixel_width; }
+    Ok(distances)
+}

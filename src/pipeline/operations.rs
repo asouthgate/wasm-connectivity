@@ -1,255 +1,372 @@
-use super::{
-    execution_state::Evaluator,
-    interval::{parse_interval_mappings, Interval},
-    schema::*,
-    NodeOutputs, PipelineData, Result,
-};
-use crate::resistance::{
-    distance::distance_generation, irradiance::irradiance_run, operations::power_response,
-    surface::calc_surfs,
-};
+use super::{model::schema::Input, Result};
+use crate::resistance::operations::interval::{parse_interval_mappings, Interval};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
-impl Evaluator<'_> {
-    pub(super) fn apply(
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Operation {
+    Current {
+        #[serde(skip)]
+        current_solver_settings: crate::pipeline::CurrentSolverSettings,
+    },
+    Round,
+    DiscreteMap {
+        intervals: BTreeMap<String, f64>,
+        unmatched: Unmatched,
+    },
+    Distance {
+        units: DistanceUnits,
+        when_empty: EmptyDistance,
+    },
+    PowerResponse {
+        input_range: [f64; 2],
+        base_range: [f64; 2],
+        exponent: f64,
+        scale: f64,
+        offset: f64,
+        above: Option<f64>,
+    },
+    Override {
+        interval: String,
+        value: f64,
+    },
+    MaskNa {},
+    Normalise {
+        method: Normalisation,
+        when_zero: f64,
+    },
+    SurfaceHeights {},
+    Maximum {},
+    Sum {},
+    Irradiance {
+        cutoff_metres: f64,
+        sensor_height_metres: f64,
+        absorption: f64,
+    },
+    #[serde(skip)]
+    Identity,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistanceUnits {
+    Metres,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Normalisation {
+    PositiveMaximum,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum EmptyDistance {
+    Number(f64),
+    Named(Infinity),
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Infinity {
+    Infinity,
+}
+pub use crate::resistance::operations::Unmatched;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::pipeline) enum Kind {
+    Raster,
+    Topography,
+    Surface,
+    Ranked,
+    Distance,
+    Occluder,
+    Height,
+    Resistance,
+    Irradiance,
+    Current,
+    Lights,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::pipeline) enum Unit {
+    Metres,
+    Dimensionless,
+    Resistance,
+    RelativeIrradiance,
+    Current,
+    None,
+}
+#[derive(Debug, Clone, Copy)]
+pub(in crate::pipeline) struct Descriptor {
+    pub(in crate::pipeline) kind: Kind,
+    pub(in crate::pipeline) unit: Unit,
+}
+impl Descriptor {
+    fn new(kind: Kind, unit: Unit) -> Self {
+        Self { kind, unit }
+    }
+    pub(in crate::pipeline) fn is_raster(self) -> bool {
+        self.kind != Kind::Lights
+    }
+}
+impl Input {
+    pub(in crate::pipeline) fn descriptor(&self) -> Descriptor {
+        use Kind::*;
+        match self {
+            Self::RasterTopography {} => Descriptor::new(Topography, Unit::Metres),
+            Self::RasterSurface {} => Descriptor::new(Surface, Unit::Metres),
+            Self::RasterRanked {} => Descriptor::new(Ranked, Unit::Dimensionless),
+            Self::VectorMask {} => Descriptor::new(Raster, Unit::Dimensionless),
+            Self::VectorOccluder {} => Descriptor::new(Occluder, Unit::Metres),
+            Self::VectorResistance {} => Descriptor::new(Resistance, Unit::Resistance),
+            Self::RaycasterPointSource {} => Descriptor::new(Lights, Unit::None),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub(in crate::pipeline) enum InputTypes {
+    Any,
+    Raster,
+    Topography,
+    Surface,
+    Occluder,
+    Height,
+    Lights,
+}
+impl InputTypes {
+    pub(in crate::pipeline) fn accepts(self, descriptor: Descriptor) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Raster => descriptor.is_raster(),
+            Self::Topography => descriptor.kind == Kind::Topography,
+            Self::Surface => descriptor.kind == Kind::Surface,
+            Self::Occluder => descriptor.kind == Kind::Occluder,
+            Self::Height => matches!(descriptor.kind, Kind::Height | Kind::Occluder),
+            Self::Lights => descriptor.kind == Kind::Lights,
+        }
+    }
+    pub(in crate::pipeline) fn name(self) -> &'static str {
+        match self {
+            Self::Any => "data",
+            Self::Raster => "raster",
+            Self::Topography => "raster_topography",
+            Self::Surface => "raster_surface",
+            Self::Occluder => "vector_occluder",
+            Self::Height => "height raster in metres",
+            Self::Lights => "raycaster_point_source",
+        }
+    }
+}
+pub(in crate::pipeline) struct Port {
+    pub(in crate::pipeline) name: &'static str,
+    pub(in crate::pipeline) accepts: InputTypes,
+    pub(in crate::pipeline) many: bool,
+}
+impl Operation {
+    pub(in crate::pipeline) fn output_names(&self) -> &'static [&'static str] {
+        match self {
+            Self::SurfaceHeights {} => &["translucent", "opaque"],
+            _ => &["data"],
+        }
+    }
+
+    pub(in crate::pipeline) fn ports(&self) -> &'static [Port] {
+        use InputTypes::*;
+        match self {
+            Self::Current { .. } => &[
+                Port {
+                    name: "resistance",
+                    accepts: Raster,
+                    many: false,
+                },
+                Port {
+                    name: "source",
+                    accepts: Raster,
+                    many: false,
+                },
+                Port {
+                    name: "ground",
+                    accepts: Raster,
+                    many: false,
+                },
+            ],
+            Self::Identity => &[Port {
+                name: "data",
+                accepts: Any,
+                many: false,
+            }],
+            Self::Override { .. } => &[
+                Port {
+                    name: "data",
+                    accepts: Raster,
+                    many: false,
+                },
+                Port {
+                    name: "where",
+                    accepts: Raster,
+                    many: false,
+                },
+            ],
+            Self::MaskNa {} => &[
+                Port {
+                    name: "data",
+                    accepts: Raster,
+                    many: false,
+                },
+                Port {
+                    name: "mask",
+                    accepts: Raster,
+                    many: true,
+                },
+            ],
+            Self::Sum {} | Self::Maximum {} => &[Port {
+                name: "data",
+                accepts: Raster,
+                many: true,
+            }],
+            Self::SurfaceHeights {} => &[
+                Port {
+                    name: "topography",
+                    accepts: Topography,
+                    many: false,
+                },
+                Port {
+                    name: "surface",
+                    accepts: Surface,
+                    many: false,
+                },
+                Port {
+                    name: "occluders",
+                    accepts: Occluder,
+                    many: false,
+                },
+            ],
+            Self::Irradiance { .. } => &[
+                Port {
+                    name: "point_sources",
+                    accepts: Lights,
+                    many: false,
+                },
+                Port {
+                    name: "topography",
+                    accepts: Topography,
+                    many: false,
+                },
+                Port {
+                    name: "translucent_surface",
+                    accepts: Height,
+                    many: false,
+                },
+                Port {
+                    name: "opaque_surface",
+                    accepts: Height,
+                    many: false,
+                },
+            ],
+            _ => &[Port {
+                name: "data",
+                accepts: Raster,
+                many: false,
+            }],
+        }
+    }
+    pub(in crate::pipeline) fn output_types(
         &self,
-        op: &Operation,
-        inputs: &BTreeMap<String, Vec<PipelineData>>,
-    ) -> Result<NodeOutputs> {
-        use Operation::*;
-        let one = |name| input_data(inputs, name);
-        let raster = || -> Result<Vec<f64>> { Ok(one("data")?.values()?.to_vec()) };
-        let field = match op {
-            Identity => one("data")?.clone(),
-            Round => PipelineData::raster(raster()?.into_iter().map(f64::round).collect()),
-            DiscreteMap {
+        inputs: &BTreeMap<String, Vec<Descriptor>>,
+    ) -> Result<BTreeMap<String, Descriptor>> {
+        use Kind::*;
+        let data = || inputs["data"][0];
+        let descriptor = match self {
+            Self::Identity | Self::Round | Self::Override { .. } | Self::MaskNa {} => data(),
+            Self::Current { .. } => Descriptor::new(Current, Unit::Current),
+            Self::DiscreteMap { .. } => Descriptor::new(Ranked, Unit::Dimensionless),
+            Self::Distance { .. } => Descriptor::new(Distance, Unit::Metres),
+            Self::PowerResponse { .. } => Descriptor::new(Resistance, Unit::Resistance),
+            Self::Normalise { .. } => Descriptor::new(Raster, Unit::Dimensionless),
+            Self::Irradiance { .. } => Descriptor::new(Irradiance, Unit::RelativeIrradiance),
+            Self::SurfaceHeights {} => {
+                return Ok(BTreeMap::from([
+                    ("translucent".into(), Descriptor::new(Height, Unit::Metres)),
+                    ("opaque".into(), Descriptor::new(Height, Unit::Metres)),
+                ]))
+            }
+            Self::Sum {} | Self::Maximum {} => {
+                let first = data();
+                if inputs["data"].iter().any(|other| other.unit != first.unit) {
+                    return Err("data inputs must have the same units".into());
+                }
+                Descriptor::new(
+                    if inputs["data"].iter().all(|other| other.kind == first.kind) {
+                        first.kind
+                    } else {
+                        Raster
+                    },
+                    first.unit,
+                )
+            }
+        };
+        Ok(BTreeMap::from([("data".into(), descriptor)]))
+    }
+}
+
+impl Operation {
+    pub(in crate::pipeline) fn validate_parameters(&self) -> Result<()> {
+        match self {
+            Self::DiscreteMap {
                 intervals,
                 unmatched,
-            } => PipelineData::raster(apply_discrete_map(raster()?, intervals, unmatched)?),
-            Distance {
-                units: DistanceUnits::Metres,
-                when_empty,
-            } => PipelineData::raster(distances_in_metres(
-                one("data")?.values()?,
-                self.grid,
-                when_empty,
-            )?),
-            PowerResponse {
-                input_range,
-                base_range,
+            } => {
+                parse_interval_mappings(intervals)?;
+                if matches!(unmatched,Unmatched::Number(value) if !value.is_finite()) {
+                    return Err("unmatched value must be finite".into());
+                }
+            }
+            Self::Distance {
+                when_empty: EmptyDistance::Number(value),
+                ..
+            } if !value.is_finite() || *value < 0.0 => {
+                return Err("empty distance must be nonnegative".into())
+            }
+            Self::PowerResponse {
+                input_range: [lo, hi],
+                base_range: [start, end],
                 exponent,
                 scale,
                 offset,
                 above,
-            } => PipelineData::raster(apply_power_response(
-                raster()?,
-                *input_range,
-                *base_range,
-                *exponent,
-                *scale,
-                *offset,
-                *above,
-            )?),
-            Override { interval, value } => {
-                let interval = Interval::parse(interval)?;
-                let mask = one("where")?;
-                let mut values = raster()?;
-                for (v, &m) in values.iter_mut().zip(mask.values()?) {
-                    if interval.contains(m) {
-                        *v = *value;
-                    }
+            } => {
+                if ![lo, hi, start, end, exponent, scale, offset]
+                    .iter()
+                    .all(|value| value.is_finite())
+                    || hi <= lo
+                    || *exponent <= 0.0
+                    || *scale < 0.0
+                    || above.is_some_and(|value| !value.is_finite())
+                {
+                    return Err("invalid power response parameters".into());
                 }
-                PipelineData::raster(values)
             }
-            MaskNa {} => {
-                let mut values = raster()?;
-                for mask in &inputs["mask"] {
-                    for (v, &m) in values.iter_mut().zip(mask.values()?) {
-                        if !m.is_finite() {
-                            *v = f64::NAN;
-                        }
-                    }
+            Self::Override { interval, value } => {
+                Interval::parse(interval)?;
+                if !value.is_finite() {
+                    return Err("override value must be finite".into());
                 }
-                PipelineData::raster(values)
             }
-            Normalise {
-                method: Normalisation::PositiveMaximum,
-                when_zero,
-            } => PipelineData::raster(normalise_positive_maximum(raster()?, *when_zero)?),
-            SurfaceHeights {} => return self.surface_heights(inputs),
-            Maximum {} | Sum {} => PipelineData::raster(aggregate_rasters(&inputs["data"], op)?),
-            Irradiance {
+            Self::Normalise { when_zero, .. } if !when_zero.is_finite() => {
+                return Err("when_zero must be finite".into())
+            }
+            Self::Irradiance {
                 cutoff_metres,
                 sensor_height_metres,
                 absorption,
-            } => PipelineData::raster(self.irradiance(
-                inputs,
-                *cutoff_metres,
-                *sensor_height_metres,
-                *absorption,
-            )?),
-        };
-        Ok(BTreeMap::from([("data".into(), field)]))
-    }
-
-    fn surface_heights(&self, inputs: &BTreeMap<String, Vec<PipelineData>>) -> Result<NodeOutputs> {
-        let topography = input_data(inputs, "topography")?;
-        let surface = input_data(inputs, "surface")?;
-        let occluders = input_data(inputs, "occluders")?;
-        let output = calc_surfs(
-            topography.values()?,
-            surface.values()?,
-            occluders.values()?,
-            self.grid.nrows,
-            self.grid.ncols,
-        );
-        Ok(BTreeMap::from([
-            ("translucent".into(), PipelineData::raster(output.soft_surf)),
-            ("opaque".into(), PipelineData::raster(output.hard_surf)),
-        ]))
-    }
-
-    fn irradiance(
-        &self,
-        inputs: &BTreeMap<String, Vec<PipelineData>>,
-        cutoff_metres: f64,
-        sensor_height_metres: f64,
-        absorption: f64,
-    ) -> Result<Vec<f64>> {
-        let PipelineData::Points(points) = input_data(inputs, "point_sources")? else {
-            return Err("irradiance requires raycaster_point_source data".into());
-        };
-        let topography = input_data(inputs, "topography")?;
-        let translucent = input_data(inputs, "translucent_surface")?;
-        let opaque = input_data(inputs, "opaque_surface")?;
-        Ok(irradiance_run(
-            points,
-            translucent.values()?,
-            opaque.values()?,
-            topography.values()?,
-            self.grid.nrows,
-            self.grid.ncols,
-            self.grid.pixel_width,
-            cutoff_metres,
-            sensor_height_metres,
-            absorption,
-        ))
-    }
-}
-
-fn input_data<'a>(
-    inputs: &'a BTreeMap<String, Vec<PipelineData>>,
-    name: &str,
-) -> Result<&'a PipelineData> {
-    inputs
-        .get(name)
-        .and_then(|values| values.first())
-        .ok_or_else(|| format!("missing input port {name}"))
-}
-
-fn apply_discrete_map(
-    mut values: Vec<f64>,
-    intervals: &BTreeMap<String, f64>,
-    unmatched: &Unmatched,
-) -> Result<Vec<f64>> {
-    let rules = parse_interval_mappings(intervals)?;
-    for (i, value) in values.iter_mut().enumerate() {
-        if !value.is_finite() {
-            *value = f64::NAN;
-            continue;
-        }
-        *value = match rules.iter().find(|(interval, _)| interval.contains(*value)) {
-            Some((_, mapped)) => *mapped,
-            None => match unmatched {
-                Unmatched::Number(v) if v.is_finite() => *v,
-                Unmatched::Named(UnmatchedAction::Nodata) => f64::NAN,
-                _ => return Err(format!("unmatched value {value} at cell {i}")),
-            },
-        };
-    }
-    Ok(values)
-}
-
-fn distances_in_metres(values: &[f64], grid: Grid, when_empty: &EmptyDistance) -> Result<Vec<f64>> {
-    let empty = match when_empty {
-        EmptyDistance::Number(v) if v.is_finite() && *v >= 0.0 => *v / grid.pixel_width,
-        EmptyDistance::Named(Infinity::Infinity) => f64::INFINITY,
-        _ => return Err("empty distance must be nonnegative".into()),
-    };
-    let mut distances = distance_generation(values, grid.nrows, grid.ncols, empty);
-    for distance in &mut distances {
-        *distance *= grid.pixel_width;
-    }
-    Ok(distances)
-}
-
-fn apply_power_response(
-    mut values: Vec<f64>,
-    [lo, hi]: [f64; 2],
-    [start, end]: [f64; 2],
-    exponent: f64,
-    scale: f64,
-    offset: f64,
-    above: Option<f64>,
-) -> Result<Vec<f64>> {
-    for (i, value) in values.iter_mut().enumerate() {
-        if value.is_nan() {
-            continue;
-        }
-        if *value > hi {
-            *value = above.ok_or_else(|| {
-                format!("value {value} above input range at cell {i}; specify above")
-            })?;
-        } else if !value.is_finite() || *value < lo {
-            return Err(format!("value {value} below input range at cell {i}"));
-        } else {
-            let base = start + (end - start) * ((*value - lo) / (hi - lo));
-            *value = power_response(base, exponent, scale) + offset;
-            if !value.is_finite() {
-                return Err(format!("nonfinite power response at cell {i}"));
+            } => {
+                if ![cutoff_metres, sensor_height_metres, absorption]
+                    .iter()
+                    .all(|value| value.is_finite() && **value >= 0.0)
+                {
+                    return Err("irradiance parameters must be finite and nonnegative".into());
+                }
             }
+            _ => {}
         }
+        Ok(())
     }
-    Ok(values)
-}
-
-fn normalise_positive_maximum(mut values: Vec<f64>, when_zero: f64) -> Result<Vec<f64>> {
-    if values.iter().any(|v| v.is_infinite() || *v < 0.0) {
-        return Err("positive maximum normalisation requires nonnegative values".into());
-    }
-    let max = values
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .fold(0.0, f64::max);
-    for value in &mut values {
-        if value.is_finite() {
-            *value = if max > 0.0 { *value / max } else { when_zero };
-        }
-    }
-    Ok(values)
-}
-
-fn aggregate_rasters(fields: &[PipelineData], op: &Operation) -> Result<Vec<f64>> {
-    let (first, rest) = fields
-        .split_first()
-        .ok_or("aggregation requires at least one input")?;
-    let mut values = first.values()?.to_vec();
-    for field in rest {
-        for (value, &other) in values.iter_mut().zip(field.values()?) {
-            *value = if !value.is_finite() || !other.is_finite() {
-                f64::NAN
-            } else if matches!(op, Operation::Sum {}) {
-                *value + other
-            } else {
-                value.max(other)
-            };
-        }
-    }
-    for value in &mut values {
-        if !value.is_finite() {
-            *value = f64::NAN;
-        }
-    }
-    Ok(values)
 }

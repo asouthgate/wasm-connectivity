@@ -32,6 +32,7 @@ See [Resistance pipeline JSON specification](docs/pipeline-json-spec.md) for det
 
 ```sh
 ./target/release/lmc resistance \
+  --threads 4 \
   --model example/horseshoe-bat-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -104,6 +105,7 @@ saving every sample:
 
 ```sh
 ./target/release/lmc full \
+  --threads 4 \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -126,6 +128,7 @@ use the same seed and omit `--save-samples`:
 
 ```sh
 ./target/release/lmc full \
+  --threads 4 \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \
@@ -147,7 +150,7 @@ The second run avoids storing individual maps on disk, accumulating pipeline res
 
 - CLI and library: [Rust](https://rustup.rs)
 - CLI GIS input/output: GDAL development libraries and `pkg-config` (e.g. `sudo apt install libgdal-dev pkg-config` on Debian/Ubuntu).
-- Wasm integration: [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
+- Wasm integration: [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) and the nightly Rust toolchain pinned in the Makefile, with `rust-src` and the `wasm32-unknown-unknown` target. Use `make build WASM_THREADS=0` for a single-threaded Wasm build.
 - Browser example: [Node.js](https://nodejs.org)
 
 ## Build

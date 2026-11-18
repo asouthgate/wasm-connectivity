@@ -9,6 +9,7 @@ export interface CurrentSolverOptions {
   tol?: number;
   useDirichletGround?: boolean;
   precision?: Precision;
+  lowMemory?: boolean;
 }
 
 export interface CurrentSolveResult {
@@ -26,27 +27,6 @@ export function solveCurrentAsync(
   resistance: RasterInput, nrows: number, ncols: number, nodata: number,
   source: RasterInput, ground: RasterInput, options?: CurrentSolverOptions,
 ): Promise<CurrentSolveResult>;
-
-export interface GeospatialOptions {
-  geojson?: Record<string, unknown>;
-  layerParams?: Record<string, { resistance: number; width?: number }>;
-  maxIter?: number;
-  tol?: number;
-  useDirichletGround?: boolean;
-  precision?: Precision;
-}
-
-export function runGeospatialPipelineMgAsync(
-  baseRaster: RasterInput, nrows: number, ncols: number, nodata: number,
-  xmin: number, ymax: number, cellsize: number,
-  srcData: RasterInput, gndData: RasterInput, options?: GeospatialOptions,
-): Promise<string>;
-
-export function runGeospatialPipelineMgStencilAsync(
-  baseRaster: RasterInput, nrows: number, ncols: number, nodata: number,
-  xmin: number, ymax: number, cellsize: number,
-  srcData: RasterInput, gndData: RasterInput, options?: GeospatialOptions,
-): Promise<string>;
 
 export interface VectorFeatureCollection {
   type: "FeatureCollection";
@@ -74,19 +54,27 @@ export function rasterizeGeojsonAsync(
   features: VectorFeatureCollection, grid: RasterGrid,
 ): Promise<Float64Array>;
 
-export interface ResistanceOutput {
+type ResistanceRaster = Float32Array | Float64Array;
+
+export interface ResistanceOutput<Raster extends ResistanceRaster = Float32Array> {
   nrows: number;
   ncols: number;
-  output: Float32Array;
-  current?: Float32Array;
-  layers: Record<string, Record<string, Float32Array>>;
+  output: Raster;
+  current?: Raster;
+  layers: Record<string, Record<string, Raster>>;
 }
 
 /** Inputs use model names: prepared rasters, feature masks for vector_mask, or pixel x/y/height triples. */
 export function runResistancePipelineBrowserAsync(
   modelJson: string, inputs: Record<string, RasterInput>,
   grid: { nrows: number; ncols: number; cellsize: number },
-  options?: ResistanceExecutionOptions & { samples?: 1 },
+  options: ResistanceExecutionOptions & { samples?: 1; outputPrecision: "f64" },
+): Promise<ResistanceOutput<Float64Array>>;
+
+export function runResistancePipelineBrowserAsync(
+  modelJson: string, inputs: Record<string, RasterInput>,
+  grid: { nrows: number; ncols: number; cellsize: number },
+  options?: ResistanceExecutionOptions & { samples?: 1; outputPrecision?: "f32" },
 ): Promise<ResistanceOutput>;
 
 export interface ResultSummaryStatistics {
@@ -98,8 +86,11 @@ export interface ResultSummaryStatistics {
 export interface ResistanceExecutionOptions {
   /** Defaults to 1; values above 1 return means and variances. */
   samples?: number;
+  /** Defaults to 1. Higher counts require the threaded Wasm build and cross-origin isolation. */
+  threads?: number;
   seed?: number;
   allLayers?: boolean;
+  outputPrecision?: "f32" | "f64";
   currentSolverOptions?: {
     source: RasterInput;
     ground: RasterInput;
@@ -109,20 +100,26 @@ export interface ResistanceExecutionOptions {
   };
 }
 
-export interface ResistanceSamplingResult {
+export interface ResistanceSamplingResult<Raster extends ResistanceRaster = Float32Array> {
   nrows: number;
   ncols: number;
   samples: number;
-  resistance: ResultSummaryStatistics;
-  current?: ResultSummaryStatistics;
-  layers: Record<string, Record<string, ResultSummaryStatistics>>;
+  resistance: ResultSummaryStatistics<Raster>;
+  current?: ResultSummaryStatistics<Raster>;
+  layers: Record<string, Record<string, ResultSummaryStatistics<Raster>>>;
 }
 
 export function runResistancePipelineBrowserAsync(
   modelJson: string, inputs: Record<string, RasterInput>,
   grid: { nrows: number; ncols: number; cellsize: number },
-  options: ResistanceExecutionOptions,
+  options: ResistanceExecutionOptions & { outputPrecision?: "f32" },
 ): Promise<ResistanceOutput | ResistanceSamplingResult>;
+
+export function runResistancePipelineBrowserAsync(
+  modelJson: string, inputs: Record<string, RasterInput>,
+  grid: { nrows: number; ncols: number; cellsize: number },
+  options: ResistanceExecutionOptions,
+): Promise<ResistanceOutput<ResistanceRaster> | ResistanceSamplingResult<ResistanceRaster>>;
 
 export function roostFinderComputeAsync(
   detectorsCsv: string, masterCsv: string, sunsetCsv: string,

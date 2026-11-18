@@ -24,3 +24,34 @@ export async function loadExampleData(res) {
         geojsonStr: geoResp
     };
 }
+
+export function exampleDefaults(model) {
+    return {
+        terrainRes: model.nodes.terrain.parameters.scale,
+        roadRes: model.nodes.road_resistance.parameters.scale,
+        riverRes: model.nodes.river_resistance.parameters.scale,
+        buildRes: model.nodes.building_resistance.parameters.scale,
+        roadWidth: 3,
+        riverWidth: 4,
+    };
+}
+
+export function exampleModel(template, settings) {
+    const model = structuredClone(template);
+    model.nodes.terrain.parameters.scale = settings.terrainRes;
+    model.nodes.road_resistance.parameters.scale = settings.roadRes;
+    model.nodes.river_resistance.parameters.scale = settings.riverRes;
+    model.nodes.building_resistance.parameters.scale = settings.buildRes;
+    return JSON.stringify(model);
+}
+
+export function exampleFeatureMasks(geojson, grid, settings, rasterize) {
+    const collection = JSON.parse(geojson);
+    const widths = { roads: settings.roadWidth, rivers: settings.riverWidth, buildings: 0 };
+    return Object.entries(widths).map(([name, buffer]) => {
+        const features = collection.features
+            .filter(feature => feature.properties?.layer === name)
+            .map(({ geometry }) => ({ type: 'Feature', geometry, properties: { value: 1 } }));
+        return [name, rasterize({ type: 'FeatureCollection', features }, { ...grid, buffer })];
+    });
+}

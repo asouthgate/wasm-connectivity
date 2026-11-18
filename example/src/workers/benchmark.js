@@ -6,11 +6,14 @@ import {
   solve_raster_sources_mg_stencil,
   solve_raster_sources_mg_mixed,
   solve_raster_sources_mg_stencil_f32,
-  rasterize_geojson_f32,
+  NamedInputArrays,
+  run_resistance_pipeline_browser,
   rasterize_geojson,
 } from 'lmConnect/lmConnect.js';
 import wasmUrl from 'lmConnect/lmConnect_bg.wasm?url';
 import { parseAsc } from 'lmConnect';
+import { exampleDefaults, exampleFeatureMasks, exampleModel } from '../data';
+import modelTemplate from '../../chudleigh-model.json';
 import { SCENARIOS, scenarioMasks, scenarioResistance } from '../scenarios';
 
 let compiledModule = null;
@@ -52,27 +55,39 @@ const SOLVERS = {
     solve_raster_sources_mg_mixed(res, nr, nc, nd, src, gnd, MAX_ITER, TOL_MIXED, dirichlet),
 };
 
-function runBenchmark(solveFn, precision, [baseRaster, nrows, ncols, nodata, geojsonStr, layerParamsStr, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]) {
-  const ArrayType = precision !== 'f64' ? Float32Array : Float64Array;
-  const rasterize = precision !== 'f64' ? rasterize_geojson_f32 : rasterize_geojson;
-  const t0 = performance.now();
-  const prepared = new ArrayType(baseRaster);
-  const collection = JSON.parse(geojsonStr);
-  for (const [layer, params] of Object.entries(JSON.parse(layerParamsStr))) {
-    const features = {
-      type: 'FeatureCollection',
-      features: collection.features.filter(f => f.properties?.layer === layer).map(f => ({
-        ...f, properties: { ...f.properties, value: params.resistance },
-      })),
-    };
-    const values = rasterize(JSON.stringify(features), nrows, ncols, xmin, ymax, cellsize, params.width);
-    for (let i = 0; i < prepared.length; i++) {
-      if (values[i] !== 0 && values[i] > prepared[i]) prepared[i] = values[i];
+const benchmarkSettings = { ...exampleDefaults(modelTemplate), terrainRes: 1 };
+const benchmarkModel = exampleModel(modelTemplate, benchmarkSettings);
+
+function benchmarkResistance(base, geojson, grid) {
+  const masks = exampleFeatureMasks(geojson, grid, benchmarkSettings, (features, bounds) =>
+    rasterize_geojson(JSON.stringify(features), bounds.nrows, bounds.ncols,
+      bounds.xmin, bounds.ymax, bounds.cellsize, bounds.buffer));
+  const inputs = new NamedInputArrays();
+  try {
+    inputs.insert('base', base);
+    for (const [name, mask] of masks) inputs.insert(name, mask);
+    const result = run_resistance_pipeline_browser(
+      benchmarkModel, inputs, grid.nrows, grid.ncols, grid.cellsize,
+      '{"allLayers":false}', new Float64Array(), new Float64Array(),
+    );
+    try {
+      return result.release_f64_raster(0);
+    } finally {
+      result.free();
     }
+  } finally {
+    inputs.free();
   }
+}
+
+function runBenchmark(solveFn, precision, [baseRaster, nrows, ncols, nodata, geojson, xmin, ymax, cellsize, srcData, gndData, useDirichletGround]) {
+  const ArrayType = precision !== 'f64' ? Float32Array : Float64Array;
+  const t0 = performance.now();
+  const resistance = benchmarkResistance(baseRaster, geojson, { nrows, ncols, xmin, ymax, cellsize });
+  const prepared = precision === 'f64' ? resistance : new ArrayType(resistance);
   const t1 = performance.now();
   const prepMem = getWasmAllocatedMB();
-  // Keep the prepared raster in JS, but discard rasterization's WASM heap.
+  // Keep the prepared raster in JS and reset WASM before measuring the solve.
   // Connectivity measures a fresh instance, including input transfer and output export.
   freshInstance();
   const t2 = performance.now();

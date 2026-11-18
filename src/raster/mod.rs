@@ -1,5 +1,6 @@
 #[cfg(all(feature = "bin", not(target_arch = "wasm32")))]
 pub mod io;
+pub mod rasterize;
 
 use serde::Serialize;
 
@@ -10,7 +11,7 @@ pub const FILL_RESISTANCE: f64 = 1e9;
 
 /// Replace nodata / non-positive / non-finite resistance with
 /// [`FILL_RESISTANCE`] so every cell becomes a graph node.
-pub fn fill_nodata<F: crate::linalg::real::Real>(data: &[F], nodata: F) -> Vec<F> {
+pub fn fill_nodata<F: crate::real::Real>(data: &[F], nodata: F) -> Vec<F> {
     data.iter()
         .map(|&v| {
             if v == nodata || !v.is_finite() || v <= F::zero() {
@@ -24,7 +25,7 @@ pub fn fill_nodata<F: crate::linalg::real::Real>(data: &[F], nodata: F) -> Vec<F
 
 /// Nearest-neighbour upsampling in row-major order. Values, including nodata,
 /// are copied unchanged; callers scale cell size to preserve the extent.
-pub fn upsample_raster<F: crate::linalg::real::Real>(
+pub fn upsample_raster<F: crate::real::Real>(
     data: &[F], nrows: usize, ncols: usize, target_rows: usize, target_cols: usize,
 ) -> Vec<F> {
     assert!(nrows > 0 && ncols > 0, "source dimensions must be positive");

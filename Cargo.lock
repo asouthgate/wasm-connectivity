@@ -520,6 +520,7 @@ dependencies = [
  "geojson",
  "image",
  "num-traits",
+ "rayon",
  "serde",
  "serde_json",
  "sprs",
