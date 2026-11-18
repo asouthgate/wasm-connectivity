@@ -1,5 +1,6 @@
 //! Read and validate model JSON, input declarations, and sampled parameters.
 
+mod current;
 mod graph;
 mod inputs;
 pub(super) mod parameters;

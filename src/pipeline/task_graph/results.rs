@@ -14,12 +14,11 @@ impl<'a> NodeTaskList<'a> {
         &mut self,
         graph: &PipelineGraph,
         options: ExecutionOptions,
-        current_output: Option<&PipelineDataReference>,
         varying_nodes: &BTreeSet<String>,
         node_indices: &HashMap<(usize, String), usize>,
     ) {
         let mut layers = vec![(OutputLayer::Resistance, graph.output.clone())];
-        if let Some(reference) = current_output {
+        if let Some(reference) = &graph.current_output {
             layers.push((OutputLayer::Current, reference.clone()));
         }
         if options.all_layers {

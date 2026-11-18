@@ -2,10 +2,7 @@ use crate::pipeline::{
     model::parameters::SampledParameters, operations::Operation, NodeOutputs, OutputLayer,
     PipelineData, Result,
 };
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, VecDeque},
-};
+use std::collections::{BTreeMap, VecDeque};
 
 pub(super) trait StreamingNode: Send {
     fn update(&mut self, inputs: &BTreeMap<String, Vec<PipelineData>>) -> Result<()>;
@@ -16,7 +13,7 @@ pub(super) trait StreamingNode: Send {
 pub(super) enum NodeOperation<'a> {
     Input,
     Calculate {
-        operation: Cow<'a, Operation>,
+        operation: &'a Operation,
         sampled_parameters: Option<&'a SampledParameters>,
     },
     Streaming {

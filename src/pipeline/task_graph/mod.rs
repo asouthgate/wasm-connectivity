@@ -15,7 +15,6 @@
 // to update means and variances without retaining every sample map.
 
 mod builder;
-mod current;
 mod execution;
 mod graph;
 mod operations;
@@ -24,7 +23,7 @@ mod sampling;
 pub(super) mod scheduler;
 mod stats;
 
-pub(crate) use execution::execute;
+pub(super) use execution::{execute, validate_execution_options};
 
 #[cfg(test)]
 mod tests;

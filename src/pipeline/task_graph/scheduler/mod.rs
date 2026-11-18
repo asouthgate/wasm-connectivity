@@ -188,7 +188,7 @@ fn run_node(
                 .map_err(|error| format!("sample {}, node {}: {error}", node.sample, node.name))?;
             OperationEvaluator { grid }
                 .apply(
-                    sampled.as_ref().unwrap_or(operation.as_ref()),
+                    sampled.as_ref().unwrap_or(operation),
                     &inputs.data_by_port,
                 )
                 .map_err(|error| format!("sample {}, node {}: {error}", node.sample, node.name))?
@@ -356,7 +356,6 @@ mod tests {
             &graph,
             HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]),
             options(),
-            None,
         )
         .unwrap();
         let mut states = initial_node_states(&mut task_list);

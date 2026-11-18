@@ -1,15 +1,9 @@
-use super::{
-    current::add_current_nodes,
-    graph::{sort_nodes_topologically, NodeOperation, NodeTaskList},
-};
+use super::graph::{sort_nodes_topologically, NodeOperation, NodeTaskList};
 use crate::pipeline::{
     model::schema::{InputEdges, Node},
-    CurrentSolver, ExecutionOptions, PipelineData, PipelineDataReference, PipelineGraph, Result,
+    ExecutionOptions, PipelineData, PipelineDataReference, PipelineGraph, Result,
 };
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet, HashMap},
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Create nodes whose results stay the same across samples once, and create the
 /// other nodes for each sample. Connect the nodes and sort them by dependency.
@@ -17,14 +11,13 @@ pub(in crate::pipeline) fn build_node_task_list<'a>(
     graph: &'a PipelineGraph,
     inputs: HashMap<String, PipelineData>,
     options: ExecutionOptions,
-    current_solver: Option<&CurrentSolver<'_>>,
 ) -> Result<NodeTaskList<'a>> {
     let mut task_list = NodeTaskList {
         nodes: Vec::new(),
         edges: Vec::new(),
     };
     let mut node_indices = HashMap::new();
-    let mut varying_nodes = sample_dependent_nodes(graph);
+    let varying_nodes = sample_dependent_nodes(graph);
     task_list.add_input_nodes(graph, inputs, &mut node_indices)?;
     let (constant_node_names, varying_node_names): (Vec<_>, Vec<_>) = graph
         .order
@@ -41,26 +34,7 @@ pub(in crate::pipeline) fn build_node_task_list<'a>(
         );
     }
     task_list.connect_calculation_inputs(graph, &varying_nodes, &node_indices);
-    let current_output = if let Some(current_solver) = current_solver {
-        add_current_nodes(
-            &mut task_list,
-            graph,
-            current_solver,
-            options.samples,
-            &mut varying_nodes,
-            &mut node_indices,
-        );
-        Some(PipelineDataReference::node("#current".into()))
-    } else {
-        None
-    };
-    task_list.connect_results_and_statistics(
-        graph,
-        options,
-        current_output.as_ref(),
-        &varying_nodes,
-        &node_indices,
-    );
+    task_list.connect_results_and_statistics(graph, options, &varying_nodes, &node_indices);
     sort_nodes_topologically(task_list)
 }
 
@@ -106,7 +80,7 @@ impl<'a> NodeTaskList<'a> {
                 sample,
                 is_shared,
                 NodeOperation::Calculate {
-                    operation: Cow::Borrowed(operation),
+                    operation,
                     sampled_parameters: sampling.as_ref(),
                 },
                 BTreeMap::new(),
@@ -174,7 +148,7 @@ pub(super) fn resolve_model_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::operations::Operation;
+    use crate::pipeline::{operations::Operation, CurrentSolver};
     use serde_json::json;
     fn options() -> ExecutionOptions {
         ExecutionOptions {
@@ -207,7 +181,6 @@ mod tests {
             &graph,
             HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]),
             options(),
-            None,
         )
         .unwrap();
         assert_eq!(
@@ -229,21 +202,22 @@ mod tests {
         }
     }
     #[test]
-    fn current_nodes_are_added_to_the_task_graph_without_changing_the_model() {
-        let graph = graph();
+    fn model_current_node_expands_like_any_sample_dependent_node() {
+        let mut graph = graph();
         let source = [1.0];
         let ground = [1.0];
         let current_solver = CurrentSolver::new(&source, &ground, Default::default());
-        let task_list = build_node_task_list(
-            &graph,
-            HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]),
-            options(),
-            Some(&current_solver),
-        )
-        .unwrap();
-        assert_eq!(graph.nodes.len(), 1);
-        assert_eq!(graph.inputs.len(), 1);
-        assert!(!graph.nodes.contains_key("#current"));
+        let mut inputs = HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]);
+        graph.add_current(&mut inputs, &current_solver);
+        assert!(matches!(
+            graph.nodes["#current"].operation,
+            Operation::Current { .. }
+        ));
+        assert!(graph
+            .current_output
+            .as_ref()
+            .is_some_and(|output| output.selects_node("#current", "data")));
+        let task_list = build_node_task_list(&graph, inputs, options()).unwrap();
         let current_nodes: Vec<_> = task_list
             .nodes
             .iter()
@@ -255,7 +229,7 @@ mod tests {
             assert!(matches!(
                 &node.operation,
                 NodeOperation::Calculate {
-                    operation: Cow::Owned(Operation::Current { .. }),
+                    operation: Operation::Current { .. },
                     ..
                 }
             ));
