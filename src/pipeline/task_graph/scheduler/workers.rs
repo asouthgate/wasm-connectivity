@@ -22,7 +22,7 @@ pub(super) fn execute_with_workers(
         (node_index, result)
     };
 
-    super::native_threads::with_workers(options.threads, run_task, |workers| {
+    super::threads::with_workers(options.threads, run_task, |workers| {
         let mut idle_workers: Vec<_> = (0..options.threads).collect();
         let mut running_nodes = 0;
         while states

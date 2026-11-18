@@ -13,28 +13,42 @@ const loader = `export async function load(url, context, nextLoad) {
 const loaderUrl = 'data:text/javascript,' + encodeURIComponent(loader);
 register(loaderUrl, import.meta.url);
 const bootstrap = `
-  import { parentPort, workerData } from 'node:worker_threads';
+  import { parentPort, workerData, Worker as ThreadWorker } from 'node:worker_threads';
   import { register } from 'node:module';
   import { readFile } from 'node:fs/promises';
   register(workerData.loaderUrl, workerData.workerUrl);
   globalThis.fetch = async url => new Response(await readFile(new URL(url)));
-  globalThis.self = { postMessage(message, transfer = []) {
+  globalThis.crossOriginIsolated = true;
+  globalThis.Worker = class {
+    constructor(url) {
+      this.thread = new ThreadWorker(new URL(workerData.bootstrapUrl), {
+        workerData: { ...workerData, workerUrl: String(url) },
+      });
+      this.thread.on('message', data => this.onmessage?.({ data }));
+      this.thread.on('error', error => this.onerror?.(error));
+    }
+    postMessage(message) { this.thread.postMessage(message); }
+    terminate() { this.thread.terminate(); }
+  };
+  globalThis.self = { location: new URL(workerData.workerUrl), postMessage(message, transfer = []) {
     parentPort.postMessage({ ...message, transferCount: transfer.length }, transfer);
     if (transfer.some(buffer => buffer.byteLength !== 0)) throw new Error('Output transfer did not detach');
   }};
   await import(workerData.workerUrl);
   parentPort.on('message', data => self.onmessage({ data }));
 `;
+const bootstrapUrl = 'data:text/javascript,' + encodeURIComponent(bootstrap);
 const instances = [];
 globalThis.Worker = class {
   constructor(url) {
-    this.thread = new ThreadWorker(new URL('data:text/javascript,' + encodeURIComponent(bootstrap)), {
-      workerData: { workerUrl: url.href, loaderUrl },
+    this.thread = new ThreadWorker(new URL(bootstrapUrl), {
+      workerData: { workerUrl: url.href, loaderUrl, bootstrapUrl },
     });
     this.thread.on('message', data => { this.lastReply = data; this.onmessage?.({ data }); });
     this.thread.on('error', error => this.onerror?.({ message: error.message, error }));
     instances.push(this);
   }
+  terminate() { this.thread.terminate(); }
   postMessage(message, transfer) {
     this.lastInputTypes = message.fn === 'run_resistance_pipeline_browser'
       ? Object.values(message.args[1]).map(input => input.constructor.name) : [];
@@ -315,6 +329,21 @@ test('sampled browser runs return resistance and current statistics without reta
   assert.deepEqual([...result.resistance.mean], [1, Math.fround(14 / 3), 28]);
   assert.deepEqual([...result.resistance.variance], [0, Math.fround(28 / 3), 1008]);
   assert.ok(!Object.hasOwn(result.layers, "resistance"));
+  const wasm = await import('../lib/lmConnect.js');
+  const runWithThreads = threads => runResistancePipelineBrowserAsync(
+    JSON.stringify(definition), { data }, { nrows: 1, ncols: 3, cellsize: 1 }, { ...options, threads },
+  );
+  if (typeof wasm.initialize_pipeline_threads === 'function') {
+    await assert.rejects(runResistancePipelineBrowserAsync(
+      '{', { data }, { nrows: 1, ncols: 3, cellsize: 1 }, { ...options, threads: 2 },
+    ), /Invalid model JSON/);
+    for (const threadCount of [2, 4, 2]) {
+      assert.deepEqual(await runWithThreads(threadCount), result);
+    }
+  } else {
+    await assert.rejects(runWithThreads(2), /Wasm thread support requires/);
+  }
+  await assert.rejects(runWithThreads(0), /threads must be a positive/);
   const currents = [];
   for (const exponent of [1, 2, 3]) {
     const resistance = Float64Array.from(data, v => v ** exponent);

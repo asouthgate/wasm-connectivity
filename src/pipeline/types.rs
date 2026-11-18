@@ -43,7 +43,7 @@ pub struct NodeResult {
 #[derive(Clone, Copy, Debug)]
 pub struct ExecutionOptions {
     pub samples: usize,
-    /// Native worker count. Wasm execution requires one worker.
+    /// Worker count. The standard Wasm build supports one worker.
     pub threads: usize,
     pub seed: u64,
     pub all_layers: bool,

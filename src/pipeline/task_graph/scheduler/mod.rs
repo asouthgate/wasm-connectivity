@@ -8,9 +8,11 @@ use super::{
 use crate::pipeline::{ExecutionOptions, Grid, NodeOutputs, NodeResult, PipelineData, Result};
 use std::collections::BTreeMap;
 
-#[cfg(not(target_arch = "wasm32"))]
-mod native_threads;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
+#[cfg_attr(target_arch = "wasm32", path = "wasm_threads.rs")]
+#[cfg_attr(not(target_arch = "wasm32"), path = "native_threads.rs")]
+mod threads;
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 mod workers;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -293,9 +295,9 @@ pub(in crate::pipeline) fn execute_node_task_list(
         }
         return Ok(());
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
     return Err("Wasm execution requires one thread".into());
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
     workers::execute_with_workers(
         &task_list,
         &mut states,

@@ -5,7 +5,7 @@ fn validate_execution_options(graph: &PipelineGraph, options: ExecutionOptions) 
     if options.threads == 0 {
         return Err("execution requires at least one thread".into());
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
     if options.threads != 1 {
         return Err("Wasm execution requires one thread".into());
     }

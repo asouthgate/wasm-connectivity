@@ -86,6 +86,8 @@ export interface ResultSummaryStatistics {
 export interface ResistanceExecutionOptions {
   /** Defaults to 1; values above 1 return means and variances. */
   samples?: number;
+  /** Defaults to 1. Higher counts require the threaded Wasm build and cross-origin isolation. */
+  threads?: number;
   seed?: number;
   allLayers?: boolean;
   outputPrecision?: "f32" | "f64";

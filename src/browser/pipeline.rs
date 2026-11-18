@@ -27,6 +27,7 @@ impl NamedInputArrays {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 struct PipelineExecutionJsonOptions {
     samples: usize,
+    threads: usize,
     seed: u64,
     all_layers: bool,
     current_solver_options: Option<CurrentSolverJsonOptions>,
@@ -34,7 +35,7 @@ struct PipelineExecutionJsonOptions {
 
 impl Default for PipelineExecutionJsonOptions {
     fn default() -> Self {
-        Self { samples: 1, seed: 0, all_layers: true, current_solver_options: None }
+        Self { samples: 1, threads: 1, seed: 0, all_layers: true, current_solver_options: None }
     }
 }
 
@@ -85,7 +86,7 @@ pub fn run_resistance_pipeline_browser(
         pipeline_inputs,
         Grid { nrows, ncols, pixel_width: cellsize },
         ExecutionOptions {
-            threads: 1,
+            threads: options.threads,
             samples: options.samples, seed: options.seed,
             all_layers: options.all_layers, statistics,
         },
