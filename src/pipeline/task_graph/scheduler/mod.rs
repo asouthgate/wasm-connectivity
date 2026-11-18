@@ -9,6 +9,8 @@ use crate::pipeline::{ExecutionOptions, Grid, NodeOutputs, NodeResult, PipelineD
 use std::collections::BTreeMap;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod native_threads;
+#[cfg(not(target_arch = "wasm32"))]
 mod workers;
 
 #[derive(Clone, Copy, PartialEq)]
