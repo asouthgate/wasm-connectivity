@@ -5,17 +5,21 @@
 //!       --bin lmc-profile -- 500 --solver mg-lowmem --ground shunt
 //! Diagnostics go to stderr.
 
-use lm_connect::linalg::real::Real;
+use geojson::{FeatureCollection, GeoJson};
+use lm_connect::geospatial::{rasterize_values, GeoTransform};
+use lm_connect::linalg::real::{scalar, Real};
 use std::fs;
 
 use serde::Serialize;
 
 use lm_connect::linalg::multigrid::MgOptions;
+use lm_connect::pipeline::{self, ExecutionOptions, Grid, OutputLayer, PipelineData};
 use lm_connect::raster::io::{parse_asc_typed, AscGrid};
 use lm_connect::memory::{take_profile, InstrumentationProfile};
 use lm_connect::solve::{self, GroundMode};
 
 const DATA_DIR: &str = "example/public/geodata";
+const MODEL_PATH: &str = "example/chudleigh-model.json";
 
 #[derive(Serialize)]
 struct ProfileRecord {
@@ -144,6 +148,71 @@ fn main() {
     }
 }
 
+fn profile_resistance<F: Real>(
+    base: &AscGrid<F>,
+    features: FeatureCollection,
+) -> Result<Vec<F>, String> {
+    let mut model: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(MODEL_PATH).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    // The original profiler uses the base resistance at its stored scale.
+    let terrain_scale = model
+        .pointer_mut("/nodes/terrain/parameters/scale")
+        .ok_or("Chudleigh model has no terrain scale")?;
+    *terrain_scale = 1.into();
+
+    let grid = Grid {
+        nrows: base.nrows,
+        ncols: base.ncols,
+        pixel_width: base.cellsize,
+    };
+    let transform = GeoTransform {
+        xmin: base.xllcorner,
+        ymax: base.ymax,
+        cellsize: base.cellsize,
+    };
+    let base_values = base.data.iter().map(|value| value.to_f64().unwrap()).collect();
+    let mut inputs = std::collections::HashMap::from([
+        ("base".to_owned(), PipelineData::raster(base_values)),
+    ]);
+    for (layer, buffer) in [("roads", 3.0), ("rivers", 4.0), ("buildings", 0.0)] {
+        let layer_features = features.features.iter().filter_map(|feature| {
+            let properties = feature.properties.as_ref()?;
+            if properties.get("layer")?.as_str()? != layer {
+                return None;
+            }
+            let mut feature = feature.clone();
+            feature.properties = Some(serde_json::Map::from_iter([("value".into(), 1.into())]));
+            Some(feature)
+        });
+        let collection = GeoJson::from(layer_features.collect::<Vec<_>>());
+        let mask = rasterize_values::<f64>(
+            &collection.to_string(), grid.nrows, grid.ncols, &transform, buffer,
+        )?;
+        inputs.insert(layer.into(), PipelineData::raster(mask));
+    }
+
+    let options = ExecutionOptions {
+        samples: 1,
+        threads: 1,
+        seed: 0,
+        all_layers: false,
+        statistics: false,
+    };
+    let mut resistance = None;
+    pipeline::execute(&model.to_string(), inputs, grid, options, None, |result| {
+        if result.layer == OutputLayer::Resistance {
+            let Some(PipelineData::Raster(values)) = result.outputs.get("data") else {
+                return Err("Chudleigh model did not return a resistance raster".into());
+            };
+            resistance = Some(values.iter().map(|&value| scalar(value)).collect());
+        }
+        Ok(())
+    })?;
+    resistance.ok_or_else(|| "Chudleigh model did not return a resistance raster".into())
+}
+
 fn prepare_inputs<F: Real>(resolution: usize) -> (AscGrid<F>, AscGrid<F>, AscGrid<F>, Vec<F>) {
     let source_resolution = resolution.min(1000);
     let mut base = parse_asc_typed::<F, _>(&format!("{DATA_DIR}/base_resistance_{source_resolution}.asc"));
@@ -174,21 +243,11 @@ fn prepare_inputs<F: Real>(resolution: usize) -> (AscGrid<F>, AscGrid<F>, AscGri
     let geojson =
         fs::read_to_string(format!("{DATA_DIR}/all_features_{source_resolution}.geojson")).unwrap();
 
-    let layer_params_str = r#"{"roads":{"resistance":5,"width":3},"rivers":{"resistance":0.5,"width":4},"buildings":{"resistance":500,"width":0}}"#;
-
-    let (resistance, _, warnings) = lm_connect::geospatial::prepare_geospatial_layers(
-        &base.data,
-        base.nrows,
-        base.ncols,
-        &geojson,
-        layer_params_str,
-        base.xllcorner,
-        base.ymax,
-        base.cellsize,
-    );
-    for w in &warnings {
-        eprintln!("[rasterize warn] {w}");
-    }
+    let GeoJson::FeatureCollection(features) = geojson.parse().expect("invalid Chudleigh GeoJSON") else {
+        panic!("expected a Chudleigh GeoJSON feature collection");
+    };
+    let resistance = profile_resistance(&base, features)
+        .unwrap_or_else(|error| panic!("could not prepare Chudleigh resistance: {error}"));
 
     (base, src, gnd, resistance)
 }

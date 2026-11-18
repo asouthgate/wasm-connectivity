@@ -60,14 +60,15 @@ function check(result, genericValue = 5) {
   assert.equal(result.nrows, 2);
   assert.equal(result.ncols, 2);
   const expected = { road_res: 0, river_res: 2000, landscape_res: 3.125,
-    linear_res: 9283.25, lamp_res: 0, total_res: 11286.375 + genericValue };
+    linear_res: 9283.25, lamp_res: 0 };
   for (const [field, value] of Object.entries(expected)) {
     assert.ok(result.layers[field].data instanceof Float32Array, field);
     assert.deepEqual([...result.layers[field].data], Array(4).fill(Math.fround(value)), field);
   }
   assert.deepEqual([...result.layers.surfaces.translucent], [2, 2, 2, 2]);
   assert.deepEqual([...result.layers.surfaces.opaque], [0, 0, 0, 0]);
-  assert.deepEqual(result.output, result.layers.total_res.data);
+  assert.deepEqual([...result.output], Array(4).fill(Math.fround(11286.375 + genericValue)));
+  assert.ok(!Object.hasOwn(result.layers, "total_res"));
   const rasters = Object.values(result.layers).flatMap(Object.values);
   assert.equal(instances[0].lastReply.transferCount, rasters.length + 1);
 }
@@ -89,6 +90,15 @@ test('preserves f64 input support across repeated runs', async () => {
   }
 });
 
+test('the browser can return resistance at solver precision', async () => {
+  const definition = { name: 'precision', inputs: { values: { type: 'raster_ranked' } },
+    nodes: {}, output: 'inputs.values' };
+  const values = new Float64Array([1.0000000001, 2, 3, 4]);
+  const result = await runResistancePipelineBrowserAsync(JSON.stringify(definition), { values }, grid,
+    { allLayers: false, outputPrecision: 'f64' });
+  assert.deepEqual(result.output, values);
+});
+
 test('precomputed irradiance is expressed by the model instead of a separate execution path', async () => {
   const definition = structuredClone(model);
   delete definition.inputs.lamps;
@@ -108,7 +118,8 @@ test('missing terrain preserves NaNs in binary outputs', async () => {
   const data = inputs();
   data.dtm[0] = NaN;
   const result = await run(data);
-  for (const field of ['total_res', 'lamp_res', 'landscape_res', 'linear_res']) {
+  assert.ok(Number.isNaN(result.output[0]));
+  for (const field of ['lamp_res', 'landscape_res', 'linear_res']) {
     assert.ok(Number.isNaN(result.layers[field].data[0]), field);
   }
   assert.ok(Number.isNaN(result.layers.surfaces.translucent[0]));
@@ -163,13 +174,12 @@ test('WASM matches saved native results with lights, distances, masks, and non-u
   // Snapshot 5 is the second scenario at two-metre resolution.
   for (const [name, expected] of Object.entries(snapshots[5])) {
     const [node, port = 'data'] = name.split('.');
-    const actual = result.layers[node][port];
+    const actual = node === "total_res" ? result.output : result.layers[node][port];
     for (let i = 0; i < size; i++) {
       if (expected[i] === null) assert.ok(Number.isNaN(actual[i]), `${name}[${i}]`);
       else assert.equal(actual[i], Math.fround(expected[i]), `${name}[${i}]`);
     }
   }
-  assert.deepEqual(result.output, result.layers.total_res.data);
 });
 
 test('model and input errors reject the request and later valid requests still succeed', async () => {
@@ -237,8 +247,8 @@ test('rasterizer rejects missing values and invalid grids and remains usable', a
 });
 
 
-test('solver-only public wrapper matches the current solve without geospatial inputs', async () => {
-  const { solveCurrentAsync, runGeospatialPipelineMgStencilAsync } = await import('../lib/index.js');
+test('current solver wrapper supports each precision and ground mode', async () => {
+  const { solveCurrentAsync } = await import('../lib/index.js');
   const nrows = 32;
   const ncols = 32;
   const resistance = new Float64Array(nrows * ncols).fill(1);
@@ -248,18 +258,14 @@ test('solver-only public wrapper matches the current solve without geospatial in
   ground[ground.length - 1] = 1;
   for (const precision of ['f64', 'f32', 'mixed']) {
     for (const useDirichletGround of [false, true]) {
-      const options = { precision, useDirichletGround, maxIter: 100000 };
-      const result = await solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground, options);
-      assert.ok(!result.error, result.error);
-      assert.equal(result.output.nrows, nrows);
-      assert.equal(result.output.ncols, ncols);
-      assert.ok(result.output.current_map.every(Number.isFinite));
-      const geospatial = JSON.parse(await runGeospatialPipelineMgStencilAsync(
-        resistance, nrows, ncols, -9999, 0, nrows, 1, source, ground, options,
-      ));
-      assert.deepEqual(result.output.current_map, geospatial.current_map);
-      assert.deepEqual(result.output.voltages, geospatial.voltage_map);
-      assert.equal(result.total_iters, geospatial.total_iters);
+      for (const lowMemory of precision === 'mixed' ? [true] : [true, false]) {
+        const options = { precision, lowMemory, useDirichletGround, maxIter: 100000 };
+        const result = await solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground, options);
+        assert.ok(!result.error, result.error);
+        assert.equal(result.output.nrows, nrows);
+        assert.equal(result.output.ncols, ncols);
+        assert.ok(result.output.current_map.every(Number.isFinite));
+      }
     }
   }
   const defaultResult = await solveCurrentAsync(resistance, nrows, ncols, -9999, source, ground);
@@ -308,7 +314,7 @@ test('sampled browser runs return resistance and current statistics without reta
   assert.equal(result.samples, 3);
   assert.deepEqual([...result.resistance.mean], [1, Math.fround(14 / 3), 28]);
   assert.deepEqual([...result.resistance.variance], [0, Math.fround(28 / 3), 1008]);
-  assert.deepEqual(result.layers.resistance.data.mean, result.resistance.mean);
+  assert.ok(!Object.hasOwn(result.layers, "resistance"));
   const currents = [];
   for (const exponent of [1, 2, 3]) {
     const resistance = Float64Array.from(data, v => v ** exponent);

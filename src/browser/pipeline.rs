@@ -138,6 +138,12 @@ impl BrowserResistanceOutput {
         serde_json::to_string(&self.names).expect("layer names are JSON strings")
     }
 
+    /// Release the stored raster at its original precision.
+    pub fn release_f64_raster(&mut self, index: usize) -> Result<Vec<f64>, String> {
+        let raster = self.rasters.get_mut(index).ok_or("Unknown raster")?;
+        Ok(std::sync::Arc::unwrap_or_clone(std::mem::take(raster)))
+    }
+
     /// Convert a raster to f32 and release its stored reference; statistics use mean/variance pairs.
     pub fn release_and_convert_f64_raster_to_f32(&mut self, index: usize) -> Result<Vec<f32>, String> {
         output::release_and_convert_f64_raster_to_f32(&mut self.rasters, index)

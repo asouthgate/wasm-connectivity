@@ -6,12 +6,6 @@ import { loadExampleData } from '../data';
 
 const RESOLUTIONS = [2000, 1600, 1200, 800, 400];
 
-const DEFAULT_PARAMS = {
-  roads:    { resistance: 5,  width: 3 },
-  rivers:   { resistance: 0.5, width: 4 },
-  buildings:{ resistance: 500, width: 0 },
-};
-
 const RUNS = ['gmg', 'gmg-lowmem', 'gmg-mixedp-lowmem'];
 
 const RUN_LABELS = {
@@ -68,8 +62,6 @@ export default function Benchmark() {
   useEffect(() => {
     loadExampleData(1000).then(loaded => {
       setData(loaded);
-      const { baseData, baseMeta } = loaded;
-      const nc = baseData.reduce((c, v) => v !== baseMeta.nodata && v > 0 ? c + 1 : c, 0);
       setStatus(`Loaded Chudleigh 1000×1000`);
     }).catch(err => setStatus(`Error: ${err.message}`));
   }, []);
@@ -79,7 +71,6 @@ export default function Benchmark() {
     setRunning(true); setRuns([]); setStatus('Benchmark running...');
 
     const nd = baseMeta.nodata || -9999;
-    const paramsJson = JSON.stringify(DEFAULT_PARAMS);
 
     const allResults = [];
 
@@ -108,7 +99,7 @@ export default function Benchmark() {
           setStatus(`Running ${res}×${res}, rep ${r}/${reps}: ${runName}...`);
           try {
             const result = await callBenchWorker(`benchmark_${runName}`, [
-              rsData, nrows, ncols, nd, geojsonStr, paramsJson, xmin, ymax, cellsize, srcR, gndR, false,
+              rsData, nrows, ncols, nd, geojsonStr, xmin, ymax, cellsize, srcR, gndR, false,
             ]);
             allResults.push({ resolution: res, repeat: r, run: runName, ...result });
             setRuns([...allResults]);
