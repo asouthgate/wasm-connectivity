@@ -68,16 +68,18 @@ pub mod current;
 pub mod geospatial;
 pub mod pipeline;
 pub mod raster;
-pub mod real;
 pub mod resistance;
 pub mod roost;
 
 pub use current as solve;
 pub use current::{circuit, linalg, memory};
+pub use numeric::real;
 
 pub use circuit::build_circuit_model;
 
 mod browser;
+mod numeric;
+
 pub use browser::*;
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
