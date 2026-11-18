@@ -1,4 +1,5 @@
-use crate::{pipeline, solve, wasm_output};
+use crate::{pipeline, solve};
+use super::output;
 use wasm_bindgen::prelude::*;
 
 /// Named, already-prepared input arrays for the model executor.
@@ -139,7 +140,6 @@ impl BrowserResistanceOutput {
 
     /// Convert a raster to f32 and release its stored reference; statistics use mean/variance pairs.
     pub fn release_and_convert_f64_raster_to_f32(&mut self, index: usize) -> Result<Vec<f32>, String> {
-        wasm_output::release_and_convert_f64_raster_to_f32(&mut self.rasters, index)
+        output::release_and_convert_f64_raster_to_f32(&mut self.rasters, index)
     }
 }
-

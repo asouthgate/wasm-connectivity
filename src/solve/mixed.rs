@@ -1,4 +1,5 @@
-use super::{AnnotatedOutput, GroundMode, RasterOutput, balance_sources, valid_positive_value};
+use super::sources::{balance_sources, valid_positive_value};
+use super::{AnnotatedOutput, GroundMode, RasterOutput};
 use crate::linalg::{multigrid::{MgOptions, MgPreconditioner}, operator::{FineOperator, GroundSpec, StencilOperator}, pcg::Preconditioner, timing, profile};
 
 fn dot(a: &[f32], b: &[f32]) -> f64 {
@@ -34,7 +35,7 @@ pub fn solve_raster_sources_mg_mixed_with_options(
     let spec = match ground_mode {
         GroundMode::Shunt => GroundSpec::ShuntRaster(ground),
         GroundMode::Dirichlet => {
-            let mask = super::build_dirichlet_mask_identity(ground, nodata);
+            let mask = super::ground::build_dirichlet_mask_identity(ground, nodata);
             for (s, &pinned) in source.iter_mut().zip(&mask) {
                 if pinned { *s = 0.0; }
             }
@@ -111,7 +112,7 @@ pub fn solve_raster_sources_mg_mixed_with_options(
     }
     drop(smoothing);
     let relative = replace_residual(mg.fine_stencil(), source, &x, &mut r, norm);
-    let error = super::residual_error(relative, tol);
+    let error = super::residual::residual_error(relative, tol);
     drop((mg, r, z, p, product));
     let output_timer = timing::timer(None, "Current map/output construction");
     let current_map = super::current::compute_current_map_from_raster(
