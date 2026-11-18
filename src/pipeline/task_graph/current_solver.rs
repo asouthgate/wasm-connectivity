@@ -6,52 +6,16 @@ use crate::solve::{
 /// Solver configuration carried by a current operation, independent of its inputs.
 #[derive(Clone, Copy, Debug)]
 pub struct CurrentSolverSettings {
-    max_iter: usize,
-    tolerance: f64,
-    ground_mode: GroundMode,
-    explicit: bool,
-    multigrid: MgOptions,
-}
-
-impl CurrentSolverSettings {
-    pub(super) fn with_inputs<'a>(
-        &self,
-        source: &'a [f64],
-        ground: &'a [f64],
-    ) -> CurrentSolver<'a> {
-        CurrentSolver {
-            source,
-            ground,
-            max_iter: self.max_iter,
-            tolerance: self.tolerance,
-            ground_mode: self.ground_mode,
-            explicit: self.explicit,
-            multigrid: self.multigrid,
-        }
-    }
-}
-
-impl Default for CurrentSolverSettings {
-    fn default() -> Self {
-        CurrentSolver::new(&[], &[]).settings()
-    }
-}
-
-/// Current solver with borrowed source/ground arrays and solver settings.
-pub struct CurrentSolver<'a> {
-    pub source: &'a [f64],
-    pub ground: &'a [f64],
     pub max_iter: usize,
     pub tolerance: f64,
     pub ground_mode: GroundMode,
     pub explicit: bool,
     pub multigrid: MgOptions,
 }
-impl<'a> CurrentSolver<'a> {
-    pub fn new(source: &'a [f64], ground: &'a [f64]) -> Self {
+
+impl Default for CurrentSolverSettings {
+    fn default() -> Self {
         Self {
-            source,
-            ground,
             max_iter: 100_000,
             tolerance: 1e-4,
             ground_mode: GroundMode::Shunt,
@@ -59,17 +23,27 @@ impl<'a> CurrentSolver<'a> {
             multigrid: MgOptions::default(),
         }
     }
-    pub(in crate::pipeline) fn settings(&self) -> CurrentSolverSettings {
-        CurrentSolverSettings {
-            max_iter: self.max_iter,
-            tolerance: self.tolerance,
-            ground_mode: self.ground_mode,
-            explicit: self.explicit,
-            multigrid: self.multigrid,
+}
+
+/// Current solver with borrowed source/ground arrays and solver settings.
+pub struct CurrentSolver<'a> {
+    pub source: &'a [f64],
+    pub ground: &'a [f64],
+    pub settings: CurrentSolverSettings,
+}
+impl<'a> CurrentSolver<'a> {
+    pub fn new(source: &'a [f64], ground: &'a [f64], settings: CurrentSolverSettings) -> Self {
+        Self {
+            source,
+            ground,
+            settings,
         }
     }
     pub fn validate(&self, size: usize) -> Result<(), String> {
-        if self.max_iter == 0 || !self.tolerance.is_finite() || self.tolerance <= 0.0 {
+        if self.settings.max_iter == 0
+            || !self.settings.tolerance.is_finite()
+            || self.settings.tolerance <= 0.0
+        {
             return Err(
                 "current solver requires positive iterations and finite positive tolerance".into(),
             );
@@ -97,7 +71,7 @@ impl<'a> CurrentSolver<'a> {
         if resistance.len() != size {
             return Err("current resistance dimensions differ from grid".into());
         }
-        let solve = if self.explicit {
+        let solve = if self.settings.explicit {
             solve_raster_sources_mg_with_options
         } else {
             solve_raster_sources_mg_stencil_with_options
@@ -109,11 +83,11 @@ impl<'a> CurrentSolver<'a> {
             -9999.0,
             self.source,
             self.ground,
-            self.max_iter,
-            self.tolerance,
+            self.settings.max_iter,
+            self.settings.tolerance,
             false,
-            self.ground_mode,
-            self.multigrid,
+            self.settings.ground_mode,
+            self.settings.multigrid,
         );
         if let Some(error) = result.error {
             return Err(error);

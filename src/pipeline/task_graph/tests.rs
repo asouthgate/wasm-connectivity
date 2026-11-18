@@ -72,10 +72,10 @@ fn threaded_layer_and_current_summaries_match_individual_samples() {
     let graph = model(json!({"sample":{"values":[1,2,3]}}));
     let source = [1.0, 0.0, 0.0];
     let ground = [0.0, 1.0, 1.0];
-    let mut solver = CurrentSolver::new(&source, &ground);
-    solver.explicit = true;
-    solver.ground_mode = crate::solve::GroundMode::Dirichlet;
-    solver.tolerance = 1e-8;
+    let mut solver = CurrentSolver::new(&source, &ground, Default::default());
+    solver.settings.explicit = true;
+    solver.settings.ground_mode = crate::solve::GroundMode::Dirichlet;
+    solver.settings.tolerance = 1e-8;
     for threads in [1, 2, 8] {
         let results = run(&graph, options(threads), Some(&solver));
         for layer in [
@@ -279,7 +279,7 @@ fn current_operation_can_feed_another_calculation() {
     let source = [1.0, 0.0, 0.0];
     let ground = [0.0, 1.0, 1.0];
     let resistance = [1.0, 2.0, 4.0];
-    let expected = CurrentSolver::new(&source, &ground)
+    let expected = CurrentSolver::new(&source, &ground, Default::default())
         .solve_current(&resistance, 1, 3)
         .unwrap();
     let mut results = Vec::new();

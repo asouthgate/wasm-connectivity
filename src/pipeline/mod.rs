@@ -10,7 +10,7 @@ mod types;
 pub use model::schema::Grid;
 use model::schema::PipelineDataReference;
 pub(crate) use model::PipelineGraph;
-pub use task_graph::current_solver::CurrentSolver;
+pub use task_graph::current_solver::{CurrentSolver, CurrentSolverSettings};
 pub use types::{ExecutionOptions, NodeOutputs, NodeResult, OutputLayer, PipelineData};
 
 type Result<T> = std::result::Result<T, String>;

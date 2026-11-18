@@ -109,7 +109,7 @@ impl PipelineGraph {
             "#current".into(),
             Node {
                 operation: Operation::Current {
-                    current_solver_settings: current_solver.settings(),
+                    current_solver_settings: current_solver.settings,
                 },
                 sampling: None,
                 inputs: BTreeMap::from([

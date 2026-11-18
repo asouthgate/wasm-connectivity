@@ -472,7 +472,7 @@ fn execute_pipeline_graph_from_files(
     };
     let current_solver = current_source_and_ground
         .as_ref()
-        .map(|(source, ground)| crate::pipeline::CurrentSolver::new(source, ground));
+        .map(|(source, ground)| crate::pipeline::CurrentSolver::new(source, ground, Default::default()));
     let mut completed_samples = 0;
     graph
         .execute(

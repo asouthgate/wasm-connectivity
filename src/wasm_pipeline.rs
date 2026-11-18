@@ -65,10 +65,10 @@ pub fn run_resistance_pipeline_browser(
     let options: PipelineExecutionJsonOptions = serde_json::from_str(&options_json)
         .map_err(|e| e.to_string())?;
     let current_solver = options.current_solver_options.map(|options| {
-        let mut solver = CurrentSolver::new(&source, &ground);
-        if let Some(max_iter) = options.max_iter { solver.max_iter = max_iter; }
-        if let Some(tol) = options.tol { solver.tolerance = tol; }
-        if options.use_dirichlet_ground { solver.ground_mode = solve::GroundMode::Dirichlet; }
+        let mut solver = CurrentSolver::new(&source, &ground, Default::default());
+        if let Some(max_iter) = options.max_iter { solver.settings.max_iter = max_iter; }
+        if let Some(tol) = options.tol { solver.settings.tolerance = tol; }
+        if options.use_dirichlet_ground { solver.settings.ground_mode = solve::GroundMode::Dirichlet; }
         solver
     });
     let mut output = BrowserResistanceOutput {
