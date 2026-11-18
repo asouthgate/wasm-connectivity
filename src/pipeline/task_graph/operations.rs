@@ -1,5 +1,8 @@
 use crate::pipeline::{
-    model::{interval::{parse_interval_mappings, Interval}, schema::*},
+    model::{
+        interval::{parse_interval_mappings, Interval},
+        schema::*,
+    },
     NodeOutputs, PipelineData, Result,
 };
 use crate::resistance::{
@@ -12,6 +15,7 @@ pub(super) struct OperationEvaluator {
     pub(super) grid: Grid,
 }
 
+// Responsible for actually evaluating operations on data
 impl OperationEvaluator {
     pub(super) fn apply(
         &self,
@@ -20,23 +24,40 @@ impl OperationEvaluator {
     ) -> Result<NodeOutputs> {
         use Operation::*;
         let one = |name| input_data(inputs, name);
-        let raster = || -> Result<Vec<f64>> { Ok(one("data")?.values()?.to_vec()) };
         let field = match op {
-            Current { current_solver_settings } => {
+            Current {
+                current_solver_settings,
+            } => {
                 let source = one("source")?;
                 let ground = one("ground")?;
                 let resistance = one("resistance")?;
-                let current_solver = current_solver_settings.with_inputs(source.values()?, ground.values()?);
+                let current_solver = crate::pipeline::CurrentSolver::new(
+                    source.values()?,
+                    ground.values()?,
+                    *current_solver_settings,
+                );
                 PipelineData::raster(current_solver.solve_current(
-                    resistance.values()?, self.grid.nrows, self.grid.ncols,
+                    resistance.values()?,
+                    self.grid.nrows,
+                    self.grid.ncols,
                 )?)
             }
             Identity => one("data")?.clone(),
-            Round => PipelineData::raster(raster()?.into_iter().map(f64::round).collect()),
+            Round => PipelineData::raster(
+                one("data")?
+                    .values()?
+                    .iter()
+                    .map(|value| value.round())
+                    .collect(),
+            ),
             DiscreteMap {
                 intervals,
                 unmatched,
-            } => PipelineData::raster(apply_discrete_map(raster()?, intervals, unmatched)?),
+            } => PipelineData::raster(apply_discrete_map(
+                one("data")?.values()?,
+                intervals,
+                unmatched,
+            )?),
             Distance {
                 units: DistanceUnits::Metres,
                 when_empty,
@@ -53,7 +74,7 @@ impl OperationEvaluator {
                 offset,
                 above,
             } => PipelineData::raster(apply_power_response(
-                raster()?,
+                one("data")?.values()?,
                 *input_range,
                 *base_range,
                 *exponent,
@@ -64,29 +85,46 @@ impl OperationEvaluator {
             Override { interval, value } => {
                 let interval = Interval::parse(interval)?;
                 let mask = one("where")?;
-                let mut values = raster()?;
-                for (v, &m) in values.iter_mut().zip(mask.values()?) {
-                    if interval.contains(m) {
-                        *v = *value;
-                    }
-                }
-                PipelineData::raster(values)
+                let values = one("data")?.values()?;
+                let output = values
+                    .iter()
+                    .zip(mask.values()?)
+                    .map(|(&original, &mask_value)| {
+                        if interval.contains(mask_value) {
+                            *value
+                        } else {
+                            original
+                        }
+                    })
+                    .collect();
+                PipelineData::raster(output)
             }
             MaskNa {} => {
-                let mut values = raster()?;
-                for mask in &inputs["mask"] {
-                    for (v, &m) in values.iter_mut().zip(mask.values()?) {
-                        if !m.is_finite() {
-                            *v = f64::NAN;
+                let values = one("data")?.values()?;
+                let masks = inputs["mask"]
+                    .iter()
+                    .map(PipelineData::values)
+                    .collect::<Result<Vec<_>>>()?;
+                let output = values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &value)| {
+                        if masks.iter().any(|mask| !mask[index].is_finite()) {
+                            f64::NAN
+                        } else {
+                            value
                         }
-                    }
-                }
-                PipelineData::raster(values)
+                    })
+                    .collect();
+                PipelineData::raster(output)
             }
             Normalise {
                 method: Normalisation::PositiveMaximum,
                 when_zero,
-            } => PipelineData::raster(normalise_positive_maximum(raster()?, *when_zero)?),
+            } => PipelineData::raster(normalise_positive_maximum(
+                one("data")?.values()?,
+                *when_zero,
+            )?),
             SurfaceHeights {} => return self.surface_heights(inputs),
             Maximum {} | Sum {} => PipelineData::raster(aggregate_rasters(&inputs["data"], op)?),
             Irradiance {
@@ -159,26 +197,28 @@ fn input_data<'a>(
 }
 
 fn apply_discrete_map(
-    mut values: Vec<f64>,
+    values: &[f64],
     intervals: &BTreeMap<String, f64>,
     unmatched: &Unmatched,
 ) -> Result<Vec<f64>> {
     let rules = parse_interval_mappings(intervals)?;
-    for (i, value) in values.iter_mut().enumerate() {
+    let mut output = Vec::with_capacity(values.len());
+    for (index, &value) in values.iter().enumerate() {
         if !value.is_finite() {
-            *value = f64::NAN;
+            output.push(f64::NAN);
             continue;
         }
-        *value = match rules.iter().find(|(interval, _)| interval.contains(*value)) {
+        let mapped = match rules.iter().find(|(interval, _)| interval.contains(value)) {
             Some((_, mapped)) => *mapped,
             None => match unmatched {
-                Unmatched::Number(v) if v.is_finite() => *v,
+                Unmatched::Number(value) if value.is_finite() => *value,
                 Unmatched::Named(UnmatchedAction::Nodata) => f64::NAN,
-                _ => return Err(format!("unmatched value {value} at cell {i}")),
+                _ => return Err(format!("unmatched value {value} at cell {index}")),
             },
         };
+        output.push(mapped);
     }
-    Ok(values)
+    Ok(output)
 }
 
 fn distances_in_metres(values: &[f64], grid: Grid, when_empty: &EmptyDistance) -> Result<Vec<f64>> {
@@ -195,7 +235,7 @@ fn distances_in_metres(values: &[f64], grid: Grid, when_empty: &EmptyDistance) -
 }
 
 fn apply_power_response(
-    mut values: Vec<f64>,
+    values: &[f64],
     [lo, hi]: [f64; 2],
     [start, end]: [f64; 2],
     exponent: f64,
@@ -203,64 +243,79 @@ fn apply_power_response(
     offset: f64,
     above: Option<f64>,
 ) -> Result<Vec<f64>> {
-    for (i, value) in values.iter_mut().enumerate() {
+    let mut output = Vec::with_capacity(values.len());
+    for (index, &value) in values.iter().enumerate() {
         if value.is_nan() {
+            output.push(value);
             continue;
         }
-        if *value > hi {
-            *value = above.ok_or_else(|| {
-                format!("value {value} above input range at cell {i}; specify above")
-            })?;
-        } else if !value.is_finite() || *value < lo {
-            return Err(format!("value {value} below input range at cell {i}"));
+        let transformed = if value > hi {
+            above.ok_or_else(|| {
+                format!("value {value} above input range at cell {index}; specify above")
+            })?
+        } else if !value.is_finite() || value < lo {
+            return Err(format!("value {value} below input range at cell {index}"));
         } else {
-            let base = start + (end - start) * ((*value - lo) / (hi - lo));
-            *value = power_response(base, exponent, scale) + offset;
-            if !value.is_finite() {
-                return Err(format!("nonfinite power response at cell {i}"));
+            let base = start + (end - start) * ((value - lo) / (hi - lo));
+            let transformed = power_response(base, exponent, scale) + offset;
+            if !transformed.is_finite() {
+                return Err(format!("nonfinite power response at cell {index}"));
             }
-        }
+            transformed
+        };
+        output.push(transformed);
     }
-    Ok(values)
+    Ok(output)
 }
 
-fn normalise_positive_maximum(mut values: Vec<f64>, when_zero: f64) -> Result<Vec<f64>> {
-    if values.iter().any(|v| v.is_infinite() || *v < 0.0) {
+fn normalise_positive_maximum(values: &[f64], when_zero: f64) -> Result<Vec<f64>> {
+    if values
+        .iter()
+        .any(|value| value.is_infinite() || *value < 0.0)
+    {
         return Err("positive maximum normalisation requires nonnegative values".into());
     }
-    let max = values
+    let maximum = values
         .iter()
         .copied()
-        .filter(|v| v.is_finite())
+        .filter(|value| value.is_finite())
         .fold(0.0, f64::max);
-    for value in &mut values {
-        if value.is_finite() {
-            *value = if max > 0.0 { *value / max } else { when_zero };
-        }
-    }
-    Ok(values)
+    Ok(values
+        .iter()
+        .map(|&value| {
+            if !value.is_finite() {
+                value
+            } else if maximum > 0.0 {
+                value / maximum
+            } else {
+                when_zero
+            }
+        })
+        .collect())
 }
 
 fn aggregate_rasters(fields: &[PipelineData], op: &Operation) -> Result<Vec<f64>> {
-    let (first, rest) = fields
+    let rasters = fields
+        .iter()
+        .map(PipelineData::values)
+        .collect::<Result<Vec<_>>>()?;
+    let (first, rest) = rasters
         .split_first()
         .ok_or("aggregation requires at least one input")?;
-    let mut values = first.values()?.to_vec();
-    for field in rest {
-        for (value, &other) in values.iter_mut().zip(field.values()?) {
-            *value = if !value.is_finite() || !other.is_finite() {
+    let mut output = Vec::with_capacity(first.len());
+    for (index, &first_value) in first.iter().enumerate() {
+        let mut value = first_value;
+        for raster in rest {
+            let other = raster[index];
+            value = if !value.is_finite() || !other.is_finite() {
                 f64::NAN
             } else if matches!(op, Operation::Sum {}) {
-                *value + other
+                value + other
             } else {
                 value.max(other)
             };
         }
+        output.push(if value.is_finite() { value } else { f64::NAN });
     }
-    for value in &mut values {
-        if !value.is_finite() {
-            *value = f64::NAN;
-        }
-    }
-    Ok(values)
+    Ok(output)
 }
