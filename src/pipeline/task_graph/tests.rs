@@ -74,7 +74,7 @@ fn threaded_layer_and_current_summaries_match_individual_samples() {
     let ground = [0.0, 1.0, 1.0];
     let mut solver = CurrentSolver::new(&source, &ground, Default::default());
     solver.settings.explicit = true;
-    solver.settings.ground_mode = crate::solve::GroundMode::Dirichlet;
+    solver.settings.ground_mode = crate::current::GroundMode::Dirichlet;
     solver.settings.tolerance = 1e-8;
     for threads in [1, 2, 8] {
         let results = run(&graph, options(threads), Some(&solver));

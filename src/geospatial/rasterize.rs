@@ -1,5 +1,5 @@
 use super::GeoTransform;
-use crate::linalg::real::{Real, scalar};
+use crate::real::{Real, scalar};
 use geojson::GeoJson;
 use geo::{
     BoundingRect, Contains, EuclideanDistance, Geometry, LineString,

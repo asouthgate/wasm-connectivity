@@ -1,4 +1,4 @@
-use crate::{pipeline, solve};
+use crate::{current, pipeline};
 use super::output;
 use wasm_bindgen::prelude::*;
 
@@ -69,7 +69,7 @@ pub fn run_resistance_pipeline_browser(
         let mut solver = CurrentSolver::new(&source, &ground, Default::default());
         if let Some(max_iter) = options.max_iter { solver.settings.max_iter = max_iter; }
         if let Some(tol) = options.tol { solver.settings.tolerance = tol; }
-        if options.use_dirichlet_ground { solver.settings.ground_mode = solve::GroundMode::Dirichlet; }
+        if options.use_dirichlet_ground { solver.settings.ground_mode = current::GroundMode::Dirichlet; }
         solver
     });
     let mut output = BrowserResistanceOutput {

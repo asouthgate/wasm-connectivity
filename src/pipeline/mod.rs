@@ -11,7 +11,7 @@ mod types;
 pub use model::schema::Grid;
 use model::schema::PipelineDataReference;
 pub(crate) use model::PipelineGraph;
-pub use crate::solve::{CurrentSolver, CurrentSolverSettings};
+pub use crate::current::{CurrentSolver, CurrentSolverSettings};
 pub(crate) use task_graph::execute as execute_graph;
 pub use types::{ExecutionOptions, NodeOutputs, NodeResult, OutputLayer, PipelineData};
 

@@ -14,11 +14,11 @@
 //!    values.
 //! 2. [`pipeline`] computes resistance from aligned input rasters
 //!    and lamp data.
-//! 3. [`solve`] computes current and voltage maps from the resulting resistance
+//! 3. [`current`] computes current and voltage maps from the resulting resistance
 //!    raster and the caller's source and ground rasters.
 //!
 //! Callers with an existing resistance raster can go directly to the solver.
-//! Ground behaviour is selected through [`solve::GroundMode`]. See
+//! Ground behaviour is selected through [`current::GroundMode`]. See
 //! [`raster::fill_nodata`] for the solver's treatment of invalid resistance cells.
 //!
 //! # Rust usage
@@ -26,7 +26,7 @@
 //! Use the module APIs for Rust inputs and structured results. For example:
 //!
 //! ```
-//! use lm_connect::solve::{solve_raster_sources_mg_stencil, GroundMode};
+//! use lm_connect::current::{solve_raster_sources_mg_stencil, GroundMode};
 //!
 //! let (nrows, ncols) = (32, 32);
 //! let resistance = vec![1.0_f64; nrows * ncols];
@@ -64,15 +64,16 @@
 //! `instrumentation-profile` enables solver memory instrumentation. The
 //! `developer` feature enables the `lmc-profile` executable and its dependencies.
 
-pub mod circuit;
+pub mod current;
 pub mod geospatial;
-pub mod linalg;
-pub mod memory;
-pub mod raster;
 pub mod pipeline;
+pub mod raster;
+pub mod real;
 pub mod resistance;
 pub mod roost;
-pub mod solve;
+
+pub use current as solve;
+pub use current::{circuit, linalg, memory};
 
 pub use circuit::build_circuit_model;
 
@@ -81,4 +82,4 @@ pub use browser::*;
 
 pub const NODATA_SENTINEL: f64 = -9999.0;
 pub const DEFAULT_MAX_ITER: usize = 100_000;
-pub const DEFAULT_TOL: f64 = <f64 as linalg::real::Real>::DEFAULT_TOLERANCE;
+pub const DEFAULT_TOL: f64 = <f64 as real::Real>::DEFAULT_TOLERANCE;

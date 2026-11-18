@@ -1,5 +1,5 @@
 use super::{raster_error, RasterResult};
-use crate::linalg::real::{Real, scalar};
+use crate::real::{Real, scalar};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;

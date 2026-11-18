@@ -1,4 +1,4 @@
-use crate::linalg::real::{scalar, Real};
+use crate::real::{scalar, Real};
 use std::path::Path;
 
 mod ascii;

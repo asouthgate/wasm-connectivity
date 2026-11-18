@@ -1,5 +1,5 @@
 // Output serialization and precision conversion for the WASM interface.
-use crate::solve;
+use crate::current;
 use serde::Serialize;
 use serde_json::json;
 
@@ -47,10 +47,10 @@ pub(crate) fn encode_f64_as_f32_base64(data: &[f64]) -> String {
 // Call after current calculation and convergence checks have completed in f64.
 // Round the output to f32, reusing supplied buffers instead of allocating maps.
 pub(crate) fn maps_to_f32_reusing_buffers(
-    output: solve::RasterOutput<f64>,
+    output: current::RasterOutput<f64>,
     mut voltage: Vec<f32>,
     mut current: Vec<f32>,
-) -> solve::RasterOutput<f32> {
+) -> current::RasterOutput<f32> {
     assert_eq!(voltage.len(), output.voltages.len());
     assert_eq!(current.len(), output.current_map.len());
     for (dest, &value) in voltage.iter_mut().zip(&output.voltages) {
@@ -59,7 +59,7 @@ pub(crate) fn maps_to_f32_reusing_buffers(
     for (dest, &value) in current.iter_mut().zip(&output.current_map) {
         *dest = value as f32;
     }
-    solve::RasterOutput {
+    current::RasterOutput {
         voltages: voltage,
         current_map: current,
         nrows: output.nrows,
@@ -70,7 +70,7 @@ pub(crate) fn maps_to_f32_reusing_buffers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linalg;
+    use crate::current::linalg;
 
     #[test]
     fn mixed_browser_maps_reuse_f32_buffers_after_f64_current_calculation() {
@@ -78,7 +78,7 @@ mod tests {
         let ground = vec![0.0_f32, 0.0, 1.0];
         let voltage_ptr = source.as_ptr();
         let current_ptr = ground.as_ptr();
-        let result = solve::mixed::solve_raster_sources_mg_mixed_with_options(
+        let result = current::mixed::solve_raster_sources_mg_mixed_with_options(
             &[1e-6_f32; 3],
             1,
             3,
@@ -88,7 +88,7 @@ mod tests {
             1000,
             1e-3,
             false,
-            solve::GroundMode::Shunt,
+            current::GroundMode::Shunt,
             linalg::multigrid::MgOptions::default(),
         );
         assert!(result.error.is_none());
@@ -108,7 +108,7 @@ mod tests {
             assert!((current - 1.0).abs() < 1e-3);
         }
         // Recomputing from rounded output voltages would lose the current accuracy.
-        let rounded_current = solve::current::compute_current_map_from_raster(
+        let rounded_current = current::current::compute_current_map_from_raster(
             &[1e-6_f32; 3],
             &[0.0_f32, 0.0, 1.0],
             &compact.voltages,
