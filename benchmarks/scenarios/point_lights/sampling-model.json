@@ -1,0 +1,36 @@
+{
+  "name": "Brixham light resistance sensitivity",
+  "inputs": {
+    "light": {"type": "raster_ranked"},
+    "fixed": {"type": "raster_ranked"}
+  },
+  "nodes": {
+    "light_resistance": {
+      "op": "power_response",
+      "inputs": "inputs.light",
+      "parameters": {
+        "input_range": [0, 1],
+        "base_range": [0, 1],
+        "exponent": 1,
+        "scale": {"sample": {"log_uniform": [1e3, 1e8]}},
+        "offset": 0
+      }
+    },
+    "fixed_resistance": {
+      "op": "power_response",
+      "inputs": "inputs.fixed",
+      "parameters": {
+        "input_range": [0, 24112],
+        "base_range": [0, 24112],
+        "exponent": 1,
+        "scale": 1,
+        "offset": 0
+      }
+    },
+    "resistance": {
+      "op": "sum",
+      "inputs": ["nodes.fixed_resistance", "nodes.light_resistance"]
+    }
+  },
+  "output": "nodes.resistance"
+}

@@ -3,7 +3,7 @@
 WASM_NIGHTLY ?= nightly-2025-11-15
 export WASM_THREADS ?= 1
 
-build:
+build: cli
 ifeq ($(WASM_THREADS),1)
 	RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=2147483648 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
 		rustup run $(WASM_NIGHTLY) wasm-pack build --target web --out-name lmConnect -- --features wasm-threads -Z build-std=panic_abort,std
@@ -18,10 +18,11 @@ endif
 
 cli:
 	cargo build --release --features bin --bins
+	mkdir -p bin
+	cp target/release/lmc bin/lmc
 
-bench:
+bench: cli
 	node benchmarks/scenarios/prepare.mjs
-	cargo build --release --features bin --bin lmc
 
 test:
 	cargo test

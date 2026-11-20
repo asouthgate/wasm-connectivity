@@ -82,13 +82,15 @@ python3 benchmarks/scripts/plot_instrumentation_profile.py profile-lowmem.json
 ## Sensitivity analysis
 
 For the sensitivity analysis, three scripts are required.
-The first generates current maps across light resistance parameters for the point-lights scenario. 
-The second post-processes this, ready for plotting. 
-The third plots the results. Step 2 and 3 are decoupled because iterating over image results and 
-aggregating them can be slow. 
+The first generates current maps across light resistance parameters for the point-lights scenario using native sampling.
+The second post-processes this, ready for plotting.
+The third plots the results. Step 2 and 3 are decoupled because iterating over image results and
+aggregating them can be slow.
 
 ```sh
-python3 benchmarks/scripts/sample_light_resistance.py --help
-python3 benchmarks/scripts/postprocess_light_samples.py --help
-python3 benchmarks/scripts/plot_light_samples.py --help
+make cli
+/usr/bin/time -v bash benchmarks/scripts/run-sampling.sh tmp_sampling
+python3 benchmarks/scripts/postprocess_light_samples.py tmp_sampling
+python3 benchmarks/scripts/plot_light_samples.py \
+  --cache tmp_sampling/plot_data.npz --output docs/paper/figures/current-standard-deviation.png
 ```

@@ -8,7 +8,7 @@ interactive connectivity modelling for biological systems, such as ecological ma
 To build and use the command-line application:
 
 ```sh
-cargo build --release --features bin --bins
+make cli
 ```
 
 Use `lmc resistance` to generate resistance, `lmc current` to solve an existing
@@ -18,7 +18,7 @@ See `lmc --help` and `lmc <command> --help` for options.
 To run the `lmc current` solver on example datasets, run
 
 ```sh
-./target/release/lmc current \
+./bin/lmc current \
   --resistance example/public/geodata/base_resistance_500.asc \
   --source example/public/geodata/source_500.asc \
   --ground example/public/geodata/ground_500.asc \
@@ -31,7 +31,7 @@ We use a simple DAG system to define configurable process pipelines specified vi
 See [Resistance pipeline JSON specification](docs/pipeline-json-spec.md) for details.
 
 ```sh
-./target/release/lmc resistance \
+./bin/lmc resistance \
   --threads 4 \
   --model example/horseshoe-bat-model.json \
   --dtm example/data/resistance/dtm.tif \
@@ -51,7 +51,7 @@ See `lmc resistance --help` for command-line flags.
 To run the `lmc current` solver on that resistance map in low-memory mixed-precision mode:
 
 ```sh
-./target/release/lmc current \
+./bin/lmc current \
   --resistance results/total_resistance.tif \
   --source example/data/resistance/source.tif \
   --ground example/data/resistance/ground.tif \
@@ -104,7 +104,7 @@ Run five samples with seed 42, calculating current from each resistance map and
 saving every sample:
 
 ```sh
-./target/release/lmc full \
+./bin/lmc full \
   --threads 4 \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
@@ -127,7 +127,7 @@ For the same five samples and summary maps without saving individual samples,
 use the same seed and omit `--save-samples`:
 
 ```sh
-./target/release/lmc full \
+./bin/lmc full \
   --threads 4 \
   --model sampled-model.json \
   --dtm example/data/resistance/dtm.tif \
@@ -145,6 +145,9 @@ use the same seed and omit `--save-samples`:
 ```
 
 The second run avoids storing individual maps on disk, accumulating pipeline results during sampling.
+
+To reproduce the paper's point-light sampling figure, see the
+[sensitivity benchmark](benchmarks/README.md#sensitivity-analysis).
 
 ## Prerequisites
 
