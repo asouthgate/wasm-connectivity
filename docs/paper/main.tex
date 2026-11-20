@@ -179,7 +179,7 @@ For an iterative solver, at iteration $k$, the residual $\mathbf{r}_k$ is comput
 \mathbf{v}_{k+1} = \mathbf{v}_{k} + \alpha_k \mathbf{r}_k.
 \]
 
-Since $f$ is a quadratic function, it is convex given a symmetric $\mathbf{L}$ \cite[Ch. 3.1.4]{vandenberghe2004convex}. Taking the gradient and choosing an optimal step size $\alpha_k$ achieves the global minimum for a slice of $f(\mathbf{v})$, in the direction $\mathbf{r}_k$. Using this approach, the next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. In steepest descent, to get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that
+Since $f$ is a quadratic function, it is convex given a positive semi-definite $\mathbf{L}$ \cite[Ch. 3.1.4]{vandenberghe2004convex}. Taking the gradient and choosing an optimal step size $\alpha_k$ achieves the global minimum for a slice of $f(\mathbf{v})$, in the direction $\mathbf{r}_k$. Using this approach, the next step will be orthogonal to the previous one, since if it were not, the previous one would not have been the furthest (best) possible step. In steepest descent, to get the best step, applying calculus to the energy function it can be shown (see \cite[Ch. 4]{leveque2007finite}) that
 
 \[
 \alpha_{k} = \frac{\mathbf{r}_{k}^T \mathbf{r}_k}{\mathbf{r}_k^T \mathbf{L}\mathbf{r}_k}.
@@ -228,20 +228,20 @@ To reduce the condition number and speed up convergence, we solve a transformed 
 \] 
 
 where $\mathbf{M}^{-1}$ approximates $\mathbf{L}^{-1}$. When $\mathbf{M}^{-1} = \mathbf{L}^{-1}$, the result is the identity matrix, with optimal condition number of $1$.
-We cannot compute $\mathbf{M}^{-1}$ directly, since this is computationally infeasible for large matrices, and if we could, we could solve our original system directly.
-Instead, we choose an easily invertible $\mathbf{M}$ that approximates $\mathbf{L}$.
+Since we cannot compute $\mathbf{L}^{-1}$ directly, we choose an easily invertible $\mathbf{M}$ that approximates $\mathbf{L}$.
 
-We compare two preconditioners: a simple diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, 
+The simplest preconditioner is a diagonal preconditioner with $\mathbf{M} = \diag{\mathbf{L}}$, also known as a Jacobi preconditioner, 
 which can be useful for some data \cite{wathen2015preconditioning}, 
-smoothing high-frequency error components quickly, but low-frequency components slowly \cite[Ch. 4.6]{leveque2007finite}; a geometric multigrid (GMG) preconditioner,
+smoothing high-frequency error components quickly, but has poor performance on low-frequency components \cite[Ch. 4.6]{leveque2007finite}.
+Instead, we use a geometric multigrid (GMG) preconditioner,
 with bilinear interpolation,
 which is more complex but converges faster \cite{tatebe1993multigrid}.
-We implement these methods directly to reduce Wasm dependencies and binary footprint. 
+We implemented this method directly to reduce Wasm dependencies and binary footprint. 
 
 Multigrid preconditioners are more complex than the Jacobi preconditioner. After smoothing high-frequency error features
 using a few Jacobi iterations, the remaining low-frequency components are then smoothed using a coarse grid.
-A system $\mathbf{L}_{l}\mathbf{e}_{l} = - \mathbf{r}_{l}$ is setup, with $\mathbf{L}_{l}$ and $\mathbf{r}_{l}$ coarse 
-approximations of $\mathbf{L}$ and $\mathbf{r}$, and $\mathbf{e}_{l}$ an approximation for the error $\mathbf{e} = \mathbf{v - L^{-1}s}$ in $\mathbf{v}$ \cite[Ch. 4.6]{leveque2007finite}.
+A system $\mathbf{L}_{l}\mathbf{e}_{l} = \mathbf{r}_{l}$ is setup, with $\mathbf{L}_{l}$ and $\mathbf{r}_{l}$ coarse 
+approximations of $\mathbf{L}$ and $\mathbf{r}$, and $\mathbf{e}_{l}$ an approximation for the error $\mathbf{e} = \mathbf{L^{-1}s - v}$ in $\mathbf{v}$ \cite[Ch. 4.6]{leveque2007finite}.
 The subscript $l$ refers to the level, or the number of times this process is repeated recursively.
 As the final output, the $\mathbf{e}_{0}$ is often referred to as the preconditioned residual.
 
@@ -421,7 +421,7 @@ The Brixham point-light scenario was used again for this analysis.
 Although optimal parameters for the resistance maps used for this were derived from \cite{finch2020modelling},
 we wanted to additionally assess sensitivity to parameter values. In this parameterisation, 
 maximum light resistance exceeds all other resistances sources by several orders of magnitude, at $10^8$.
-We ran 100 concurrent analyses with randomly sampled maximum light resistance between $10^3$ and $10^8$. 
+We ran 100 randomly sampled maximum light resistance between $10^3$ and $10^8$ using 16 threads.
 Figure \ref{fig:current_parallel} shows the minimum ($1\times10^3$), median ($9.3\times10^5$), and maximum ($9.6\times10^7$) 
 values sampled. Across these resistance values, several key boundaries only become visible at the
 higher values (c). In (d), these boundaries also correspond to
@@ -442,7 +442,7 @@ would not be feasible if each analysis took several gigabytes of memory.
 \caption{Point-light scenario with sampled point-light maximum resistance values between $10^3$ and $10^8$. 
 Panels (a), (b), and (c) show single-sample current maps with sampled minimum ($1.0\times10^3$), median ($9.3\times10^5$), and
 maximum ($9.6\times10^7$). As can be seen in these panels, a qualitative difference is observed between
-the median and maximum, implying that a resistance of $9.5\times10^5$ is insufficient to capture the barriers
+the median and maximum, implying that a resistance of $9.3\times10^5$ is insufficient to capture the barriers
 that form with a resistance of $9.6\times10^7$. (d) shows standard deviation of quantile values across samples.}
 \label{fig:current_parallel}
 \end{figure}
