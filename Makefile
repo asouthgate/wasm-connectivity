@@ -18,10 +18,11 @@ endif
 
 cli:
 	cargo build --release --features bin --bins
+	mkdir -p bin
+	cp target/release/lmc bin/lmc
 
-bench:
+bench: cli
 	node benchmarks/scenarios/prepare.mjs
-	cargo build --release --features bin --bin lmc
 
 test:
 	cargo test

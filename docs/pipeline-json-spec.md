@@ -423,7 +423,7 @@ a second time under its model name. An additional node named `total_resistance`
 would conflict with the final filename and is rejected when exporting all layers.
 
 ```sh
-./target/release/lmc resistance \
+./bin/lmc resistance \
   --model example/horseshoe-bat-model.json \
   --dtm example/data/resistance/dtm.tif \
   --dsm example/data/resistance/dsm.tif \

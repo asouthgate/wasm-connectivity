@@ -1,4 +1,5 @@
 target/
+/bin/
 /benchmarks/scenarios/*/*.asc
 
 /benchmarks/results/

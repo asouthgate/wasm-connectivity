@@ -2,7 +2,6 @@
 """Process sampled current maps into per-run percentiles and ensemble plotting arrays."""
 
 import argparse
-import csv
 from pathlib import Path
 
 import numpy as np
@@ -35,8 +34,16 @@ def quantile_scale(reference):
 
 
 def prepare_data(directory):
-    with (directory / "samples.csv").open(newline="") as stream:
-        samples = list(csv.DictReader(stream))
+    if not (directory / "current_variance.tif").is_file():
+        raise ValueError(f"Native sampling results are incomplete: {directory}")
+    samples = []
+    for sample in sorted((directory / "samples").iterdir()):
+        with rasterio.open(sample / "light_resistance.tif") as raster:
+            light_maximum = float(raster.read(1, masked=True).max())
+        samples.append({
+            "light_maximum": light_maximum,
+            "current_map": (sample / "current.tif").relative_to(directory),
+        })
     if len(samples) < 3:
         raise ValueError("At least three samples are required")
     coefficients = np.array([float(sample["light_maximum"]) for sample in samples])
