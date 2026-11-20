@@ -146,9 +146,6 @@ use the same seed and omit `--save-samples`:
 
 The second run avoids storing individual maps on disk, accumulating pipeline results during sampling.
 
-To reproduce the paper's point-light sampling figure, see the
-[sensitivity benchmark](benchmarks/README.md#sensitivity-analysis).
-
 ## Prerequisites
 
 - CLI and library: [Rust](https://rustup.rs)
