@@ -412,11 +412,10 @@ of $<10^{-5}$).
 
 \begin{figure}[htb!]
 \centering
-\includegraphics[width=0.48\textwidth]{figures/cs_results_curmap.png}
+\includegraphics[width=0.48\textwidth]{figures/circuitscape_current.png}
 \hfill
-\includegraphics[width=0.48\textwidth]{figures/current_map_mg_alcouffe_shunt.png}
-\caption{Side-by-side comparison showing log rescaled current maps produced by Circuitscape (left) and our low-memory Rust solver (right), to show consistency. 
-Current maps were rescaled to the range $[1, 100]$. Max absolute difference $<10^{-5}$ rescaled units.}
+\includegraphics[width=0.48\textwidth]{figures/rust_low_memory_current.png}
+\caption{Side-by-side comparison showing percentile current maps produced by Circuitscape (left) and our low-memory Rust solver (right), to show consistency. Max absolute difference $<10^{-5}$ ($<10^{-6}$ for images rescaled to $[0, 1]$)}
 \label{fig:comparison}
 \end{figure}
 

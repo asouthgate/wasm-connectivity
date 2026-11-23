@@ -27,11 +27,19 @@ python3 benchmarks/scripts/scenario_metrics.py
 
 ## Comparison
 
-To run the Circuitscape-to-rust comparison. Run:
+To run the Circuitscape-to-rust benchmarking comparison. Run:
 
 ```sh
 bash benchmarks/scripts/run-cs-comparison.sh
 python3 benchmarks/scripts/plot_cs_vs_rust_lowmem.py benchmarks/results/cs-julia-bench.out benchmarks/results/rust-lowmem-bench.out
+```
+
+### Paper current-map comparison
+
+To generate the single-image Circuitscape and Rust image comparison with raster errors in raw and rescaled units, run:
+
+```sh
+bash benchmarks/scripts/run-paper-current-comparison.sh
 ```
 
 ## Browser
@@ -76,8 +84,6 @@ To visualise these results run:
 ```
 python3 benchmarks/scripts/plot_instrumentation_profile.py profile-lowmem.json
 ```
-
-
 
 ## Sensitivity analysis
 

@@ -56,6 +56,7 @@ for scenario in point_lights dsm linear_res; do
   python3 benchmarks/scripts/convert_to_png.py "$output/circuitscape_curmap.asc"
   for suffix in '' _mixed; do
     python3 benchmarks/scripts/convert_to_png.py "$output/rust_current$suffix.asc"
-    python3 benchmarks/scripts/compare_asc.py "$output/circuitscape_curmap.asc" "$output/rust_current$suffix.asc"
+    python3 benchmarks/scripts/compare_rasters.py --strict-nodata \
+      "$output/circuitscape_curmap.asc" "$output/rust_current$suffix.asc"
   done
 done
