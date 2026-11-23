@@ -11,6 +11,7 @@ pub(in crate::pipeline) fn build_node_task_list<'a>(
     graph: &'a PipelineGraph,
     inputs: HashMap<String, PipelineData>,
     options: ExecutionOptions,
+    fixed_intermediates_once: bool,
 ) -> Result<NodeTaskList<'a>> {
     let mut task_list = NodeTaskList {
         nodes: Vec::new(),
@@ -34,7 +35,13 @@ pub(in crate::pipeline) fn build_node_task_list<'a>(
         );
     }
     task_list.connect_calculation_inputs(graph, &varying_nodes, &node_indices);
-    task_list.connect_results_and_statistics(graph, options, &varying_nodes, &node_indices);
+    task_list.connect_results_and_statistics(
+        graph,
+        options,
+        &varying_nodes,
+        &node_indices,
+        fixed_intermediates_once,
+    );
     sort_nodes_topologically(task_list)
 }
 
@@ -181,6 +188,7 @@ mod tests {
             &graph,
             HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]),
             options(),
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -217,7 +225,7 @@ mod tests {
             .current_output
             .as_ref()
             .is_some_and(|output| output.selects_node("#current", "data")));
-        let task_list = build_node_task_list(&graph, inputs, options()).unwrap();
+        let task_list = build_node_task_list(&graph, inputs, options(), false).unwrap();
         let current_nodes: Vec<_> = task_list
             .nodes
             .iter()

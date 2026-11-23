@@ -26,6 +26,7 @@ pub fn execute_pipeline_from_files(
     save_samples: bool,
     current_source_path: Option<&Path>,
     current_ground_path: Option<&Path>,
+    verbose: bool,
     report_sample_completion: impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<String>> {
     let graph = PipelineGraph::from_json(pipeline_json).map_err(invalid)?;
@@ -37,6 +38,7 @@ pub fn execute_pipeline_from_files(
         save_samples,
         current_source_path,
         current_ground_path,
+        verbose,
         report_sample_completion,
     )
 }
@@ -49,6 +51,7 @@ fn execute_pipeline_graph_from_files(
     save_samples: bool,
     current_source_path: Option<&Path>,
     current_ground_path: Option<&Path>,
+    verbose: bool,
     mut report_sample_completion: impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<String>> {
     options.statistics = options.samples > 1;
@@ -60,12 +63,14 @@ fn execute_pipeline_graph_from_files(
         crate::pipeline::CurrentSolver::new(source, ground, Default::default())
     });
     let mut completed_samples = 0;
-    crate::pipeline::execute_graph(
+    super::execute_graph(
         graph,
         loaded.fields,
         model_grid(&loaded.grid),
         options,
         current_solver.as_ref(),
+        verbose,
+        true,
         |result| {
             if result.sample.is_none() || options.samples == 1 || save_samples {
                 write_node_result(output_dir, &loaded.grid, options.samples, &result)

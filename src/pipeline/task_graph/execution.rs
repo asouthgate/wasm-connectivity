@@ -41,8 +41,11 @@ pub(in crate::pipeline) fn execute(
     inputs: HashMap<String, PipelineData>,
     grid: Grid,
     options: ExecutionOptions,
+    verbose: bool,
+    fixed_intermediates_once: bool,
     on_node_result: impl FnMut(NodeResult) -> Result<()>,
 ) -> Result<()> {
-    let task_list = super::builder::build_node_task_list(graph, inputs, options)?;
-    super::scheduler::execute_node_task_list(task_list, grid, options, on_node_result)
+    let task_list =
+        super::builder::build_node_task_list(graph, inputs, options, fixed_intermediates_once)?;
+    super::scheduler::execute_node_task_list(task_list, grid, options, verbose, on_node_result)
 }

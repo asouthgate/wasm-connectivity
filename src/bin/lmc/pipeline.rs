@@ -30,9 +30,18 @@ pub(super) fn execute(arguments: PipelineArguments) -> Result<()> {
         arguments.save_samples,
         arguments.current_source_path.as_deref(),
         arguments.current_ground_path.as_deref(),
+        arguments.verbose,
         |completed_samples| {
             if arguments.execution_options.samples > 1 {
                 let mut stderr = io::stderr().lock();
+                if arguments.verbose {
+                    writeln!(
+                        stderr,
+                        "Completed sample {completed_samples}/{}",
+                        arguments.execution_options.samples
+                    )?;
+                    return Ok(());
+                }
                 write!(
                     stderr,
                     "\rCompleted sample {completed_samples}/{}",

@@ -312,6 +312,43 @@ As such, we additionally implemented a mixed-precision implementation using 64-b
 vector to improve convergence while minimising memory usage. We assessed this mixed-precision mode with our
 full 64-bit implementation.
 
+\subsection{Workflow execution}
+
+Different use-cases for different model species may require different inputs.
+In order to support pipelines with different data sources and operational requirements,
+we developed a light-weight workflow runner supporting configurable JSON inputs.
+This was implemented with a directed acyclic graph (DAG),  
+as is common in workflow managers such as in Nextflow \cite{di2017nextflow}.
+In this model, each operation on a raster, such as rasterisation, power-law transformation,
+or irradiance calculation, is a node.
+The user can specify vector and raster image sources and chains of operations from a bundled catalogue.
+
+Two additional constraints were required for our pipelines: parameter sampling and 
+memory-efficient parallelism.
+A naive approach to parallelism in this context would be to simply run multiple processes,
+where each process takes a different parameter value.
+the memory required would be $O(tM)$ where $t$
+is the process count and $M$ the memory per-pipeline solve. Each per-process DAG would
+require a copy of the input data and any intermediate data that could otherwise be shared.
+
+Instead of the naive approach, we generate a second expanded graph,
+with each sample an operation expanded into its own node.
+In implementation we refer to this as the task pipeline graph.
+From this larger graph we generate a task queue. 
+The graph topology and sequence of executions determines the
+overall memory consumption. 
+It is non-trivial to determine the optimal sequence of nodes, since the memory
+held in association with any node can only be released when downstream nodes have been processed.
+Determining the minimum memory sequence for DAG execution, even in a single-threaded case, is NP-hard \cite{marchal2019limiting}.
+
+Our workflow graph has some repeated structure offering heuristics for scheduling. 
+Each complete sample vector of parameters induces a repeated structure in the graph.
+Nodes upstream of sampled nodes are shared between samples and consume a fixed memory floor.
+After these shared deterministic nodes are computed, each sample is a downstream subgraph with a repeated 
+topology. The number of operations in the DAG is assumed to be much fewer than the number of samples.
+As such, once a schedule is chosen for a few samples, it can then be reused, increasing
+the predictability of memory used during execution.
+
 \subsection{Test datasets and benchmarking}
 
 Two datasets were used for assessment, covering two regions.

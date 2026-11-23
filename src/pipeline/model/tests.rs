@@ -54,6 +54,8 @@ pub(in crate::pipeline) fn execute_output(
             statistics: false,
         },
         None,
+        false,
+        false,
         |result| {
             if result.layer == OutputLayer::Resistance {
                 output = Some(result.outputs["data"].values()?.to_vec());

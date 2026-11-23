@@ -91,6 +91,8 @@ pub fn run_resistance_pipeline_browser(
             all_layers: options.all_layers, statistics,
         },
         current_solver.as_ref(),
+        false,
+        false,
         |result| {
             if result.sample.is_none() == statistics {
                 completed_layers.insert(result.layer, result.outputs);
