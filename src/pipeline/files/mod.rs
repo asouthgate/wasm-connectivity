@@ -63,7 +63,7 @@ fn execute_pipeline_graph_from_files(
         crate::pipeline::CurrentSolver::new(source, ground, Default::default())
     });
     let mut completed_samples = 0;
-    super::execute_graph_with_trace(
+    super::execute_graph(
         graph,
         loaded.fields,
         model_grid(&loaded.grid),

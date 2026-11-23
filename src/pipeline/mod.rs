@@ -24,26 +24,6 @@ pub(crate) fn execute_graph(
     grid: Grid,
     options: ExecutionOptions,
     current_solver: Option<&CurrentSolver<'_>>,
-    on_node_result: impl FnMut(NodeResult) -> Result<()>,
-) -> Result<()> {
-    execute_graph_with_trace(
-        graph,
-        inputs,
-        grid,
-        options,
-        current_solver,
-        false,
-        false,
-        on_node_result,
-    )
-}
-
-fn execute_graph_with_trace(
-    graph: &PipelineGraph,
-    inputs: HashMap<String, PipelineData>,
-    grid: Grid,
-    options: ExecutionOptions,
-    current_solver: Option<&CurrentSolver<'_>>,
     verbose: bool,
     fixed_intermediates_once: bool,
     on_node_result: impl FnMut(NodeResult) -> Result<()>,
@@ -82,6 +62,8 @@ pub fn execute(
         grid,
         options,
         current_solver,
+        false,
+        false,
         on_node_result,
     )
 }

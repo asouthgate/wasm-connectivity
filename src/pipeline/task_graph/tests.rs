@@ -51,6 +51,8 @@ fn run(
         grid(),
         options,
         current_solver,
+        false,
+        false,
         |result| {
             results.push(result);
             Ok(())
@@ -194,11 +196,11 @@ fn errors_stop_execution_without_replacing_invalid_samples() {
     let graph = model(json!({"sample":{"values":[1,-1,2]}}));
     let inputs = || HashMap::from([("data".into(), PipelineData::raster(vec![1.0, 2.0, 4.0]))]);
     let error =
-        crate::pipeline::execute_graph(&graph, inputs(), grid(), options(3), None, |_| Ok(()))
+        crate::pipeline::execute_graph(&graph, inputs(), grid(), options(3), None, false, false, |_| Ok(()))
             .unwrap_err();
     assert!(error.contains("sample 1, node resistance"));
     let graph = model(json!({"sample":{"values":[1,2,3]}}));
-    let error = crate::pipeline::execute_graph(&graph, inputs(), grid(), options(3), None, |_| {
+    let error = crate::pipeline::execute_graph(&graph, inputs(), grid(), options(3), None, false, false, |_| {
         Err("write failed".into())
     })
     .unwrap_err();
@@ -227,6 +229,8 @@ fn errors_stop_execution_without_replacing_invalid_samples() {
             grid(),
             invalid,
             None,
+            false,
+            false,
             |_| Ok(())
         )
         .is_err());
@@ -257,6 +261,8 @@ fn ordinary_runs_preserve_infinity_without_allocating_statistics() {
             ..options(2)
         },
         None,
+        false,
+        false,
         |result| {
             assert_eq!(result.sample, Some(0));
             assert!(result.outputs["data"]
@@ -301,6 +307,8 @@ fn current_operation_can_feed_another_calculation() {
         grid(),
         options(3),
         None,
+        false,
+        false,
         |result| {
             results.push(result);
             Ok(())
@@ -361,6 +369,8 @@ fn missing_cells_remain_missing_and_equal_draw_bounds_have_zero_variance() {
         grid(),
         options(3),
         None,
+        false,
+        false,
         |result| {
             results.push(result);
             Ok(())
