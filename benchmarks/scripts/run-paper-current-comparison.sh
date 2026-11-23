@@ -17,8 +17,8 @@ target/release/lmc current \
   --precision f64 --tol 1e-6 --max-iter 100000 \
   --output "$work_dir/rust_current.asc"
 
-mkdir -p docs/figures/images
-python3 benchmarks/scripts/tif2png.py \
-  "$work_dir/results_curmap.asc" "$work_dir/rust_current.asc" docs/figures/images
+mkdir -p docs/paper/figures/images
+python3 benchmarks/scripts/tif2png.py --quantile --colorbar \
+  "$work_dir/results_curmap.asc" "$work_dir/rust_current.asc" docs/paper/figures/images
 python3 benchmarks/scripts/compare_rasters.py \
   "$work_dir/results_curmap.asc" "$work_dir/rust_current.asc"
