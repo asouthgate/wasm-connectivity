@@ -22,7 +22,7 @@ pub(super) fn execute(arguments: PipelineArguments) -> Result<()> {
         eprintln!("Evaluating pipeline");
     }
     let mut sample_progress_displayed = false;
-    let execution_result = lm_connect::pipeline::files::execute_pipeline_from_files_with_trace(
+    let execution_result = lm_connect::pipeline::files::execute_pipeline_from_files(
         &arguments.pipeline_json,
         &arguments.input_paths,
         &arguments.output_directory,

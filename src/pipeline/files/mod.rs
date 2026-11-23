@@ -26,29 +26,6 @@ pub fn execute_pipeline_from_files(
     save_samples: bool,
     current_source_path: Option<&Path>,
     current_ground_path: Option<&Path>,
-    report_sample_completion: impl FnMut(usize) -> Result<()>,
-) -> Result<Vec<String>> {
-    execute_pipeline_from_files_with_trace(
-        pipeline_json,
-        paths,
-        output_dir,
-        options,
-        save_samples,
-        current_source_path,
-        current_ground_path,
-        false,
-        report_sample_completion,
-    )
-}
-
-pub fn execute_pipeline_from_files_with_trace(
-    pipeline_json: &str,
-    paths: &HashMap<String, PathBuf>,
-    output_dir: &Path,
-    options: ExecutionOptions,
-    save_samples: bool,
-    current_source_path: Option<&Path>,
-    current_ground_path: Option<&Path>,
     verbose: bool,
     report_sample_completion: impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<String>> {
