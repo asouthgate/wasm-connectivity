@@ -7,32 +7,44 @@ Usage:
 Example:
     python benchmarks/scripts/compare_rasters.py results_curmap.tif tests/output/current_map_mg_alcouffe_shunt.asc
 """
-import sys
+import argparse
 import numpy as np
 import rasterio
-from scipy import stats
 
 
-def load(path):
-    with rasterio.open(path) as src:
-        a = src.read(1).astype(np.float64).ravel()
-        nodata = src.nodata
-    if nodata is not None:
-        a = np.where(a == nodata, np.nan, a)
-    return a
+def read_current(path):
+    with rasterio.Env(AAIGRID_DATATYPE="Float64"), rasterio.open(path) as raster:
+        return np.ma.masked_invalid(raster.read(1, masked=True).astype(np.float64))
+
+
+def rescale_current(current):
+    if current.count() == 0 or current.min() == current.max():
+        raise ValueError("Rescaling requires at least two distinct current values")
+    minimum = current.min()
+    return (current - minimum) / (current.max() - minimum)
 
 
 def main():
-    if len(sys.argv) != 3:
-        sys.exit(f"usage: {sys.argv[0]} <raster_a> <raster_b>")
+    from scipy import stats
 
-    a = load(sys.argv[1])
-    b = load(sys.argv[2])
-    if a.shape != b.shape:
-        sys.exit(f"shape mismatch: {a.size} vs {b.size} pixels")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("reference")
+    parser.add_argument("comparison")
+    parser.add_argument("--strict-nodata", action="store_true")
+    args = parser.parse_args()
 
-    mask = np.isfinite(a) & np.isfinite(b)
-    a, b = a[mask], b[mask]
+    reference = read_current(args.reference)
+    comparison = read_current(args.comparison)
+    if reference.shape != comparison.shape:
+        parser.error(f"Shape mismatch: {reference.shape} vs {comparison.shape}")
+    reference_mask = np.ma.getmaskarray(reference)
+    comparison_mask = np.ma.getmaskarray(comparison)
+    if args.strict_nodata and not np.array_equal(reference_mask, comparison_mask):
+        parser.error("Current maps have different NoData masks")
+    mask = ~(reference_mask | comparison_mask)
+    if not mask.any():
+        parser.error("Current maps have no overlapping valid cells")
+    a, b = reference.data[mask], comparison.data[mask]
     print(f"Matched pixels: {mask.sum()} (excluded nodata: {(~mask).sum()})")
 
     diff = a - b
@@ -42,8 +54,23 @@ def main():
     print(f"{'mean':14s}{a.mean():>14.6f}{b.mean():>14.6f}")
 
     print(f"\nDifference (A - B):")
-    print(f"  max abs diff:  {np.abs(diff).max():.6f}")
-    print(f"  mean abs diff: {np.abs(diff).mean():.6f}")
+    maximum_error = np.abs(diff).max()
+    mean_error = np.abs(diff).mean()
+    print(f"  Max absolute difference: {maximum_error:.8g} raw units")
+    print(f"  Mean absolute difference: {mean_error:.8g} raw units")
+    reference_peak = np.ma.abs(reference).max()
+    for label, error in (("max", maximum_error), ("mean", mean_error)):
+        percent = 100 * error / reference_peak if reference_peak else (0.0 if error == 0 else np.inf)
+        print(f"  Normalized {label} absolute error: {percent:.8g}%")
+    try:
+        rescaled_reference = rescale_current(reference)
+        rescaled_comparison = rescale_current(comparison)
+    except ValueError as error:
+        print(f"  Rescaled difference unavailable: {error}")
+    else:
+        rescaled_error = np.ma.abs(rescaled_reference - rescaled_comparison)
+        print(f"  Max absolute difference: {rescaled_error.max():.8g} rescaled units")
+        print(f"  Mean absolute difference: {rescaled_error.mean():.8g} rescaled units")
     print(f"  RMS diff:      {np.sqrt((diff ** 2).mean()):.6f}")
 
     pearson = np.corrcoef(a, b)[0, 1]
