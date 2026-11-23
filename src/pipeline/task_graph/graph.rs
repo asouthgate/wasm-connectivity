@@ -29,6 +29,7 @@ pub(super) struct TaskNode<'a> {
     pub(super) input_edges: Vec<usize>,
     pub(super) output_edges: Vec<usize>,
     pub(super) initial_outputs: NodeOutputs,
+    pub(super) emit_fixed_intermediates_once: bool,
     pub(super) result_layers: BTreeMap<String, OutputLayer>,
 }
 
@@ -62,6 +63,7 @@ impl<'a> NodeTaskList<'a> {
             input_edges: Vec::new(),
             output_edges: Vec::new(),
             initial_outputs,
+            emit_fixed_intermediates_once: false,
             result_layers: BTreeMap::new(),
         });
         index

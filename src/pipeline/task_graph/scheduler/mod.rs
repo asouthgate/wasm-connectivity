@@ -6,7 +6,12 @@ use super::{
     sampling::sample_operation,
 };
 use crate::pipeline::{ExecutionOptions, Grid, NodeOutputs, NodeResult, PipelineData, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+
+mod schedule;
+mod trace;
+use schedule::Schedule;
+use trace::ExecutionTrace;
 
 #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 #[cfg_attr(target_arch = "wasm32", path = "wasm_threads.rs")]
@@ -66,12 +71,18 @@ fn release_unused_outputs(
     states: &mut [NodeExecutionState],
     pending_edges: &[bool],
     node_index: usize,
+    trace: &mut ExecutionTrace,
 ) {
+    let node = &task_list.nodes[node_index];
     states[node_index].outputs.retain(|port, _| {
-        task_list.nodes[node_index]
+        let still_used = node
             .output_edges
             .iter()
-            .any(|&edge| pending_edges[edge] && &task_list.edges[edge].output_port == port)
+            .any(|&edge| pending_edges[edge] && &task_list.edges[edge].output_port == port);
+        if !still_used {
+            trace.release(node, port);
+        }
+        still_used
     });
 }
 
@@ -107,32 +118,25 @@ fn next_ready_node(
     task_list: &NodeTaskList<'_>,
     states: &[NodeExecutionState],
     pending_edges: &[bool],
-    options: ExecutionOptions,
+    remaining_steps: &mut VecDeque<usize>,
 ) -> Option<usize> {
+    let ready =
+        |node_index| ready_input_edges(task_list, states, pending_edges, node_index).is_some();
     // Consume completed maps promptly instead of retaining them behind more calculations.
-    if let Some(index) = (0..task_list.nodes.len()).find(|&index| {
-        matches!(
-            task_list.nodes[index].operation,
-            NodeOperation::Streaming { .. }
-        ) && ready_input_edges(task_list, states, pending_edges, index).is_some()
-    }) {
-        return Some(index);
-    }
-    let first_unfinished_sample = task_list
-        .nodes
+    let position = remaining_steps
         .iter()
-        .enumerate()
-        .filter(|(index, node)| {
-            matches!(node.operation, NodeOperation::Calculate { .. })
-                && states[*index].status != NodeStatus::Complete
+        .position(|&node_index| {
+            matches!(
+                task_list.nodes[node_index].operation,
+                NodeOperation::Streaming { .. }
+            ) && ready(node_index)
         })
-        .map(|(_, node)| node.sample)
-        .min()
-        .unwrap_or(options.samples);
-    (0..task_list.nodes.len()).find(|&index| {
-        task_list.nodes[index].sample < first_unfinished_sample + options.threads
-            && ready_input_edges(task_list, states, pending_edges, index).is_some()
-    })
+        .or_else(|| {
+            remaining_steps
+                .iter()
+                .position(|&node_index| ready(node_index))
+        })?;
+    remaining_steps.remove(position)
 }
 
 fn prepare_node_run(
@@ -187,10 +191,7 @@ fn run_node(
                 .transpose()
                 .map_err(|error| format!("sample {}, node {}: {error}", node.sample, node.name))?;
             OperationEvaluator { grid }
-                .apply(
-                    sampled.as_ref().unwrap_or(operation),
-                    &inputs.data_by_port,
-                )
+                .apply(sampled.as_ref().unwrap_or(operation), &inputs.data_by_port)
                 .map_err(|error| format!("sample {}, node {}: {error}", node.sample, node.name))?
         }
         NodeOperation::Streaming { .. } => {
@@ -221,9 +222,16 @@ fn finish_node_run(
     node_index: usize,
     update: NodeUpdate,
     options: ExecutionOptions,
+    trace: &mut ExecutionTrace,
     on_node_result: &mut impl FnMut(NodeResult) -> Result<()>,
 ) -> Result<()> {
     states[node_index].outputs = update.outputs;
+    trace.finish_job(
+        task_list,
+        node_index,
+        &states[node_index].active_edges,
+        states[node_index].outputs.len(),
+    );
     states[node_index].streaming_node = update.streaming_node;
     if states[node_index].streaming_node.is_some() {
         states[node_index].status = NodeStatus::Waiting;
@@ -243,9 +251,20 @@ fn finish_node_run(
             states,
             pending_edges,
             task_list.edges[edge_index].source_node,
+            trace,
         );
     }
-    release_unused_outputs(task_list, states, pending_edges, node_index);
+    release_unused_outputs(task_list, states, pending_edges, node_index, trace);
+    Ok(())
+}
+
+fn ensure_complete(states: &[NodeExecutionState]) -> Result<()> {
+    if states
+        .iter()
+        .any(|state| state.status != NodeStatus::Complete)
+    {
+        return Err("task graph cannot make progress".into());
+    }
     Ok(())
 }
 
@@ -254,9 +273,11 @@ pub(in crate::pipeline) fn execute_node_task_list(
     mut task_list: NodeTaskList<'_>,
     grid: Grid,
     options: ExecutionOptions,
+    verbose: bool,
     mut on_node_result: impl FnMut(NodeResult) -> Result<()>,
 ) -> Result<()> {
     let mut states = initial_node_states(&mut task_list);
+    let mut trace = ExecutionTrace::new(verbose, &task_list, &states);
     let mut pending_edges = vec![true; task_list.edges.len()];
     for node_index in 0..task_list.nodes.len() {
         if states[node_index].status == NodeStatus::Complete {
@@ -266,34 +287,43 @@ pub(in crate::pipeline) fn execute_node_task_list(
                 options,
                 &mut on_node_result,
             )?;
-            release_unused_outputs(&task_list, &mut states, &pending_edges, node_index);
-        }
-    }
-    if options.threads == 1 {
-        while states
-            .iter()
-            .any(|state| state.status != NodeStatus::Complete)
-        {
-            let node_index = next_ready_node(&task_list, &states, &pending_edges, options)
-                .ok_or("task graph cannot make progress")?;
-            let inputs = prepare_node_run(&task_list, &mut states, &pending_edges, node_index)?;
-            let update = run_node(
-                &task_list.nodes[inputs.node_index],
-                inputs,
-                grid,
-                options.seed,
-            )?;
-            finish_node_run(
+            release_unused_outputs(
                 &task_list,
                 &mut states,
-                &mut pending_edges,
+                &pending_edges,
                 node_index,
-                update,
-                options,
-                &mut on_node_result,
-            )?;
+                &mut trace,
+            );
         }
-        return Ok(());
+    }
+    let batches = Schedule::generate(&task_list, options.samples).batches(options.threads);
+    if options.threads == 1 {
+        for mut remaining_steps in batches {
+            while !remaining_steps.is_empty() {
+                let node_index =
+                    next_ready_node(&task_list, &states, &pending_edges, &mut remaining_steps)
+                        .ok_or("task graph cannot make progress")?;
+                let inputs = prepare_node_run(&task_list, &mut states, &pending_edges, node_index)?;
+                trace.start_job(&task_list, node_index, &states[node_index].active_edges);
+                let update = run_node(
+                    &task_list.nodes[inputs.node_index],
+                    inputs,
+                    grid,
+                    options.seed,
+                )?;
+                finish_node_run(
+                    &task_list,
+                    &mut states,
+                    &mut pending_edges,
+                    node_index,
+                    update,
+                    options,
+                    &mut trace,
+                    &mut on_node_result,
+                )?;
+            }
+        }
+        return ensure_complete(&states);
     }
     #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
     return Err("Wasm execution requires one thread".into());
@@ -302,8 +332,10 @@ pub(in crate::pipeline) fn execute_node_task_list(
         &task_list,
         &mut states,
         &mut pending_edges,
+        batches,
         grid,
         options,
+        &mut trace,
         &mut on_node_result,
     )
 }
@@ -350,12 +382,49 @@ mod tests {
     }
 
     #[test]
+    fn schedule_reuses_calculation_and_streaming_steps_in_partial_batch() {
+        let graph = graph();
+        let task_list = build_node_task_list(
+            &graph,
+            HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]),
+            options(),
+            false,
+        )
+        .unwrap();
+        let batches: Vec<Vec<_>> = Schedule::generate(&task_list, options().samples)
+            .batches(options().threads)
+            .map(|batch| {
+                batch
+                    .into_iter()
+                    .map(|node_index| {
+                        let node = &task_list.nodes[node_index];
+                        (node.name.as_str(), node.sample)
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            batches,
+            vec![
+                vec![
+                    ("result", 0),
+                    ("statistics", 0),
+                    ("result", 1),
+                    ("statistics", 0)
+                ],
+                vec![("result", 2), ("statistics", 0)],
+            ]
+        );
+    }
+
+    #[test]
     fn streaming_update_runs_before_other_samples_and_releases_its_input() {
         let graph = graph();
         let mut task_list = build_node_task_list(
             &graph,
             HashMap::from([("data".into(), PipelineData::raster(vec![1.0]))]),
             options(),
+            false,
         )
         .unwrap();
         let mut states = initial_node_states(&mut task_list);
@@ -389,6 +458,7 @@ mod tests {
                 calculation,
                 update,
                 options(),
+                &mut ExecutionTrace::default(),
                 &mut |_| Ok(()),
             )
             .unwrap();
@@ -407,6 +477,7 @@ mod tests {
                 stream_index,
                 update,
                 options(),
+                &mut ExecutionTrace::default(),
                 &mut |result| {
                     summary = Some(result);
                     Ok(())
@@ -479,7 +550,7 @@ mod tests {
             task_list.add_edge(source, destination, "data".into(), "data".into());
         }
         let mut count = 0;
-        execute_node_task_list(task_list, grid(), options(), |result| {
+        execute_node_task_list(task_list, grid(), options(), false, |result| {
             assert_eq!(result.outputs["sum"].values()?, &[6.0]);
             count += 1;
             Ok(())

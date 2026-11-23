@@ -26,6 +26,28 @@ pub(crate) fn execute_graph(
     current_solver: Option<&CurrentSolver<'_>>,
     on_node_result: impl FnMut(NodeResult) -> Result<()>,
 ) -> Result<()> {
+    execute_graph_with_trace(
+        graph,
+        inputs,
+        grid,
+        options,
+        current_solver,
+        false,
+        false,
+        on_node_result,
+    )
+}
+
+fn execute_graph_with_trace(
+    graph: &PipelineGraph,
+    inputs: HashMap<String, PipelineData>,
+    grid: Grid,
+    options: ExecutionOptions,
+    current_solver: Option<&CurrentSolver<'_>>,
+    verbose: bool,
+    fixed_intermediates_once: bool,
+    on_node_result: impl FnMut(NodeResult) -> Result<()>,
+) -> Result<()> {
     task_graph::validate_execution_options(graph, options)?;
     let mut inputs = graph.prepare_inputs(inputs, grid)?;
     let mut graph = Cow::Borrowed(graph);
@@ -33,7 +55,15 @@ pub(crate) fn execute_graph(
         solver.validate(grid.nrows * grid.ncols)?;
         graph.to_mut().add_current(&mut inputs, solver);
     }
-    task_graph::execute(&graph, inputs, grid, options, on_node_result)
+    task_graph::execute(
+        &graph,
+        inputs,
+        grid,
+        options,
+        verbose,
+        fixed_intermediates_once,
+        on_node_result,
+    )
 }
 
 /// Execute pipeline JSON and receive layers and summaries as they finish.

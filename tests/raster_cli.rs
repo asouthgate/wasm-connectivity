@@ -249,8 +249,9 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
             assert!((variance.data[i]-expected_variance).abs()<1e-10);
         }
     }
-    let fixed_variance=read_raster(&dir.0.join("saved/fixed_variance.tif")).unwrap();
-    assert!(fixed_variance.data.iter().all(|&v|v==0.0));
+    let fixed = read_raster(&dir.0.join("saved/fixed.tif")).unwrap();
+    assert_eq!(fixed.data, [1.0, 1.0, 2.0, 2.0].repeat(16));
+    assert!(!dir.0.join("saved/fixed_variance.tif").exists());
     run("full","statistics-only",false, true, 1);
     assert!(!dir.0.join("statistics-only/samples").exists());
     for name in ["total_resistance","total_resistance_variance","current","current_variance"] {
@@ -265,9 +266,9 @@ fn sampled_resistance_and_current_are_accumulated_and_optionally_saved() {
     }
     run("full", "save-implies-all-layers", true, false, 3);
     assert!(dir.0.join("save-implies-all-layers/fixed.tif").exists());
-    assert!(dir.0.join("save-implies-all-layers/fixed_variance.tif").exists());
+    assert!(!dir.0.join("save-implies-all-layers/fixed_variance.tif").exists());
     for index in 0..3 {
-        assert!(dir.0.join(format!("save-implies-all-layers/samples/{index:06}/fixed.tif")).exists());
+        assert!(!dir.0.join(format!("save-implies-all-layers/samples/{index:06}/fixed.tif")).exists());
     }
     run("full", "default-summaries", false, false, 3);
     assert!(!dir.0.join("default-summaries/samples").exists());

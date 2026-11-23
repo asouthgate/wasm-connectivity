@@ -16,6 +16,7 @@ impl<'a> NodeTaskList<'a> {
         options: ExecutionOptions,
         varying_nodes: &BTreeSet<String>,
         node_indices: &HashMap<(usize, String), usize>,
+        fixed_intermediates_once: bool,
     ) {
         let mut layers = vec![(OutputLayer::Resistance, graph.output.clone())];
         if let Some(reference) = &graph.current_output {
@@ -41,6 +42,15 @@ impl<'a> NodeTaskList<'a> {
             }
         }
         for (layer, reference) in layers {
+            if fixed_intermediates_once && matches!(layer, OutputLayer::Intermediate { .. }) {
+                let (source, port) =
+                    resolve_model_connection(&reference, 0, varying_nodes, node_indices);
+                if self.nodes[source].is_shared {
+                    self.nodes[source].emit_fixed_intermediates_once = true;
+                    self.nodes[source].result_layers.insert(port, layer);
+                    continue;
+                }
+            }
             let streaming_node = options.statistics.then(|| {
                 let index = self.add_node(
                     "statistics",
@@ -87,6 +97,16 @@ pub(super) fn emit_node_results(
             let value = outputs
                 .get(port)
                 .ok_or_else(|| format!("missing result port {port}"))?;
+            if node.emit_fixed_intermediates_once
+                && matches!(layer, OutputLayer::Intermediate { .. })
+            {
+                on_node_result(NodeResult {
+                    sample: None,
+                    layer: layer.clone(),
+                    outputs: BTreeMap::from([("data".into(), value.clone())]),
+                })?;
+                continue;
+            }
             let samples = if node.is_shared {
                 0..options.samples
             } else {
