@@ -404,9 +404,9 @@ of $<10^{-5}$).
 \begin{figure}[htb!]
 \centering
 \makebox[\textwidth][c]{%
-    \includegraphics[width=1.2\textwidth]{figures/benchmarking.png}%
+    \includegraphics[width=1.0\textwidth]{figures/benchmarking.png}%
 }
-\caption{Time and memory comparison across resolutions for each mode. Bars represent sample range, with the mean as lines. The number of iterations at each resolution were 12, 12, 11, and 13 for explicit and low-mem versions, and 12, 12, 10 and 9 for low-mem mixed-precision.}
+\caption{Solver performance across modes for a $2000 \times 2000$ example. Time (a) and memory (b) comparison are given across resolutions for each mode. Bars represent sample range, with the mean as lines. The number of required iterations is shown in c), demonstrating that the number of required iterations did not increase substantially across resolutions. In d), the relative residual is shown across iterations; markers without lines indicate relative residual after post-CG smoothing.}
 \label{fig:benchmarking}
 \end{figure}
 

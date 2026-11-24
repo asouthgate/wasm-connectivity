@@ -1,7 +1,8 @@
-.PHONY: build cli bench test serve clean
+.PHONY: build cli bench bench-inputs test serve clean
 
 WASM_NIGHTLY ?= nightly-2025-11-15
 export WASM_THREADS ?= 1
+BENCH_INPUT_ARCHIVES := $(wildcard example/public/geodata/*_2000.*.gz)
 
 build:
 ifeq ($(WASM_THREADS),1)
@@ -21,7 +22,13 @@ cli:
 	mkdir -p bin
 	cp target/release/lmc bin/lmc
 
-bench: cli
+bench-inputs: $(BENCH_INPUT_ARCHIVES:.gz=)
+	cargo run --release --features bin --example prepare-chudleigh
+
+$(BENCH_INPUT_ARCHIVES:.gz=): %: %.gz
+	gzip -d -k -f "$<"
+
+bench: cli bench-inputs
 	node benchmarks/scenarios/prepare.mjs
 
 test:
@@ -31,7 +38,7 @@ test:
 	npm ci --prefix example
 	npm run build --prefix example
 
-serve: build
+serve: build bench-inputs
 	cd example && npm install && npm run dev
 
 clean:

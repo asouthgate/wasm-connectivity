@@ -60,9 +60,9 @@ export default function Benchmark() {
   const [status, setStatus] = useState('Loading Chudleigh data...');
 
   useEffect(() => {
-    loadExampleData(1000).then(loaded => {
+    loadExampleData(2000).then(loaded => {
       setData(loaded);
-      setStatus(`Loaded Chudleigh 1000×1000`);
+      setStatus(`Loaded Chudleigh 2000×2000`);
     }).catch(err => setStatus(`Error: ${err.message}`));
   }, []);
 

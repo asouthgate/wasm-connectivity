@@ -1,6 +1,8 @@
 target/
 /bin/
 /benchmarks/scenarios/*/*.asc
+/example/public/geodata/*.asc
+/example/public/geodata/all_features_*.geojson
 
 /benchmarks/results/
 /benchmarks/scenarios/*/output/
