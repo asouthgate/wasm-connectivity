@@ -49,6 +49,11 @@ name = "lmc-roost"
 path = "src/bin/lmc-roost.rs"
 required-features = ["bin"]
 
+[[example]]
+name = "prepare-chudleigh"
+path = "benchmarks/chudleigh/prepare.rs"
+required-features = ["bin"]
+
 [profile.release-prof]
 inherits = "release"
 debug = 1
